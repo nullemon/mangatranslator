@@ -3,6 +3,7 @@ import os
 import uuid
 from pathlib import Path
 
+import cv2
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.requests import Request
 
 from core.pipeline import TranslationPipeline
+from core.enhancer import ImageEnhancer
 
 app = FastAPI(title="MangaTranslator")
 
@@ -35,6 +37,11 @@ async def translate(
     model: str = Form("claude-sonnet-4-6"),
     smart_mode: str = Form("false"),
     font: str = Form(""),
+    enhance: str = Form("false"),
+    enhance_provider: str = Form("gemini"),
+    enhance_key: str = Form(""),
+    enhance_prompt: str = Form(""),
+    enhance_model: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -55,12 +62,17 @@ async def translate(
         "progress": 0,
         "upload_path": upload_path,
         "output_path": output_path,
+        "mode": "translate",
     }
 
     font_path = f"fonts/{font}" if font and os.path.exists(f"fonts/{font}") else None
 
     asyncio.create_task(
-        _run(task_id, upload_path, output_path, api_key, target_lang, model, smart_mode == "true", font_path)
+        _run(
+            task_id, upload_path, output_path, api_key, target_lang, model,
+            smart_mode == "true", font_path,
+            enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
+        )
     )
 
     return {"task_id": task_id}
@@ -75,8 +87,35 @@ async def _run(
     model: str,
     smart_mode: bool,
     font_path: str = None,
+    enhance: bool = False,
+    enhance_provider: str = "gemini",
+    enhance_key: str = "",
+    enhance_prompt: str = "",
+    enhance_model: str = "",
 ):
     try:
+        loop = asyncio.get_event_loop()
+
+        if enhance:
+            tasks[task_id].update(
+                {"step": 0, "progress": 4,
+                 "message": f"Enhancing rough page with {enhance_provider.title()}..."}
+            )
+            enhanced_path = f"uploads/{task_id}_enhanced.png"
+            enhancer = ImageEnhancer()
+
+            def do_enhance():
+                img = cv2.imread(image_path)
+                if img is None:
+                    raise ValueError(f"Cannot load image: {image_path}")
+                out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                cv2.imwrite(enhanced_path, out)
+
+            await loop.run_in_executor(None, do_enhance)
+            tasks[task_id]["enhanced_path"] = enhanced_path
+            tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
+            image_path = enhanced_path
+
         pipeline = TranslationPipeline(
             api_key=api_key,
             target_lang=target_lang,
@@ -88,23 +127,101 @@ async def _run(
         def on_progress(update):
             tasks[task_id].update(update)
 
-        loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
             lambda: pipeline.process(image_path, output_path, on_progress),
         )
 
+        update = {
+            "status": "done",
+            "progress": 100,
+            "message": "Complete!",
+            "result": result,
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        }
+        if tasks[task_id].get("enhanced_url"):
+            update["enhanced_url"] = tasks[task_id]["enhanced_url"]
+        tasks[task_id].update(update)
+
+    except Exception as e:
+        tasks[task_id].update(
+            {"status": "error", "message": str(e), "progress": 0}
+        )
+
+
+@app.post("/api/enhance")
+async def enhance_only(
+    file: UploadFile = File(...),
+    provider: str = Form("gemini"),
+    api_key: str = Form(...),
+    prompt: str = Form(""),
+    model: str = Form(""),
+):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_scan.png"
+
+    content = await file.read()
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    tasks[task_id] = {
+        "status": "processing",
+        "step": 1,
+        "message": "Queued",
+        "progress": 0,
+        "upload_path": upload_path,
+        "mode": "enhance",
+    }
+
+    asyncio.create_task(
+        _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt, model)
+    )
+    return {"task_id": task_id}
+
+
+async def _run_enhance(
+    task_id: str,
+    image_path: str,
+    output_path: str,
+    provider: str,
+    api_key: str,
+    prompt: str,
+    model: str,
+):
+    try:
+        tasks[task_id].update(
+            {"step": 1, "progress": 15,
+             "message": f"Sending to {provider.title()} image model..."}
+        )
+        enhancer = ImageEnhancer()
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            out = enhancer.enhance(img, prompt, provider, api_key, model)
+            cv2.imwrite(output_path, out)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, do_work)
+
         tasks[task_id].update(
             {
                 "status": "done",
+                "step": 2,
                 "progress": 100,
-                "message": "Complete!",
-                "result": result,
+                "message": "Manga scan ready!",
+                "result": {"output_path": output_path, "translations": {}},
                 "output_url": f"/api/result/{task_id}",
                 "original_url": f"/api/original/{task_id}",
             }
         )
-
     except Exception as e:
         tasks[task_id].update(
             {"status": "error", "message": str(e), "progress": 0}
@@ -139,6 +256,21 @@ async def original(task_id: str):
     if not p or not os.path.exists(p):
         raise HTTPException(404)
     return FileResponse(p)
+
+
+@app.get("/api/enhanced/{task_id}")
+async def enhanced(task_id: str):
+    if task_id not in tasks:
+        raise HTTPException(404)
+    p = tasks[task_id].get("enhanced_path", "")
+    if not p or not os.path.exists(p):
+        raise HTTPException(404)
+    return FileResponse(p, media_type="image/png")
+
+
+@app.get("/api/enhance-prompt")
+async def enhance_prompt():
+    return {"prompt": ImageEnhancer.DEFAULT_PROMPT, "models": ImageEnhancer.DEFAULT_MODELS}
 
 
 @app.get("/api/annotated/{task_id}")

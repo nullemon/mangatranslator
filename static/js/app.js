@@ -15,6 +15,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
+  const enhanceBtn     = document.getElementById("enhanceBtn");
+  const enhanceProvider= document.getElementById("enhanceProvider");
+  const enhanceKey     = document.getElementById("enhanceKey");
+  const enhanceModel   = document.getElementById("enhanceModel");
+  const enhancePrompt  = document.getElementById("enhancePrompt");
+  const enhanceFirst   = document.getElementById("enhanceFirst");
+  const processingSec  = document.getElementById("processingSection");
+  const compLabelLeft  = document.getElementById("compLabelLeft");
+  const compLabelRight = document.getElementById("compLabelRight");
+  const enhancePanel   = document.getElementById("enhancePanel");
+
+  let mode = "translate"; // or "enhance"
+  const DEFAULT_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
 
   const uploadSection     = document.getElementById("uploadSection");
   const processingSection = document.getElementById("processingSection");
@@ -71,6 +84,48 @@ document.addEventListener("DOMContentLoaded", () => {
     fontUpload.value = "";
   });
 
+  /* ── Enhancement settings (persisted) ── */
+  function enhKeyName() { return "manga_enh_key_" + enhanceProvider.value; }
+
+  async function initEnhance() {
+    // Default prompt from server (fallback to a sensible local default)
+    let defaultPrompt = "Convert this rough manga sketch into a clean, professional black-and-white manga scan with crisp inked line art, screentones, pure whites and deep blacks. Keep the exact same composition, panels, characters, and text.";
+    try {
+      const res = await fetch("/api/enhance-prompt");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.prompt) defaultPrompt = data.prompt;
+        if (data.models) Object.assign(DEFAULT_MODELS, data.models);
+      }
+    } catch (_) {}
+
+    enhanceProvider.value = localStorage.getItem("manga_enh_provider") || "gemini";
+    enhancePrompt.value   = localStorage.getItem("manga_enh_prompt") || defaultPrompt;
+    syncProviderFields();
+  }
+
+  function syncProviderFields() {
+    const p = enhanceProvider.value;
+    enhanceModel.placeholder = DEFAULT_MODELS[p] || "";
+    enhanceModel.value = localStorage.getItem("manga_enh_model_" + p) || "";
+    enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
+  }
+
+  enhanceProvider.addEventListener("change", () => {
+    localStorage.setItem("manga_enh_provider", enhanceProvider.value);
+    syncProviderFields();
+  });
+  enhanceKey.addEventListener("change", () =>
+    localStorage.setItem(enhKeyName(), enhanceKey.value)
+  );
+  enhanceModel.addEventListener("change", () =>
+    localStorage.setItem("manga_enh_model_" + enhanceProvider.value, enhanceModel.value)
+  );
+  enhancePrompt.addEventListener("change", () =>
+    localStorage.setItem("manga_enh_prompt", enhancePrompt.value)
+  );
+  initEnhance();
+
   /* ── Drag & drop ── */
   dropZone.addEventListener("click", () => fileInput.click());
 
@@ -110,6 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ── Translate ── */
   translateBtn.addEventListener("click", startTranslation);
+  enhanceBtn.addEventListener("click", startEnhance);
 
   async function startTranslation() {
     const key = apiKeyInput.value.trim();
@@ -117,6 +173,15 @@ document.addEventListener("DOMContentLoaded", () => {
     apiKeyInput.style.borderColor = "";
     if (!selectedFile) return;
 
+    const wantEnhance = enhanceFirst.checked;
+    if (wantEnhance && !enhanceKey.value.trim()) {
+      enhancePanel.open = true;
+      enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171";
+      return;
+    }
+    enhanceKey.style.borderColor = "";
+
+    mode = "translate";
     showSection("processing");
     resetProgress();
 
@@ -127,10 +192,49 @@ document.addEventListener("DOMContentLoaded", () => {
     form.append("model", modelSelect.value);
     form.append("smart_mode", smartMode.checked ? "true" : "false");
     form.append("font", fontSelect.value);
+    form.append("enhance", wantEnhance ? "true" : "false");
+    if (wantEnhance) {
+      form.append("enhance_provider", enhanceProvider.value);
+      form.append("enhance_key", enhanceKey.value.trim());
+      form.append("enhance_prompt", enhancePrompt.value);
+      form.append("enhance_model", enhanceModel.value);
+    }
 
+    await submit("/api/translate", form);
+  }
+
+  async function startEnhance() {
+    const key = enhanceKey.value.trim();
+    if (!key) {
+      enhancePanel.open = true;
+      enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171";
+      return;
+    }
+    enhanceKey.style.borderColor = "";
+    if (!selectedFile) return;
+
+    mode = "enhance";
+    showSection("processing");
+    resetProgress();
+
+    const form = new FormData();
+    form.append("file", selectedFile);
+    form.append("provider", enhanceProvider.value);
+    form.append("api_key", key);
+    form.append("prompt", enhancePrompt.value);
+    form.append("model", enhanceModel.value);
+
+    await submit("/api/enhance", form);
+  }
+
+  async function submit(url, form) {
     try {
-      const res = await fetch("/api/translate", { method: "POST", body: form });
-      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const res = await fetch(url, { method: "POST", body: form });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { msg = (await res.json()).detail || msg; } catch (_) {}
+        throw new Error(msg);
+      }
       const data = await res.json();
       currentTaskId = data.task_id;
       pollStatus();
@@ -195,6 +299,13 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("transImg").src = transUrl;
     document.getElementById("origFull").src = origUrl;
     document.getElementById("transFull").src = transUrl;
+
+    // Mode-aware labels + tabs
+    const enh = mode === "enhance";
+    compLabelLeft.textContent  = enh ? "Rough" : "Original";
+    compLabelRight.textContent = enh ? "Manga Scan" : "Translated";
+    document.querySelector('.tab[data-tab="translated"]').textContent = enh ? "Scan" : "Translated";
+    document.querySelector('.tab[data-tab="details"]').style.display = enh ? "none" : "";
 
     buildTranslationsList(data.result);
     showSection("result");
@@ -309,6 +420,7 @@ document.addEventListener("DOMContentLoaded", () => {
     processingSection.style.display = name === "processing" ? "" : "none";
     resultSection.style.display     = name === "result"     ? "" : "none";
     errorSection.style.display      = name === "error"      ? "" : "none";
+    processingSec.classList.toggle("enhance-mode", mode === "enhance");
   }
 
   function showError(msg) {

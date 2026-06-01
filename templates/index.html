@@ -66,6 +66,51 @@
       </div>
     </div>
 
+    <!-- AI ENHANCEMENT PANEL -->
+    <details class="enhance-panel" id="enhancePanel">
+      <summary>
+        <span class="enhance-summary-title">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 2l1.8 4.2L16 8l-4.2 1.8L10 14l-1.8-4.2L4 8l4.2-1.8z"/><path d="M16 13l.7 1.6L18.3 15l-1.6.7L16 17l-.7-1.6L13.7 15l1.6-.7z"/></svg>
+          Rough &rarr; Manga Scan <span class="badge">AI image cleanup</span>
+        </span>
+        <span class="enhance-chevron">&#9662;</span>
+      </summary>
+
+      <div class="enhance-body">
+        <p class="enhance-desc">Turn a rough sketch / pencil draft into a clean inked manga scan before translating. Uses an image-to-image model from OpenAI or Google.</p>
+
+        <div class="settings-bar enhance-settings">
+          <div class="setting-group">
+            <label for="enhanceProvider">Provider</label>
+            <select id="enhanceProvider">
+              <option value="gemini">Gemini (Nano Banana)</option>
+              <option value="openai">OpenAI (ChatGPT)</option>
+            </select>
+          </div>
+          <div class="setting-group">
+            <label for="enhanceKey">Provider API Key</label>
+            <input type="password" id="enhanceKey" placeholder="API key" autocomplete="off">
+          </div>
+          <div class="setting-group">
+            <label for="enhanceModel">Model</label>
+            <input type="text" id="enhanceModel" placeholder="gemini-2.5-flash-image">
+          </div>
+        </div>
+
+        <div class="setting-group prompt-group">
+          <label for="enhancePrompt">Conversion Prompt <span class="muted">(editable)</span></label>
+          <textarea id="enhancePrompt" rows="4" placeholder="Describe how the rough page should be cleaned up..."></textarea>
+        </div>
+
+        <div class="enhance-controls">
+          <label class="checkbox-row">
+            <input type="checkbox" id="enhanceFirst">
+            <span>Enhance before translating</span>
+          </label>
+        </div>
+      </div>
+    </details>
+
     <!-- UPLOAD -->
     <section id="uploadSection" class="section">
       <div class="drop-zone" id="dropZone">
@@ -82,8 +127,11 @@
         <div class="preview-info">
           <p id="fileName"></p>
           <p id="fileSize"></p>
-          <button class="btn btn-primary" id="translateBtn">Translate</button>
-          <button class="btn btn-ghost" id="clearBtn">Clear</button>
+          <div class="preview-btns">
+            <button class="btn btn-primary" id="translateBtn">Translate</button>
+            <button class="btn btn-accent" id="enhanceBtn">Enhance Only</button>
+            <button class="btn btn-ghost" id="clearBtn">Clear</button>
+          </div>
         </div>
       </div>
     </section>
@@ -125,8 +173,8 @@
               <svg viewBox="0 0 24 24" width="24" height="24" fill="white"><path d="M8 5l-5 7 5 7M16 5l5 7-5 7"/></svg>
             </div>
           </div>
-          <span class="comp-label comp-label-left">Original</span>
-          <span class="comp-label comp-label-right">Translated</span>
+          <span class="comp-label comp-label-left" id="compLabelLeft">Original</span>
+          <span class="comp-label comp-label-right" id="compLabelRight">Translated</span>
         </div>
       </div>
 

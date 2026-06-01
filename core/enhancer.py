@@ -1,0 +1,129 @@
+import base64
+import cv2
+import numpy as np
+import httpx
+
+
+class ImageEnhancer:
+    """Convert a rough/sketch manga page into a clean 'scanned' page using
+    an external image-to-image model (OpenAI gpt-image-1 or Google Gemini)."""
+
+    DEFAULT_PROMPT = (
+        "Convert this rough manga sketch into a clean, professional "
+        "black-and-white manga scan. Crisp inked line art, smooth screentones, "
+        "pure white backgrounds, deep solid blacks, sharp high-contrast "
+        "print quality. Keep the exact same composition, panel layout, "
+        "characters, poses, perspective, and any existing text. "
+        "Do not add, remove, or rearrange panels or characters."
+    )
+
+    OPENAI_URL = "https://api.openai.com/v1/images/edits"
+    GEMINI_URL = (
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    )
+
+    DEFAULT_MODELS = {
+        "openai": "gpt-image-1",
+        "gemini": "gemini-2.5-flash-image",
+    }
+
+    def __init__(self, timeout: float = 240.0):
+        self.timeout = timeout
+
+    def enhance(
+        self,
+        image: np.ndarray,
+        prompt: str,
+        provider: str,
+        api_key: str,
+        model: str = "",
+    ) -> np.ndarray:
+        if not api_key:
+            raise ValueError("An API key is required for image enhancement")
+
+        prompt = (prompt or "").strip() or self.DEFAULT_PROMPT
+        provider = (provider or "").lower().strip()
+        model = (model or "").strip() or self.DEFAULT_MODELS.get(provider, "")
+
+        if provider == "openai":
+            return self._openai(image, prompt, api_key, model)
+        if provider == "gemini":
+            return self._gemini(image, prompt, api_key, model)
+        raise ValueError(f"Unknown enhancement provider: {provider!r}")
+
+    # ── Encoding helpers ──
+    def _encode_png(self, image: np.ndarray) -> bytes:
+        ok, buf = cv2.imencode(".png", image)
+        if not ok:
+            raise ValueError("Failed to encode source image")
+        return buf.tobytes()
+
+    def _decode(self, data: bytes) -> np.ndarray:
+        arr = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("The model returned data that is not a valid image")
+        return img
+
+    # ── OpenAI (ChatGPT) gpt-image-1 ──
+    def _openai(self, image, prompt, api_key, model) -> np.ndarray:
+        png = self._encode_png(image)
+        files = {"image": ("page.png", png, "image/png")}
+        data = {"model": model, "prompt": prompt, "n": "1", "size": "auto"}
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = client.post(self.OPENAI_URL, headers=headers, data=data, files=files)
+
+        if resp.status_code != 200:
+            raise RuntimeError(self._err("OpenAI", resp))
+
+        payload = resp.json()
+        items = payload.get("data") or []
+        if not items or "b64_json" not in items[0]:
+            raise RuntimeError(f"OpenAI returned no image: {str(payload)[:300]}")
+        return self._decode(base64.b64decode(items[0]["b64_json"]))
+
+    # ── Google Gemini (2.5 Flash Image / "Nano Banana") ──
+    def _gemini(self, image, prompt, api_key, model) -> np.ndarray:
+        png = self._encode_png(image)
+        b64 = base64.b64encode(png).decode()
+        body = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {"inlineData": {"mimeType": "image/png", "data": b64}},
+                    ]
+                }
+            ],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        }
+        url = self.GEMINI_URL.format(model=model)
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = client.post(url, headers=headers, json=body)
+
+        if resp.status_code != 200:
+            raise RuntimeError(self._err("Gemini", resp))
+
+        payload = resp.json()
+        for cand in payload.get("candidates", []):
+            parts = cand.get("content", {}).get("parts", [])
+            for part in parts:
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return self._decode(base64.b64decode(inline["data"]))
+        raise RuntimeError(f"Gemini returned no image: {str(payload)[:300]}")
+
+    def _err(self, name: str, resp: httpx.Response) -> str:
+        try:
+            data = resp.json()
+            msg = data.get("error", {})
+            msg = msg.get("message") if isinstance(msg, dict) else msg
+            if msg:
+                return f"{name} error {resp.status_code}: {msg}"
+        except Exception:
+            pass
+        return f"{name} error {resp.status_code}: {resp.text[:300]}"
