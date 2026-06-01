@@ -7,27 +7,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const previewImg     = document.getElementById("previewImg");
   const fileName       = document.getElementById("fileName");
   const fileSize       = document.getElementById("fileSize");
-  const translateBtn   = document.getElementById("translateBtn");
+  const goBtn          = document.getElementById("goBtn");
   const clearBtn       = document.getElementById("clearBtn");
+  const engineSelect   = document.getElementById("engine");
   const apiKeyInput    = document.getElementById("apiKey");
+  const apiKeyLabel    = document.getElementById("apiKeyLabel");
   const targetLang     = document.getElementById("targetLang");
   const modelSelect    = document.getElementById("model");
   const smartMode      = document.getElementById("smartMode");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
-  const enhanceBtn     = document.getElementById("enhanceBtn");
+  const enhancePanel   = document.getElementById("enhancePanel");
   const enhanceProvider= document.getElementById("enhanceProvider");
   const enhanceKey     = document.getElementById("enhanceKey");
+  const enhanceKeyLabel= document.getElementById("enhanceKeyLabel");
   const enhanceModel   = document.getElementById("enhanceModel");
   const enhancePrompt  = document.getElementById("enhancePrompt");
-  const enhanceFirst   = document.getElementById("enhanceFirst");
   const processingSec  = document.getElementById("processingSection");
   const compLabelLeft  = document.getElementById("compLabelLeft");
   const compLabelRight = document.getElementById("compLabelRight");
-  const enhancePanel   = document.getElementById("enhancePanel");
-
-  let mode = "translate"; // or "enhance"
-  const DEFAULT_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
 
   const uploadSection     = document.getElementById("uploadSection");
   const processingSection = document.getElementById("processingSection");
@@ -45,15 +43,107 @@ document.addEventListener("DOMContentLoaded", () => {
   let selectedFile = null;
   let currentTaskId = null;
   let pollTimer = null;
+  let workflow = "scan-translate";
 
-  /* ── Persist API key ── */
-  const saved = localStorage.getItem("manga_api_key");
-  if (saved) apiKeyInput.value = saved;
-  apiKeyInput.addEventListener("change", () =>
-    localStorage.setItem("manga_api_key", apiKeyInput.value)
-  );
+  const ENHANCE_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
 
-  /* ── Fonts ── */
+  const ENGINE_CONFIG = {
+    claude: {
+      label: "Claude API Key",
+      placeholder: "sk-ant-...",
+      storageKey: "manga_key_claude",
+      models: [
+        { value: "claude-sonnet-4-6", text: "Sonnet 4.6 (Fast)" },
+        { value: "claude-opus-4-6",   text: "Opus 4.6 (Best)" },
+        { value: "claude-haiku-4-5-20251001", text: "Haiku 4.5 (Cheap)" },
+      ],
+    },
+    gemini: {
+      label: "Gemini API Key",
+      placeholder: "AIza...",
+      storageKey: "manga_key_gemini",
+      models: [
+        { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast)" },
+        { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (Best)" },
+        { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (Lite)" },
+      ],
+    },
+  };
+
+  /* ══════════════════════════════════════════════════════════════════
+     WORKFLOW PICKER
+     ══════════════════════════════════════════════════════════════════ */
+  const wfCards = document.querySelectorAll(".wf-card");
+
+  function needsScan(wf)      { return wf === "raw-scan-translate" || wf === "raw-scan"; }
+  function needsTranslate(wf) { return wf !== "raw-scan"; }
+
+  function setWorkflow(wf) {
+    workflow = wf;
+    wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
+
+    // Show/hide enhance panel
+    enhancePanel.style.display = needsScan(wf) ? "" : "none";
+
+    // Show/hide translation settings
+    document.querySelector(".settings-bar").style.display = needsTranslate(wf) ? "" : "none";
+
+    // Adapt Go button text
+    const labels = {
+      "scan-translate": "Translate",
+      "raw-scan-translate": "Enhance & Translate",
+      "raw-translate": "Translate Raw",
+      "raw-scan": "Enhance to Scan",
+    };
+    goBtn.textContent = labels[wf] || "Go";
+
+    localStorage.setItem("manga_workflow", wf);
+  }
+
+  wfCards.forEach(card => {
+    card.addEventListener("click", () => setWorkflow(card.dataset.wf));
+  });
+
+  setWorkflow(localStorage.getItem("manga_workflow") || "scan-translate");
+
+  /* ══════════════════════════════════════════════════════════════════
+     ENGINE SWITCHING (Claude / Gemini for translation)
+     ══════════════════════════════════════════════════════════════════ */
+  function setEngine(eng) {
+    const cfg = ENGINE_CONFIG[eng];
+    if (!cfg) return;
+
+    // Save current key before switching
+    const prev = ENGINE_CONFIG[engineSelect.value];
+    if (prev) localStorage.setItem(prev.storageKey, apiKeyInput.value);
+
+    engineSelect.value = eng;
+    apiKeyLabel.textContent = cfg.label;
+    apiKeyInput.placeholder = cfg.placeholder;
+    apiKeyInput.value = localStorage.getItem(cfg.storageKey) || "";
+
+    // Populate model dropdown
+    modelSelect.innerHTML = "";
+    for (const m of cfg.models) {
+      const opt = document.createElement("option");
+      opt.value = m.value;
+      opt.textContent = m.text;
+      modelSelect.appendChild(opt);
+    }
+
+    localStorage.setItem("manga_engine", eng);
+  }
+
+  engineSelect.addEventListener("change", () => setEngine(engineSelect.value));
+  apiKeyInput.addEventListener("change", () => {
+    const cfg = ENGINE_CONFIG[engineSelect.value];
+    if (cfg) localStorage.setItem(cfg.storageKey, apiKeyInput.value);
+  });
+  setEngine(localStorage.getItem("manga_engine") || "gemini");
+
+  /* ══════════════════════════════════════════════════════════════════
+     FONTS
+     ══════════════════════════════════════════════════════════════════ */
   async function loadFonts() {
     try {
       const res = await fetch("/api/fonts");
@@ -84,72 +174,62 @@ document.addEventListener("DOMContentLoaded", () => {
     fontUpload.value = "";
   });
 
-  /* ── Enhancement settings (persisted) ── */
+  /* ══════════════════════════════════════════════════════════════════
+     ENHANCEMENT SETTINGS (persisted per-provider)
+     ══════════════════════════════════════════════════════════════════ */
   function enhKeyName() { return "manga_enh_key_" + enhanceProvider.value; }
 
   async function initEnhance() {
-    // Default prompt from server (fallback to a sensible local default)
     let defaultPrompt = "Convert this rough manga sketch into a clean, professional black-and-white manga scan with crisp inked line art, screentones, pure whites and deep blacks. Keep the exact same composition, panels, characters, and text.";
     try {
       const res = await fetch("/api/enhance-prompt");
       if (res.ok) {
         const data = await res.json();
         if (data.prompt) defaultPrompt = data.prompt;
-        if (data.models) Object.assign(DEFAULT_MODELS, data.models);
+        if (data.models) Object.assign(ENHANCE_MODELS, data.models);
       }
     } catch (_) {}
 
     enhanceProvider.value = localStorage.getItem("manga_enh_provider") || "gemini";
     enhancePrompt.value   = localStorage.getItem("manga_enh_prompt") || defaultPrompt;
-    syncProviderFields();
+    syncEnhanceFields();
   }
 
-  function syncProviderFields() {
+  function syncEnhanceFields() {
     const p = enhanceProvider.value;
-    enhanceModel.placeholder = DEFAULT_MODELS[p] || "";
+    enhanceModel.placeholder = ENHANCE_MODELS[p] || "";
     enhanceModel.value = localStorage.getItem("manga_enh_model_" + p) || "";
     enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
+    enhanceKeyLabel.textContent = p === "openai" ? "OpenAI API Key" : "Gemini API Key";
   }
 
   enhanceProvider.addEventListener("change", () => {
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);
-    syncProviderFields();
+    syncEnhanceFields();
   });
-  enhanceKey.addEventListener("change", () =>
-    localStorage.setItem(enhKeyName(), enhanceKey.value)
-  );
-  enhanceModel.addEventListener("change", () =>
-    localStorage.setItem("manga_enh_model_" + enhanceProvider.value, enhanceModel.value)
-  );
-  enhancePrompt.addEventListener("change", () =>
-    localStorage.setItem("manga_enh_prompt", enhancePrompt.value)
-  );
+  enhanceKey.addEventListener("change", () => localStorage.setItem(enhKeyName(), enhanceKey.value));
+  enhanceModel.addEventListener("change", () => localStorage.setItem("manga_enh_model_" + enhanceProvider.value, enhanceModel.value));
+  enhancePrompt.addEventListener("change", () => localStorage.setItem("manga_enh_prompt", enhancePrompt.value));
   initEnhance();
 
-  /* ── Drag & drop ── */
+  /* ══════════════════════════════════════════════════════════════════
+     DRAG & DROP / FILE SELECT
+     ══════════════════════════════════════════════════════════════════ */
   dropZone.addEventListener("click", () => fileInput.click());
 
-  dropZone.addEventListener("dragover", e => {
-    e.preventDefault();
-    dropZone.classList.add("drag-over");
-  });
-  dropZone.addEventListener("dragleave", () =>
-    dropZone.classList.remove("drag-over")
-  );
+  dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
   dropZone.addEventListener("drop", e => {
     e.preventDefault();
     dropZone.classList.remove("drag-over");
     if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
   });
-  fileInput.addEventListener("change", () => {
-    if (fileInput.files.length) handleFile(fileInput.files[0]);
-  });
+  fileInput.addEventListener("change", () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
 
   function handleFile(file) {
     if (!file.type.startsWith("image/")) return;
     selectedFile = file;
-    const url = URL.createObjectURL(file);
-    previewImg.src = url;
+    previewImg.src = URL.createObjectURL(file);
     fileName.textContent = file.name;
     fileSize.textContent = formatBytes(file.size);
     dropZone.style.display = "none";
@@ -163,68 +243,72 @@ document.addEventListener("DOMContentLoaded", () => {
     dropZone.style.display = "";
   });
 
-  /* ── Translate ── */
-  translateBtn.addEventListener("click", startTranslation);
-  enhanceBtn.addEventListener("click", startEnhance);
+  /* ══════════════════════════════════════════════════════════════════
+     GO BUTTON — dispatches based on workflow
+     ══════════════════════════════════════════════════════════════════ */
+  goBtn.addEventListener("click", startWorkflow);
 
-  async function startTranslation() {
-    const key = apiKeyInput.value.trim();
-    if (!key) { apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return; }
-    apiKeyInput.style.borderColor = "";
+  async function startWorkflow() {
     if (!selectedFile) return;
 
-    const wantEnhance = enhanceFirst.checked;
-    if (wantEnhance && !enhanceKey.value.trim()) {
-      enhancePanel.open = true;
-      enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171";
-      return;
-    }
-    enhanceKey.style.borderColor = "";
+    const wantScan = needsScan(workflow);
+    const wantTranslate = needsTranslate(workflow);
 
-    mode = "translate";
+    // Validate keys
+    if (wantTranslate) {
+      const key = apiKeyInput.value.trim();
+      if (!key) { apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return; }
+      apiKeyInput.style.borderColor = "";
+    }
+    if (wantScan) {
+      const key = enhanceKey.value.trim();
+      if (!key) { enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return; }
+      enhanceKey.style.borderColor = "";
+    }
+
     showSection("processing");
     resetProgress();
 
-    const form = new FormData();
-    form.append("file", selectedFile);
-    form.append("api_key", key);
-    form.append("target_lang", targetLang.value);
-    form.append("model", modelSelect.value);
-    form.append("smart_mode", smartMode.checked ? "true" : "false");
-    form.append("font", fontSelect.value);
-    form.append("enhance", wantEnhance ? "true" : "false");
-    if (wantEnhance) {
+    if (wantScan && wantTranslate) {
+      // Raw → Scan → Translate
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("api_key", apiKeyInput.value.trim());
+      form.append("target_lang", targetLang.value);
+      form.append("provider", engineSelect.value);
+      form.append("model", modelSelect.value);
+      form.append("smart_mode", smartMode.checked ? "true" : "false");
+      form.append("font", fontSelect.value);
+      form.append("enhance", "true");
       form.append("enhance_provider", enhanceProvider.value);
       form.append("enhance_key", enhanceKey.value.trim());
       form.append("enhance_prompt", enhancePrompt.value);
       form.append("enhance_model", enhanceModel.value);
+      await submit("/api/translate", form);
+
+    } else if (wantScan) {
+      // Raw → Scan only
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("provider", enhanceProvider.value);
+      form.append("api_key", enhanceKey.value.trim());
+      form.append("prompt", enhancePrompt.value);
+      form.append("model", enhanceModel.value);
+      await submit("/api/enhance", form);
+
+    } else {
+      // Scan → Translate or Raw → Translate (same endpoint, no enhance)
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("api_key", apiKeyInput.value.trim());
+      form.append("target_lang", targetLang.value);
+      form.append("provider", engineSelect.value);
+      form.append("model", modelSelect.value);
+      form.append("smart_mode", smartMode.checked ? "true" : "false");
+      form.append("font", fontSelect.value);
+      form.append("enhance", "false");
+      await submit("/api/translate", form);
     }
-
-    await submit("/api/translate", form);
-  }
-
-  async function startEnhance() {
-    const key = enhanceKey.value.trim();
-    if (!key) {
-      enhancePanel.open = true;
-      enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171";
-      return;
-    }
-    enhanceKey.style.borderColor = "";
-    if (!selectedFile) return;
-
-    mode = "enhance";
-    showSection("processing");
-    resetProgress();
-
-    const form = new FormData();
-    form.append("file", selectedFile);
-    form.append("provider", enhanceProvider.value);
-    form.append("api_key", key);
-    form.append("prompt", enhancePrompt.value);
-    form.append("model", enhanceModel.value);
-
-    await submit("/api/enhance", form);
   }
 
   async function submit(url, form) {
@@ -264,13 +348,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 600);
   }
 
-  /* ── Progress ── */
+  /* ══════════════════════════════════════════════════════════════════
+     PROGRESS
+     ══════════════════════════════════════════════════════════════════ */
   function resetProgress() {
     progressFill.style.width = "0%";
     progressMsg.textContent = "Starting...";
-    document.querySelectorAll(".step").forEach(s => {
-      s.classList.remove("active", "done");
-    });
+    document.querySelectorAll(".step").forEach(s => s.classList.remove("active", "done"));
     document.querySelectorAll(".step-line").forEach(l => l.classList.remove("done"));
   }
 
@@ -290,7 +374,9 @@ document.addEventListener("DOMContentLoaded", () => {
     lines.forEach((l, i) => l.classList.toggle("done", i + 1 < currentStep));
   }
 
-  /* ── Result ── */
+  /* ══════════════════════════════════════════════════════════════════
+     RESULT
+     ══════════════════════════════════════════════════════════════════ */
   function showResult(data) {
     const origUrl  = data.original_url;
     const transUrl = data.output_url;
@@ -300,12 +386,11 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("origFull").src = origUrl;
     document.getElementById("transFull").src = transUrl;
 
-    // Mode-aware labels + tabs
-    const enh = mode === "enhance";
-    compLabelLeft.textContent  = enh ? "Rough" : "Original";
-    compLabelRight.textContent = enh ? "Manga Scan" : "Translated";
-    document.querySelector('.tab[data-tab="translated"]').textContent = enh ? "Scan" : "Translated";
-    document.querySelector('.tab[data-tab="details"]').style.display = enh ? "none" : "";
+    const scanOnly = workflow === "raw-scan";
+    compLabelLeft.textContent  = scanOnly ? "Rough" : "Original";
+    compLabelRight.textContent = scanOnly ? "Manga Scan" : "Translated";
+    document.querySelector('.tab[data-tab="translated"]').textContent = scanOnly ? "Scan" : "Translated";
+    document.querySelector('.tab[data-tab="details"]').style.display = scanOnly ? "none" : "";
 
     buildTranslationsList(data.result);
     showSection("result");
@@ -338,7 +423,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  /* ── Comparison slider ── */
+  /* ══════════════════════════════════════════════════════════════════
+     COMPARISON SLIDER
+     ══════════════════════════════════════════════════════════════════ */
   function initComparison() {
     const container = document.getElementById("comparisonContainer");
     const overlay   = document.getElementById("compOverlay");
@@ -355,14 +442,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function onStart(e) {
       dragging = true;
-      const x = e.touches ? e.touches[0].clientX : e.clientX;
-      setPosition(x);
+      setPosition(e.touches ? e.touches[0].clientX : e.clientX);
     }
     function onMove(e) {
       if (!dragging) return;
       e.preventDefault();
-      const x = e.touches ? e.touches[0].clientX : e.clientX;
-      setPosition(x);
+      setPosition(e.touches ? e.touches[0].clientX : e.clientX);
     }
     function onEnd() { dragging = false; }
 
@@ -376,7 +461,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setPosition(container.getBoundingClientRect().left + container.getBoundingClientRect().width / 2);
   }
 
-  /* ── Tabs ── */
+  /* ══════════════════════════════════════════════════════════════════
+     TABS
+     ══════════════════════════════════════════════════════════════════ */
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -386,7 +473,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  /* ── Download ── */
+  /* ══════════════════════════════════════════════════════════════════
+     DOWNLOAD / NEW / RETRY
+     ══════════════════════════════════════════════════════════════════ */
   downloadBtn.addEventListener("click", () => {
     if (!currentTaskId) return;
     const a = document.createElement("a");
@@ -395,14 +484,10 @@ document.addEventListener("DOMContentLoaded", () => {
     a.click();
   });
 
-  /* ── New / Retry ── */
   newBtn.addEventListener("click", resetAll);
   retryBtn.addEventListener("click", () => {
     showSection("upload");
-    if (selectedFile) {
-      dropZone.style.display = "none";
-      previewRow.style.display = "flex";
-    }
+    if (selectedFile) { dropZone.style.display = "none"; previewRow.style.display = "flex"; }
   });
 
   function resetAll() {
@@ -414,30 +499,25 @@ document.addEventListener("DOMContentLoaded", () => {
     showSection("upload");
   }
 
-  /* ── Section toggling ── */
+  /* ══════════════════════════════════════════════════════════════════
+     SECTION TOGGLE / ERROR / HELPERS
+     ══════════════════════════════════════════════════════════════════ */
   function showSection(name) {
     uploadSection.style.display     = name === "upload"     ? "" : "none";
     processingSection.style.display = name === "processing" ? "" : "none";
     resultSection.style.display     = name === "result"     ? "" : "none";
     errorSection.style.display      = name === "error"      ? "" : "none";
-    processingSec.classList.toggle("enhance-mode", mode === "enhance");
+    const scanOnly = workflow === "raw-scan";
+    processingSec.classList.toggle("enhance-mode", scanOnly);
   }
 
-  function showError(msg) {
-    errorMsg.textContent = msg;
-    showSection("error");
-  }
+  function showError(msg) { errorMsg.textContent = msg; showSection("error"); }
 
-  /* ── Helpers ── */
   function formatBytes(b) {
     if (b < 1024) return b + " B";
     if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
     return (b / 1048576).toFixed(1) + " MB";
   }
-  function esc(s) {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
-  }
+  function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 });

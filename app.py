@@ -34,7 +34,8 @@ async def translate(
     file: UploadFile = File(...),
     api_key: str = Form(...),
     target_lang: str = Form("English"),
-    model: str = Form("claude-sonnet-4-6"),
+    provider: str = Form("claude"),
+    model: str = Form(""),
     smart_mode: str = Form("false"),
     font: str = Form(""),
     enhance: str = Form("false"),
@@ -69,7 +70,7 @@ async def translate(
 
     asyncio.create_task(
         _run(
-            task_id, upload_path, output_path, api_key, target_lang, model,
+            task_id, upload_path, output_path, api_key, target_lang, provider, model,
             smart_mode == "true", font_path,
             enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
         )
@@ -84,6 +85,7 @@ async def _run(
     output_path: str,
     api_key: str,
     target_lang: str,
+    provider: str,
     model: str,
     smart_mode: bool,
     font_path: str = None,
@@ -119,6 +121,7 @@ async def _run(
         pipeline = TranslationPipeline(
             api_key=api_key,
             target_lang=target_lang,
+            provider=provider,
             model=model,
             use_smart_detection=smart_mode,
             font_path=font_path,

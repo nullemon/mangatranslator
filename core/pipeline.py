@@ -4,7 +4,7 @@ import os
 from typing import Callable, Optional, Dict, Any
 
 from .detector import BubbleDetector, TextRegion
-from .translator import ClaudeTranslator
+from .translator import make_translator
 from .inpainter import TextInpainter
 from .renderer import TextRenderer
 
@@ -14,12 +14,13 @@ class TranslationPipeline:
         self,
         api_key: str,
         target_lang: str = "English",
-        model: str = "claude-sonnet-4-6",
+        model: str = "",
         font_path: Optional[str] = None,
         use_smart_detection: bool = False,
+        provider: str = "claude",
     ):
         self.detector = BubbleDetector()
-        self.translator = ClaudeTranslator(api_key, model)
+        self.translator = make_translator(provider, api_key, model)
         self.inpainter = TextInpainter()
         self.renderer = TextRenderer(font_path)
         self.target_lang = target_lang
