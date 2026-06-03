@@ -273,13 +273,10 @@ class TranslationPipeline:
                 })
                 masks[r.id] = r.mask
 
-        # Completeness pass: the detector can miss small / spiky shout bubbles
-        # and free text (titles, credits). Ask the AI to find EVERY text region
-        # and add anything not already covered by a detected bubble.
-        update(2, "Scanning for any missed text...", 50)
-        added = self._add_missed_text(image, items, update)
-        update(2, f"Added {added} region(s) the detector missed", 55)
-
+        # NOTE: the AI "completeness pass" was removed — its imprecise
+        # coordinates dumped duplicate/free text into the gutters. Catching
+        # missed text is now handled precisely by the local GPU detector
+        # (comic-text-detector) when available.
         return items, ann_path, masks
 
     def _add_missed_text(self, image, items, update) -> int:
