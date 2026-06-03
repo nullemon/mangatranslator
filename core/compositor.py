@@ -179,7 +179,26 @@ class Compositor:
                 self.renderer.draw_in_rect(pil, rect, text, color)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
+        result = self._final_cleanup(result)
         return result
+
+    def _final_cleanup(self, image):
+        """Push the output toward a crisp manga look: stretch contrast so paper
+        becomes pure white and ink becomes deep black, then lightly sharpen."""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        bp = float(np.percentile(gray, 2))
+        wp = float(np.percentile(gray, 98))
+        if wp - bp < 40:
+            return image
+        out = image.astype(np.float32)
+        out = (out - bp) * (255.0 / (wp - bp))
+        out = np.clip(out, 0, 255)
+        g2 = cv2.cvtColor(out.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+        out[g2 > 240] = 255
+        out = out.astype(np.uint8)
+        blurred = cv2.GaussianBlur(out, (0, 0), 1.0)
+        out = cv2.addWeighted(out, 1.3, blurred, -0.3, 0)
+        return out
 
     def _pick_color(self, dark, it):
         """Text color: honor a manual override ("black"/"white") when set,

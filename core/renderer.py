@@ -100,7 +100,9 @@ class TextRenderer:
         draw = ImageDraw.Draw(image)
         font_size = self._optimal_size(text, inner_w, inner_h, draw)
         font = self._get_font(font_size)
-        lines = self._wrap(text, font, inner_w, draw)
+        sw = max(1, font_size // 18) * 2
+        wrap_w = max(inner_w - sw, 8)
+        lines = self._wrap(text, font, wrap_w, draw)
 
         heights = []
         for line in lines:
@@ -112,12 +114,15 @@ class TextRenderer:
 
         cur_y = inner_y + max(0, (inner_h - total_h) // 2)
 
+        stroke_c = (255, 255, 255) if color[0] < 128 else (0, 0, 0)
+        stroke_w = max(1, font_size // 18)
+
         for i, line in enumerate(lines):
             bb = draw.textbbox((0, 0), line, font=font)
             lw = bb[2] - bb[0]
             lx = inner_x + max(0, (inner_w - lw) // 2)
-            # offset by the bbox origin so the glyph sits where we expect
-            draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font)
+            draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font,
+                      stroke_width=stroke_w, stroke_fill=stroke_c)
             cur_y += heights[i] + spacing
 
         return image
@@ -150,7 +155,12 @@ class TextRenderer:
         draw: ImageDraw.ImageDraw,
     ) -> bool:
         font = self._get_font(size)
-        lines = self._wrap(text, font, max_w, draw)
+        sw = max(1, size // 18) * 2
+        eff_w = max_w - sw
+        eff_h = max_h - sw
+        if eff_w < 8 or eff_h < 8:
+            eff_w, eff_h = max_w, max_h
+        lines = self._wrap(text, font, eff_w, draw)
 
         total = 0
         spacing = max(int(size * self.line_spacing_ratio), 1)
@@ -158,13 +168,13 @@ class TextRenderer:
             bb = draw.textbbox((0, 0), line, font=font)
             lw = bb[2] - bb[0]
             lh = bb[3] - bb[1]
-            if lw > max_w:
+            if lw > eff_w:
                 return False
             total += lh
             if i < len(lines) - 1:
                 total += spacing
 
-        return total <= max_h
+        return total <= eff_h
 
     def _wrap(
         self,
