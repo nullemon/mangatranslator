@@ -22,5 +22,26 @@ fname = os.environ.get("BUBBLE_MODEL_FILE", "model.pt")
 print("Model cached at:", hf_hub_download(repo_id=repo, filename=fname))
 PY
 
+echo "==> Pre-downloading manga-ocr (reads each bubble locally)..."
+python3 - <<'PY'
+try:
+    from manga_ocr import MangaOcr
+    MangaOcr()
+    print("manga-ocr ready")
+except Exception as e:
+    print("manga-ocr skipped:", e)
+PY
+
+echo "==> Pre-downloading LaMa inpainting (clean text removal)..."
+python3 - <<'PY'
+try:
+    from simple_lama_inpainting import SimpleLama
+    SimpleLama()
+    print("LaMa ready")
+except Exception as e:
+    print("LaMa skipped:", e)
+PY
+
 echo "==> Done. Restart the app:  python3 app.py"
-echo "    You should see 'segmentation model (GPU)' in the detect step."
+echo "    Detect step shows 'segmentation model (GPU)'; bubbles are read by"
+echo "    manga-ocr and erased with LaMa when those models are installed."

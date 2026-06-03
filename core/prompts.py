@@ -107,6 +107,25 @@ Keep translations concise. Return an empty array [] if no free text is found.
 Return ONLY the JSON array."""
 
 
+def text_translate_prompt(target_lang: str) -> str:
+    return f"""You are an expert manga translator. Below is a JSON object mapping
+each speech-bubble id to the Japanese text that was read from that bubble (by
+OCR). Translate every entry into natural, concise {target_lang}.
+
+Return ONLY a JSON array — no markdown fences, no commentary:
+[
+  {{"id": 1, "original": "<the Japanese>", "translation": "{target_lang.upper()} TEXT", "type": "dialogue"}}
+]
+
+Rules:
+- Keep each translation matched to the SAME id — never move text between ids.
+- Use UPPERCASE (standard manga lettering). Keep it concise to fit the bubble.
+- "type" is one of: "dialogue", "narration", "sfx". Mark pure sound effects
+  (onomatopoeia) as "sfx".
+- If an entry's text is empty or unreadable, return an empty translation for it.
+- Return ONLY the JSON array."""
+
+
 def extract_json_array(text: str) -> list:
     """Robustly pull a JSON array out of a model response that may include
     markdown fences or stray prose."""

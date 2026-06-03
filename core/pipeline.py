@@ -191,6 +191,15 @@ class TranslationPipeline:
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}
+        # Optional local OCR: read each bubble's own text so translations can
+        # never be matched to the wrong bubble. Lazily loaded; no-op if absent.
+        self.ocr = None
+        if use_seg:
+            try:
+                from .ocr import MangaOCR
+                self.ocr = MangaOCR()
+            except Exception as e:
+                print(f"[pipeline] OCR unavailable: {e}")
 
     def process(
         self,
@@ -254,11 +263,7 @@ class TranslationPipeline:
             ann_path = self._suffix_path(output_path, "annotated")
             cv2.imwrite(ann_path, annotated)
 
-            update(2, "Translating bubbles...", 32)
-            translations = self.translator.translate_regions(
-                image, annotated, len(regions), self.target_lang
-            )
-            update(2, f"Translated {len(translations)} bubble regions", 48)
+            translations = self._translate_regions(image, regions, annotated, update)
 
             for r in regions:
                 tr = translations.get(r.id, {})
@@ -278,6 +283,38 @@ class TranslationPipeline:
         # missed text is now handled precisely by the local GPU detector
         # (comic-text-detector) when available.
         return items, ann_path, masks
+
+    def _translate_regions(self, image, regions, annotated, update) -> Dict[int, dict]:
+        """Translate each detected bubble. Prefers local OCR (reads each
+        bubble's OWN text → no cross-bubble mismatch); falls back to the
+        vision-LLM number-matching path when OCR isn't available."""
+        if self.ocr is not None and self.ocr.ok:
+            update(2, "Reading bubbles with manga-ocr...", 30)
+            id_to_text = {}
+            for r in regions:
+                jp = self.ocr.read_region(image, r.bbox, getattr(r, "mask", None))
+                if jp:
+                    id_to_text[r.id] = jp
+            update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
+            if id_to_text:
+                try:
+                    out = self.translator.translate_texts(id_to_text, self.target_lang)
+                    # keep the OCR'd original text for the editor view
+                    for rid, jp in id_to_text.items():
+                        out.setdefault(rid, {})
+                        out[rid].setdefault("original", jp)
+                        out[rid]["original"] = out[rid].get("original") or jp
+                    update(2, f"Translated {len(out)} bubbles (OCR)", 50)
+                    return out
+                except Exception as e:
+                    print(f"[pipeline] text translation failed, using vision path: {e}")
+
+        update(2, "Translating bubbles...", 32)
+        out = self.translator.translate_regions(
+            image, annotated, len(regions), self.target_lang
+        )
+        update(2, f"Translated {len(out)} bubble regions", 50)
+        return out
 
     def _add_missed_text(self, image, items, update) -> int:
         """Run AI full-page detection and append any text region that the

@@ -15,8 +15,16 @@ class Compositor:
     recovers one from the bounding box; failing that it wipes an inscribed
     ellipse — never a bare rectangle that would spill past the outline."""
 
-    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0):
+    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
+                 use_lama: bool = True):
         self.renderer = TextRenderer(font_path, font_scale=font_scale)
+        self.lama = None
+        if use_lama:
+            try:
+                from .lama import LamaInpaint
+                self.lama = LamaInpaint()
+            except Exception as e:
+                print(f"[compositor] LaMa unavailable: {e}")
 
     def compose(
         self,
@@ -169,6 +177,15 @@ class Compositor:
             )
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         text_mask = cv2.dilate(thresh, kernel, iterations=1)
+
+        # Prefer LaMa (clean over art/screentones); fall back to cv2.inpaint.
+        if self.lama is not None and self.lama.ok:
+            full_mask = np.zeros(result.shape[:2], np.uint8)
+            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=2)
+            out = self.lama.inpaint(result, full_mask)
+            if out is not None:
+                result[:] = out
+                return
         inpainted = cv2.inpaint(roi, text_mask, 5, cv2.INPAINT_TELEA)
         result[y0:y1, x0:x1] = inpainted
 

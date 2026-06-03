@@ -10,3 +10,11 @@ torch>=2.2.0
 torchvision>=0.17.0
 ultralytics>=8.2.0
 huggingface_hub>=0.24.0
+
+# ── Local OCR + clean removal (all run on your GPU, all free) ──
+# manga-ocr: reads each bubble's own Japanese text so a translation can never
+#   land in the wrong bubble (and never misses a detected bubble).
+# simple-lama-inpainting: GPU LaMa model for clean text erasure over artwork
+#   and screentones (much better than OpenCV inpaint).
+manga-ocr>=0.1.11
+simple-lama-inpainting>=0.1.0

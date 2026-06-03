@@ -1,6 +1,7 @@
 import anthropic
 import base64
 import cv2
+import json
 import numpy as np
 import httpx
 from typing import Dict, List
@@ -66,6 +67,12 @@ class ClaudeTranslator:
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         return prompts.extract_json_array(text)
 
+    def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
+        prompt = prompts.text_translate_prompt(target_lang)
+        payload = json.dumps(id_to_text, ensure_ascii=False)
+        text = self._ask([{"type": "text", "text": prompt + "\n\n" + payload}])
+        return _to_region_dict(prompts.extract_json_array(text))
+
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
         prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [])
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
@@ -128,6 +135,12 @@ class GeminiTranslator:
         prompt = prompts.smart_detect_prompt(target_lang)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         return prompts.extract_json_array(text)
+
+    def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
+        prompt = prompts.text_translate_prompt(target_lang)
+        payload = json.dumps(id_to_text, ensure_ascii=False)
+        text = self._ask([{"text": prompt + "\n\n" + payload}])
+        return _to_region_dict(prompts.extract_json_array(text))
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
         prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [])
