@@ -88,34 +88,80 @@ class TranslationPipeline:
     def _standard_detect(self, image, output_path, update):
         update(1, f"Detecting balloons with {self.detector_name}...", 10)
         regions: List[TextRegion] = self.detector.detect(image)
-        if not regions:
-            return [], "", {}
-        update(1, f"Found {len(regions)} balloons", 22)
+        bubble_count = len(regions) if regions else 0
+        if bubble_count:
+            update(1, f"Found {bubble_count} balloons", 22)
 
-        annotated = self.detector.create_annotated_image(image, regions)
-        ann_path = self._suffix_path(output_path, "annotated")
-        cv2.imwrite(ann_path, annotated)
-
-        update(2, "Translating...", 32)
-        translations = self.translator.translate_regions(
-            image, annotated, len(regions), self.target_lang
-        )
-        update(2, f"Translated {len(translations)} regions", 55)
-
+        ann_path = ""
         items, masks = [], {}
-        for r in regions:
-            tr = translations.get(r.id, {})
-            items.append({
-                "id": r.id,
-                "bbox": [int(v) for v in r.bbox],
-                "original": tr.get("original", ""),
-                "translation": tr.get("translation", ""),
-                "type": tr.get("type", "dialogue"),
-                "in_bubble": True,
-                "dark": bool(getattr(r, "dark", False)),
-            })
-            masks[r.id] = r.mask
+
+        if regions:
+            annotated = self.detector.create_annotated_image(image, regions)
+            ann_path = self._suffix_path(output_path, "annotated")
+            cv2.imwrite(ann_path, annotated)
+
+            update(2, "Translating bubbles...", 32)
+            translations = self.translator.translate_regions(
+                image, annotated, len(regions), self.target_lang
+            )
+            update(2, f"Translated {len(translations)} bubble regions", 48)
+
+            for r in regions:
+                tr = translations.get(r.id, {})
+                items.append({
+                    "id": r.id,
+                    "bbox": [int(v) for v in r.bbox],
+                    "original": tr.get("original", ""),
+                    "translation": tr.get("translation", ""),
+                    "type": tr.get("type", "dialogue"),
+                    "in_bubble": True,
+                    "dark": bool(getattr(r, "dark", False)),
+                })
+                masks[r.id] = r.mask
+
+        update(2, "Detecting free text (titles, credits)...", 50)
+        bubble_ids = [it["id"] for it in items]
+        free_items = self._detect_free_text(image, bubble_ids, update)
+        if free_items:
+            next_id = max((it["id"] for it in items), default=0) + 1
+            for fi in free_items:
+                fi["id"] = next_id
+                next_id += 1
+            items.extend(free_items)
+            update(2, f"Found {len(free_items)} free text regions", 55)
+        else:
+            update(2, "No free text found", 55)
+
         return items, ann_path, masks
+
+    def _detect_free_text(self, image, bubble_ids, update):
+        h, w = image.shape[:2]
+        try:
+            detections = self.translator.detect_free_text(
+                image, self.target_lang, bubble_ids
+            )
+        except Exception as e:
+            print(f"[pipeline] free text detection failed: {e}")
+            return []
+        items = []
+        for det in detections:
+            x = max(0, min(int(det.get("x_pct", 0) / 100 * w), w - 1))
+            y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
+            bw = max(10, min(int(det.get("width_pct", 0) / 100 * w), w - x))
+            bh = max(10, min(int(det.get("height_pct", 0) / 100 * h), h - y))
+            kind = (det.get("type") or "").lower().replace(" ", "_")
+            if kind in ("sfx", "sound", "sound_effect"):
+                continue
+            items.append({
+                "id": 0,
+                "bbox": [x, y, bw, bh],
+                "original": det.get("original", ""),
+                "translation": det.get("translation", ""),
+                "type": kind or "title",
+                "in_bubble": False,
+                "dark": False,
+            })
+        return items
 
     def _smart_detect(self, image, output_path, update):
         update(1, "AI is analyzing the page...", 10)

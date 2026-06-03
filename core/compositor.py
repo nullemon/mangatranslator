@@ -41,12 +41,26 @@ class Compositor:
             kind = (it.get("type") or "").lower().replace(" ", "_")
             if kind in SFX_TYPES:
                 continue
-            if it.get("in_bubble") is False:
-                continue
             bbox = it.get("bbox")
             if not bbox:
                 continue
             bx, by, bw, bh = [int(v) for v in bbox]
+
+            if it.get("in_bubble") is False:
+                if bw < 10 or bh < 10:
+                    continue
+                bb = (bx, by, bw, bh)
+                if any(self._overlaps(bb, ub) for ub in used_boxes):
+                    continue
+                used_boxes.append(bb)
+                self._inpaint_text(result, bx, by, bw, bh)
+                dark = self._is_dark_region(gray, bx, by, bw, bh)
+                pad = max(2, min(bw, bh) // 16)
+                rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
+                color = (255, 255, 255) if dark else (0, 0, 0)
+                placements.append((rect, text, color))
+                it["placed"] = True
+                continue
 
             mask = masks.get(it["id"])
             if mask is None:
@@ -73,8 +87,6 @@ class Compositor:
                 if rect is None:
                     rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
             else:
-                # Last resort: no shape found. Wipe an inscribed ellipse in the
-                # bbox (rounded, won't bleed past a real balloon outline).
                 if bw < 14 or bh < 14:
                     continue
                 bb = (bx, by, bw, bh)
@@ -103,6 +115,39 @@ class Compositor:
     def _wipe(self, result, mask, dark):
         inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
         result[inner > 0] = (0, 0, 0) if dark else (255, 255, 255)
+
+    def _inpaint_text(self, result, x, y, w, h):
+        """Remove text from a free-text region by inpainting dark strokes."""
+        H, W = result.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        roi = result[y0:y1, x0:x1]
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        bg_med = float(np.median(gray_roi))
+        if bg_med > 160:
+            thresh = cv2.adaptiveThreshold(
+                gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, 21, 15,
+            )
+        else:
+            thresh = cv2.adaptiveThreshold(
+                gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 21, 15,
+            )
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        text_mask = cv2.dilate(thresh, kernel, iterations=1)
+        inpainted = cv2.inpaint(roi, text_mask, 5, cv2.INPAINT_TELEA)
+        result[y0:y1, x0:x1] = inpainted
+
+    def _is_dark_region(self, gray, x, y, w, h):
+        H, W = gray.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return False
+        return float(np.median(gray[y0:y1, x0:x1])) < 128
 
     # ── Recover a balloon mask from a bbox (used when no mask is supplied) ──
     def _resolve_bubble(self, gray, bbox, page_area):

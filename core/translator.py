@@ -66,6 +66,14 @@ class ClaudeTranslator:
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         return prompts.extract_json_array(text)
 
+    def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
+        prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [])
+        text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
+        try:
+            return prompts.extract_json_array(text)
+        except ValueError:
+            return []
+
 
 class GeminiTranslator:
     """Translation backend powered by Google Gemini (vision), via REST."""
@@ -120,6 +128,14 @@ class GeminiTranslator:
         prompt = prompts.smart_detect_prompt(target_lang)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         return prompts.extract_json_array(text)
+
+    def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
+        prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [])
+        text = self._ask([{"text": prompt}, self._image_part(image)])
+        try:
+            return prompts.extract_json_array(text)
+        except ValueError:
+            return []
 
     def _err(self, resp: httpx.Response) -> str:
         try:

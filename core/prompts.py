@@ -32,7 +32,7 @@ def smart_detect_prompt(target_lang: str) -> str:
     return f"""You are an expert manga page analyzer and translator.
 
 Carefully examine this manga page. Find EVERY piece of Japanese text — speech
-bubbles, narration boxes, sound effects, titles, and small annotations.
+bubbles, narration boxes, titles, credits, captions, and annotations.
 
 For each text region, return its bounding box as PERCENTAGE coordinates of the
 image (so they are resolution independent):
@@ -48,22 +48,63 @@ Return ONLY a JSON array — no markdown fences, no commentary:
     "height_pct": 8.0,
     "original": "日本語テキスト",
     "translation": "{target_lang.upper()} TEXT",
-    "type": "speech_bubble",
+    "type": "dialogue",
     "in_bubble": true
   }}
 ]
 
 Rules:
-- Find ALL text, including small annotations and sound effects.
+- Find ALL text, including chapter titles, author credits, narration, and captions.
 - Be precise with bounding box coordinates — they are used for text replacement.
 - Use UPPERCASE for dialogue and narration.
-- Keep translations concise so they fit inside speech bubbles.
-- type: "speech_bubble", "narration_box", "sfx", or "title".
-- "in_bubble": true ONLY if the text is enclosed in a speech bubble or a
-  drawn narration box. Set it to false for sound effects (onomatopoeia) and
-  any text drawn directly over the artwork — these must NOT be replaced.
+- Keep translations concise so they fit inside their regions.
+- type must be one of: "dialogue", "narration", "sfx", "title", "credit", "caption".
+- "in_bubble": true if the text is enclosed in a speech bubble or drawn box.
+  Set to false for titles, credits, captions, and any text NOT enclosed.
 - Set type to "sfx" for sound effects / onomatopoeia (e.g. ドーン, バァン, わぁぁ).
+  SFX will NOT be replaced — everything else WILL be translated and placed.
+- Do NOT include tiny furigana readings above kanji.
 - Return ONLY the JSON array."""
+
+
+def free_text_detect_prompt(target_lang: str, bubble_ids: list) -> str:
+    skip = f"Already-handled bubble IDs: {bubble_ids}. " if bubble_ids else ""
+    return f"""You are an expert manga page analyzer and translator.
+
+The speech bubbles on this page have already been translated. {skip}Now find any
+REMAINING Japanese text that is NOT inside a speech bubble and should be translated:
+
+- Chapter titles (e.g. 第1163話 "約束")
+- Author names / credits
+- Narration text outside bubbles
+- Editorial notes, page captions, magazine announcements
+- Location/time labels
+
+Do NOT include:
+- Sound effects / onomatopoeia (ドーン, バァン, etc.)
+- Text already in {target_lang}
+- Tiny furigana readings above kanji
+
+For each text region, return its bounding box as PERCENTAGE coordinates:
+- x_pct, y_pct: top-left corner (0-100)
+- width_pct, height_pct: size as percentage of image dimensions
+
+Return ONLY a JSON array — no markdown fences:
+[
+  {{
+    "x_pct": 30.0,
+    "y_pct": 2.0,
+    "width_pct": 40.0,
+    "height_pct": 5.0,
+    "original": "第1163話 \\"約束\\"",
+    "translation": "CHAPTER 1163: \\"THE PROMISE\\"",
+    "type": "title"
+  }}
+]
+
+type must be one of: "title", "credit", "narration", "caption".
+Keep translations concise. Return an empty array [] if no free text is found.
+Return ONLY the JSON array."""
 
 
 def extract_json_array(text: str) -> list:
