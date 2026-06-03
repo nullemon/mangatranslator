@@ -265,6 +265,11 @@
         <div class="tab-panel" id="panel-details">
           <div class="details-bar">
             <span class="details-hint">Edit any text below, or hit <strong>✕</strong> to skip a bubble (keeps the original). Then re-render.</span>
+            <div class="size-control">
+              <label for="fontScale">Text Size</label>
+              <input type="range" id="fontScale" min="0.6" max="2.0" step="0.1" value="1.0">
+              <span id="fontScaleVal">1.0x</span>
+            </div>
             <button class="btn btn-primary btn-sm" id="applyBtn">Apply &amp; Re-render</button>
           </div>
           <div id="translationsList" class="translations-list"></div>

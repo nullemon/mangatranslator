@@ -264,6 +264,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 /* ── Details / editable translations ── */
 .details-bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
 .details-hint{font-size:.8rem;color:var(--text-dim)}
+.size-control{display:flex;align-items:center;gap:.5rem;white-space:nowrap}
+.size-control label{font-size:.8rem;font-weight:600;color:var(--text-dim)}
+.size-control input[type=range]{width:100px;accent-color:var(--accent);cursor:pointer}
+.size-control span{font-size:.8rem;font-weight:600;min-width:2.2rem;color:var(--text)}
 .translations-list{display:flex;flex-direction:column;gap:.7rem}
 .tl-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:.8rem .9rem;transition:opacity .2s}
 .tl-item.excluded{opacity:.5}

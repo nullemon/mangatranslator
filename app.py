@@ -296,6 +296,7 @@ async def rerender(task_id: str, request: Request):
         raise HTTPException(400, "Invalid JSON body")
     excluded = {str(i) for i in payload.get("excluded", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
+    font_scale = float(payload.get("font_scale", 1.0))
 
     items = []
     for it in r["items"]:
@@ -317,7 +318,7 @@ async def rerender(task_id: str, request: Request):
         base_img = cv2.imread(base)
         if base_img is None:
             raise ValueError("Base image missing")
-        comp = Compositor(t.get("font_path"))
+        comp = Compositor(t.get("font_path"), font_scale=font_scale)
         out = comp.compose(base_img, items, MASKS.get(task_id))
         cv2.imwrite(r["output_path"], out)
 

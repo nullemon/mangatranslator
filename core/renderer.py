@@ -22,8 +22,9 @@ class TextRenderer:
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
 
-    def __init__(self, font_path: Optional[str] = None):
+    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0):
         self.font_path = font_path or self._find_font()
+        self.font_scale = max(0.5, min(font_scale, 3.0))
         self.min_font_size = 10
         self.padding_ratio = 0.04
         self.line_spacing_ratio = 0.12
@@ -138,7 +139,8 @@ class TextRenderer:
             else:
                 hi = mid - 1
 
-        return best
+        scaled = max(self.min_font_size, int(best * self.font_scale))
+        return scaled
 
     def _text_fits(
         self,

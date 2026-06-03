@@ -15,8 +15,8 @@ class Compositor:
     recovers one from the bounding box; failing that it wipes an inscribed
     ellipse — never a bare rectangle that would spill past the outline."""
 
-    def __init__(self, font_path: Optional[str] = None):
-        self.renderer = TextRenderer(font_path)
+    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0):
+        self.renderer = TextRenderer(font_path, font_scale=font_scale)
 
     def compose(
         self,

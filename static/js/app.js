@@ -51,6 +51,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const transFull= document.getElementById("transFull");
   const tabTranslated = document.querySelector('.tab[data-tab="translated"]');
   const detailsTab    = document.querySelector('.tab[data-tab="details"]');
+  const fontScale     = document.getElementById("fontScale");
+  const fontScaleVal  = document.getElementById("fontScaleVal");
+
+  fontScale.addEventListener("input", () => {
+    fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
+  });
 
   const downloadBtn = document.getElementById("downloadBtn");
   const newBtn      = document.getElementById("newBtn");
@@ -565,7 +571,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch(`/api/rerender/${page.taskId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ excluded: [...page.excluded], edits }),
+        body: JSON.stringify({ excluded: [...page.excluded], edits, font_scale: parseFloat(fontScale.value) }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const data = await res.json();
