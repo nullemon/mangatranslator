@@ -526,17 +526,25 @@ document.addEventListener("DOMContentLoaded", () => {
     for (const it of items) {
       const isExcluded = page.excluded.has(String(it.id));
       const skipped = !it.placed && !isExcluded;
+      const isBubble = it.in_bubble !== false;
       const div = document.createElement("div");
-      div.className = "tl-item" + (isExcluded ? " excluded" : "");
-      let badge = isExcluded ? '<span class="tl-badge skip">skipped by you</span>'
-        : skipped ? '<span class="tl-badge warn">not in a bubble</span>'
-        : '<span class="tl-badge ok">in bubble</span>';
+      div.className = "tl-item" + (isExcluded ? " excluded" : "") + (isBubble ? "" : " free-text");
+      let badge;
+      if (isExcluded) {
+        badge = '<span class="tl-badge skip">skipped</span>';
+      } else if (isBubble) {
+        badge = '<span class="tl-badge ok">bubble</span>';
+      } else {
+        const label = it.type || "free text";
+        badge = `<span class="tl-badge free">${esc(label)}</span>`;
+      }
+      const skipTitle = isBubble ? "Skip this bubble" : "Skip this text";
       div.innerHTML = `
         <div class="tl-header">
           <span class="tl-id">#${it.id}</span>
           <span class="tl-type">${esc(it.type || "dialogue")}</span>
           ${badge}
-          <button class="tl-x" title="Skip this bubble" data-id="${it.id}">✕</button>
+          <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
         </div>
         <div class="tl-original">${esc(it.original || "")}</div>
         <textarea class="tl-edit" data-id="${it.id}" rows="2" ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>`;

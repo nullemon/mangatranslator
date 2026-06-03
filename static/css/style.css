@@ -278,6 +278,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-badge.ok{color:var(--success);background:rgba(22,163,74,.12)}
 .tl-badge.warn{color:var(--warn);background:rgba(180,83,9,.12)}
 .tl-badge.skip{color:var(--danger);background:var(--danger-soft)}
+.tl-badge.free{color:var(--accent);background:rgba(59,130,246,.12)}
+.tl-item.free-text{border-left:3px solid var(--accent)}
 .tl-x{margin-left:auto;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.75rem;line-height:1;transition:.15s}
 .tl-x:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-original{font-size:.85rem;color:var(--text-dim);margin-bottom:.45rem;word-break:break-word}
