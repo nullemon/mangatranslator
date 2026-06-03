@@ -9,12 +9,16 @@ class ImageEnhancer:
     an external image-to-image model (OpenAI gpt-image-1 or Google Gemini)."""
 
     DEFAULT_PROMPT = (
-        "Convert this rough manga sketch into a clean, professional "
-        "black-and-white manga scan. Crisp inked line art, smooth screentones, "
-        "pure white backgrounds, deep solid blacks, sharp high-contrast "
-        "print quality. Keep the exact same composition, panel layout, "
-        "characters, poses, perspective, and any existing text. "
-        "Do not add, remove, or rearrange panels or characters."
+        "Convert this manga page photo into a clean, professional "
+        "black-and-white printed manga scan, as if scanned flat on a "
+        "high-quality scanner. Make the paper pure white with no shadows, "
+        "no page curvature, no photo lighting, and no background around the "
+        "page. Crisp solid-black inked line art, smooth even screentones, "
+        "deep solid blacks, sharp high-contrast print quality. Straighten "
+        "the page so it is perfectly rectangular and front-on. Keep the exact "
+        "same composition, panel layout, characters, poses, perspective, and "
+        "all existing text and Japanese lettering unchanged. Do not add, "
+        "remove, redraw, or rearrange panels, characters, or text."
     )
 
     OPENAI_URL = "https://api.openai.com/v1/images/edits"

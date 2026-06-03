@@ -8,32 +8,116 @@ from .translator import make_translator
 from .compositor import Compositor
 
 
+def _order_corners(pts: np.ndarray) -> np.ndarray:
+    """Order 4 points as top-left, top-right, bottom-right, bottom-left."""
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]      # top-left  (smallest x+y)
+    rect[2] = pts[np.argmax(s)]      # bottom-right (largest x+y)
+    d = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(d)]      # top-right (smallest y-x)
+    rect[3] = pts[np.argmax(d)]      # bottom-left (largest y-x)
+    return rect
+
+
 def auto_crop_page(image: np.ndarray) -> np.ndarray:
-    """Detect the manga page in a photo and crop away the background."""
+    """Detect the manga page in a photo and warp it flat (deskew + crop).
+
+    Finds the page's 4 corners and applies a perspective transform so an
+    angled phone photo becomes a clean, rectangular, front-on page. Falls
+    back to an axis-aligned crop, then to the original, if that fails."""
     h, w = image.shape[:2]
+    page_area = h * w
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (15, 15), 0)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=3)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return image
+
     largest = max(contours, key=cv2.contourArea)
     area = cv2.contourArea(largest)
-    if area < (h * w) * 0.25:
+    if area < page_area * 0.25:
         return image
-    x, y, rw, rh = cv2.boundingRect(largest)
-    if rw < w * 0.35 or rh < h * 0.35:
+    # Already fills the frame → nothing to crop.
+    bx, by, bw, bh = cv2.boundingRect(largest)
+    if bw >= w * 0.98 and bh >= h * 0.98:
         return image
-    if rw >= w * 0.98 and rh >= h * 0.98:
+
+    # Try to approximate the page outline as a 4-corner quad for a perspective
+    # warp (fixes rotation + keystone). Loosen epsilon until we get a quad.
+    peri = cv2.arcLength(largest, True)
+    quad = None
+    for eps in (0.02, 0.03, 0.04, 0.05, 0.06, 0.08):
+        approx = cv2.approxPolyDP(largest, eps * peri, True)
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            quad = approx.reshape(4, 2).astype(np.float32)
+            break
+
+    if quad is not None:
+        rect = _order_corners(quad)
+        (tl, tr, br, bl) = rect
+        wA = np.linalg.norm(br - bl)
+        wB = np.linalg.norm(tr - tl)
+        hA = np.linalg.norm(tr - br)
+        hB = np.linalg.norm(tl - bl)
+        out_w = int(max(wA, wB))
+        out_h = int(max(hA, hB))
+        if out_w >= w * 0.35 and out_h >= h * 0.35:
+            dst = np.array([[0, 0], [out_w - 1, 0],
+                            [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+            M = cv2.getPerspectiveTransform(rect, dst)
+            warped = cv2.warpPerspective(image, M, (out_w, out_h))
+            print(f"[pipeline] auto-crop+deskew: {w}x{h} -> {out_w}x{out_h}")
+            return warped
+
+    # Fallback: axis-aligned crop.
+    if bw < w * 0.35 or bh < h * 0.35:
         return image
     pad = 3
-    x, y = max(0, x - pad), max(0, y - pad)
-    rw = min(w - x, rw + 2 * pad)
-    rh = min(h - y, rh + 2 * pad)
-    print(f"[pipeline] auto-crop: {w}x{h} -> {rw}x{rh} (removed background)")
-    return image[y:y + rh, x:x + rw].copy()
+    bx, by = max(0, bx - pad), max(0, by - pad)
+    bw = min(w - bx, bw + 2 * pad)
+    bh = min(h - by, bh + 2 * pad)
+    print(f"[pipeline] auto-crop: {w}x{h} -> {bw}x{bh}")
+    return image[by:by + bh, bx:bx + bw].copy()
+
+
+def scan_cleanup(image: np.ndarray) -> np.ndarray:
+    """Turn a phone photo into a clean 'scanned' page, locally and reliably:
+    deskew + crop away the background, then normalize lighting so the paper
+    goes pure white — while preserving solid blacks, screentones and ink."""
+    img = auto_crop_page(image)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    h, w = gray.shape[:2]
+
+    # 1. Flatten uneven lighting / shadows by dividing out a large-kernel
+    #    background estimate → paper becomes pure white. (This step alone
+    #    washes out big black regions, so we repair them in step 3.)
+    k = max(31, (min(h, w) // 8) | 1)
+    bg = cv2.morphologyEx(
+        gray.astype(np.uint8), cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+    ).astype(np.float32)
+    flat = np.clip(gray / np.maximum(bg, 1.0) * 255.0, 0, 255)
+
+    # 2. Global levels stretch of the ORIGINAL → keeps solid blacks black.
+    bp = float(np.percentile(gray, 2))
+    wp = float(np.percentile(gray, 95))
+    if wp - bp < 20:
+        return cv2.cvtColor(gray.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    stretched = np.clip((gray - bp) * (255.0 / (wp - bp)), 0, 255)
+
+    # 3. Combine: paper stays white (from flat), inks and large black areas
+    #    are restored (from stretched) via per-pixel minimum.
+    out = np.minimum(flat, stretched)
+    # 4. Snap near-white paper to pure white for a clean scanned look.
+    out[out > 225] = 255
+    out = out.astype(np.uint8)
+    # 5. Light denoise to remove paper grain without smearing line art.
+    out = cv2.fastNlMeansDenoising(out, None, 5, 7, 21)
+    return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
 def make_detector(use_seg: bool = True):

@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.requests import Request
 
-from core.pipeline import TranslationPipeline
+from core.pipeline import TranslationPipeline, scan_cleanup
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
@@ -119,7 +119,12 @@ async def _run(
                 img = cv2.imread(image_path)
                 if img is None:
                     raise ValueError(f"Cannot load image: {image_path}")
-                out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                cleaned = scan_cleanup(img)
+                try:
+                    out = enhancer.enhance(cleaned, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                except Exception as e:
+                    print(f"[enhance] AI step failed, using local scan cleanup: {e}")
+                    out = cleaned
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
@@ -219,7 +224,18 @@ async def _run_enhance(
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
-            out = enhancer.enhance(img, prompt, provider, api_key, model)
+            # Local cleanup first: deskew, crop the background away, and
+            # normalize the paper to pure white. This already looks like a
+            # scan and removes the side background reliably.
+            cleaned = scan_cleanup(img)
+            try:
+                out = enhancer.enhance(cleaned, prompt, provider, api_key, model)
+            except Exception as e:
+                # If the AI step fails, fall back to the local clean scan so
+                # Raw → Scan always produces a usable result.
+                print(f"[enhance] AI step failed, using local scan cleanup: {e}")
+                tasks[task_id]["message"] = f"AI step failed ({e}); used local clean scan"
+                out = cleaned
             cv2.imwrite(output_path, out)
 
         loop = asyncio.get_event_loop()
