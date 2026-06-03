@@ -120,6 +120,49 @@ def scan_cleanup(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
+def compress_upload(data: bytes, max_dim: int = 2600, target_kb: int = 1024) -> bytes:
+    """Shrink an oversized upload so processing stays fast and AI calls don't
+    choke on huge payloads. Caps the long side at `max_dim`, then re-encodes as
+    JPEG — first lowering quality, then stepping the resolution down further if
+    needed — until it fits under `target_kb`. Text stays crisp enough for OCR
+    and detection. Images already under the target pass through untouched."""
+    if len(data) <= target_kb * 1024:
+        return data
+    arr = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return data  # not a decodable image — leave it for the caller to handle
+    h0, w0 = img.shape[:2]
+
+    base = img
+    if max(h0, w0) > max_dim:
+        scale = max_dim / max(h0, w0)
+        base = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+    best = None
+    target = target_kb * 1024
+    for dim_scale in (1.0, 0.85, 0.72, 0.6, 0.5):
+        stage = base if dim_scale == 1.0 else cv2.resize(
+            base, None, fx=dim_scale, fy=dim_scale, interpolation=cv2.INTER_AREA)
+        for q in (90, 84, 78, 72):
+            ok, enc = cv2.imencode(".jpg", stage, [cv2.IMWRITE_JPEG_QUALITY, q])
+            if not ok:
+                continue
+            best = (enc, stage.shape[1], stage.shape[0])
+            if enc.nbytes <= target:
+                out = enc.tobytes()
+                print(f"[upload] compressed {len(data)//1024}KB -> {len(out)//1024}KB "
+                      f"({w0}x{h0} -> {stage.shape[1]}x{stage.shape[0]})")
+                return out
+    if best is None:
+        return data
+    enc, bw, bh = best
+    out = enc.tobytes()
+    print(f"[upload] compressed {len(data)//1024}KB -> {len(out)//1024}KB "
+          f"({w0}x{h0} -> {bw}x{bh}, best effort)")
+    return out
+
+
 _SFX_KINDS = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
 
 

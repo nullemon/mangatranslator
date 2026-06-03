@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.requests import Request
 
-from core.pipeline import TranslationPipeline, scan_cleanup
+from core.pipeline import TranslationPipeline, scan_cleanup, compress_upload
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
@@ -61,7 +61,7 @@ async def translate(
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}{ext}"
 
-    content = await file.read()
+    content = compress_upload(await file.read())
     with open(upload_path, "wb") as f:
         f.write(content)
 
@@ -196,7 +196,7 @@ async def enhance_only(
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}_scan.png"
 
-    content = await file.read()
+    content = compress_upload(await file.read())
     with open(upload_path, "wb") as f:
         f.write(content)
 
