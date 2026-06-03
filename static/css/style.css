@@ -191,6 +191,31 @@ header{margin-bottom:1.5rem}
 .progress-msg{text-align:center;font-size:.85rem;color:var(--text-dim)}
 .enhance-mode .steps{display:none}
 
+/* ── Batch bar + page strip (bulk mode) ── */
+.batch-bar{display:flex;align-items:center;gap:1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:.7rem 1rem;margin-bottom:.9rem;flex-wrap:wrap}
+.batch-status{font-size:.85rem;font-weight:600;color:var(--text);white-space:nowrap}
+.batch-progress{flex:1;min-width:120px;height:6px;background:var(--surface2);border-radius:3px;overflow:hidden}
+.batch-progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--primary),var(--accent));transition:width .3s}
+.batch-actions{display:flex;gap:.5rem}
+
+.page-strip{display:flex;gap:.6rem;overflow-x:auto;padding:.4rem .2rem .8rem;margin-bottom:1rem}
+.pg-chip{position:relative;flex:0 0 auto;width:84px;border:2px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);cursor:pointer;transition:border-color .2s}
+.pg-chip.active{border-color:var(--primary);box-shadow:0 0 10px var(--primary-glow)}
+.pg-thumb{width:100%;height:110px;background:var(--surface2);display:flex;align-items:center;justify-content:center}
+.pg-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.pg-idx{position:absolute;top:4px;left:4px;background:rgba(0,0,0,.65);color:#fff;font-size:.65rem;font-weight:700;padding:.05rem .35rem;border-radius:4px}
+.pg-dot{position:absolute;top:5px;right:5px;width:10px;height:10px;border-radius:50%;border:1.5px solid var(--surface)}
+.pg-dot.pending,.pg-dot.queued{background:#94a3b8}
+.pg-dot.processing{background:#fbbf24;animation:pulse 1s infinite}
+.pg-dot.done{background:#4ade80}
+.pg-dot.error{background:#f87171}
+@keyframes pulse{50%{opacity:.35}}
+.pg-tools{position:absolute;bottom:0;left:0;right:0;display:flex;background:rgba(0,0,0,.6);opacity:0;transition:opacity .2s}
+.pg-chip:hover .pg-tools{opacity:1}
+.pg-tools button{flex:1;background:transparent;border:none;color:#fff;cursor:pointer;font-size:.8rem;padding:.2rem 0}
+.pg-tools button:hover:not(:disabled){background:var(--primary)}
+.pg-tools button:disabled{opacity:.3;cursor:default}
+
 /* ── Editable translations / reject ── */
 .details-bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
 .details-hint{font-size:.78rem;color:var(--text-dim)}

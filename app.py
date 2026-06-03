@@ -1,14 +1,16 @@
 import asyncio
+import io
 import os
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 import cv2
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.requests import Request
 
 from core.pipeline import TranslationPipeline
@@ -68,6 +70,7 @@ async def translate(
         "upload_path": upload_path,
         "output_path": output_path,
         "font_path": font_path,
+        "name": file.filename or "page.png",
         "mode": "translate",
     }
 
@@ -182,6 +185,7 @@ async def enhance_only(
         "message": "Queued",
         "progress": 0,
         "upload_path": upload_path,
+        "name": file.filename or "page.png",
         "mode": "enhance",
     }
 
@@ -282,7 +286,10 @@ async def rerender(task_id: str, request: Request):
     if not base or not os.path.exists(base) or not r.get("items"):
         raise HTTPException(400, "This page can't be re-rendered")
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
     excluded = {str(i) for i in payload.get("excluded", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
 
@@ -329,6 +336,39 @@ async def rerender(task_id: str, request: Request):
     r["num_translated"] = sum(1 for it in items if it.get("placed"))
 
     return {"items": r["items"], "ts": time.time()}
+
+
+@app.post("/api/zip")
+async def make_zip(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    ids = payload.get("task_ids", [])
+
+    buf = io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, tid in enumerate(ids, 1):
+            t = tasks.get(tid)
+            if not t or t.get("status") != "done":
+                continue
+            path = (t.get("result") or {}).get("output_path", "")
+            if not path or not os.path.exists(path):
+                continue
+            stem = os.path.splitext(os.path.basename(t.get("name", f"page_{i}")))[0]
+            zf.write(path, f"{i:03d}_{stem}.png")
+            count += 1
+
+    if count == 0:
+        raise HTTPException(400, "No finished pages to download yet")
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="translated_pages.zip"'},
+    )
 
 
 @app.get("/api/enhanced/{task_id}")

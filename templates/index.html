@@ -148,9 +148,9 @@
           <rect x="8" y="4" width="48" height="56" rx="6"/>
           <path d="M24 28l8-8 8 8M32 20v20"/>
         </svg>
-        <p class="drop-title">Drop your manga page here</p>
-        <p class="drop-sub">or click to browse &mdash; PNG, JPG, WebP</p>
-        <input type="file" id="fileInput" accept="image/*" hidden>
+        <p class="drop-title">Drop your manga page(s) here</p>
+        <p class="drop-sub">one page or a whole chapter &mdash; PNG, JPG, WebP</p>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
       </div>
       <div class="preview-row" id="previewRow" style="display:none">
         <img id="previewImg" alt="Preview">
@@ -165,67 +165,86 @@
       </div>
     </section>
 
-    <!-- PROCESSING -->
-    <section id="processingSection" class="section" style="display:none">
-      <div class="steps">
-        <div class="step" data-step="1"><span class="step-num">1</span><span class="step-label">Detect</span></div>
-        <div class="step-line"></div>
-        <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Translate</span></div>
-        <div class="step-line"></div>
-        <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Clean</span></div>
-        <div class="step-line"></div>
-        <div class="step" data-step="4"><span class="step-num">4</span><span class="step-label">Render</span></div>
-        <div class="step-line"></div>
-        <div class="step" data-step="5"><span class="step-num">5</span><span class="step-label">Done</span></div>
-      </div>
-      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-      <p class="progress-msg" id="progressMsg">Starting...</p>
-    </section>
-
-    <!-- RESULT -->
+    <!-- WORKSPACE (single or multi-page) -->
     <section id="resultSection" class="section" style="display:none">
-      <div class="result-tabs">
-        <button class="tab active" data-tab="compare">Compare</button>
-        <button class="tab" data-tab="original">Original</button>
-        <button class="tab" data-tab="translated">Translated</button>
-        <button class="tab" data-tab="details">Details</button>
+      <!-- batch bar (multi-page only) -->
+      <div class="batch-bar" id="batchBar" style="display:none">
+        <span class="batch-status" id="batchStatus">0 / 0 done</span>
+        <div class="batch-progress"><div class="batch-progress-fill" id="batchProgressFill"></div></div>
+        <div class="batch-actions">
+          <button class="btn btn-ghost btn-sm" id="addPagesBtn">+ Add pages</button>
+          <button class="btn btn-primary btn-sm" id="zipBtn">Download All (ZIP)</button>
+        </div>
       </div>
 
-      <div class="tab-panel active" id="panel-compare">
-        <div class="comparison" id="comparisonContainer">
-          <img id="transImg" class="comp-img" alt="Translated">
-          <div class="comp-overlay" id="compOverlay">
-            <img id="origImg" class="comp-img" alt="Original">
-          </div>
-          <div class="comp-slider" id="compSlider">
-            <div class="comp-handle">
-              <svg viewBox="0 0 24 24" width="24" height="24" fill="white"><path d="M8 5l-5 7 5 7M16 5l5 7-5 7"/></svg>
+      <!-- page strip (multi-page only) -->
+      <div class="page-strip" id="pageStrip" style="display:none"></div>
+
+      <!-- active page: processing state -->
+      <div id="pageProcessing" style="display:none">
+        <div class="steps">
+          <div class="step" data-step="1"><span class="step-num">1</span><span class="step-label">Detect</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Translate</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Clean</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-step="4"><span class="step-num">4</span><span class="step-label">Render</span></div>
+          <div class="step-line"></div>
+          <div class="step" data-step="5"><span class="step-num">5</span><span class="step-label">Done</span></div>
+        </div>
+        <div class="progress-bar" id="progressBarWrap"><div class="progress-fill" id="progressFill"></div></div>
+        <p class="progress-msg" id="progressMsg">Starting...</p>
+        <div style="text-align:center;margin-top:1rem">
+          <button class="btn btn-ghost btn-sm" id="retryPageBtn" style="display:none">Retry this page</button>
+        </div>
+      </div>
+
+      <!-- active page: result -->
+      <div id="pageResult" style="display:none">
+        <div class="result-tabs">
+          <button class="tab active" data-tab="compare">Compare</button>
+          <button class="tab" data-tab="original">Original</button>
+          <button class="tab" data-tab="translated">Translated</button>
+          <button class="tab" data-tab="details">Details</button>
+        </div>
+
+        <div class="tab-panel active" id="panel-compare">
+          <div class="comparison" id="comparisonContainer">
+            <img id="transImg" class="comp-img" alt="Translated">
+            <div class="comp-overlay" id="compOverlay">
+              <img id="origImg" class="comp-img" alt="Original">
             </div>
+            <div class="comp-slider" id="compSlider">
+              <div class="comp-handle">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="white"><path d="M8 5l-5 7 5 7M16 5l5 7-5 7"/></svg>
+              </div>
+            </div>
+            <span class="comp-label comp-label-left" id="compLabelLeft">Original</span>
+            <span class="comp-label comp-label-right" id="compLabelRight">Translated</span>
           </div>
-          <span class="comp-label comp-label-left" id="compLabelLeft">Original</span>
-          <span class="comp-label comp-label-right" id="compLabelRight">Translated</span>
         </div>
-      </div>
 
-      <div class="tab-panel" id="panel-original">
-        <img id="origFull" class="full-img" alt="Original">
-      </div>
-
-      <div class="tab-panel" id="panel-translated">
-        <img id="transFull" class="full-img" alt="Translated">
-      </div>
-
-      <div class="tab-panel" id="panel-details">
-        <div class="details-bar">
-          <span class="details-hint">Edit any text below, or hit <strong>✕</strong> to skip a bubble (keeps the original). Then re-render.</span>
-          <button class="btn btn-primary btn-sm" id="applyBtn">Apply &amp; Re-render</button>
+        <div class="tab-panel" id="panel-original">
+          <img id="origFull" class="full-img" alt="Original">
         </div>
-        <div id="translationsList" class="translations-list"></div>
+
+        <div class="tab-panel" id="panel-translated">
+          <img id="transFull" class="full-img" alt="Translated">
+        </div>
+
+        <div class="tab-panel" id="panel-details">
+          <div class="details-bar">
+            <span class="details-hint">Edit any text below, or hit <strong>✕</strong> to skip a bubble (keeps the original). Then re-render.</span>
+            <button class="btn btn-primary btn-sm" id="applyBtn">Apply &amp; Re-render</button>
+          </div>
+          <div id="translationsList" class="translations-list"></div>
+        </div>
       </div>
 
       <div class="result-actions">
-        <button class="btn btn-primary" id="downloadBtn">Download Translated</button>
-        <button class="btn btn-ghost" id="newBtn">Translate Another</button>
+        <button class="btn btn-primary" id="downloadBtn">Download This Page</button>
+        <button class="btn btn-ghost" id="newBtn">Start Over</button>
       </div>
     </section>
 

@@ -17,23 +17,40 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
-  const enhancePanel   = document.getElementById("enhancePanel");
   const enhanceProvider= document.getElementById("enhanceProvider");
   const enhanceKey     = document.getElementById("enhanceKey");
   const enhanceKeyLabel= document.getElementById("enhanceKeyLabel");
   const enhanceModel   = document.getElementById("enhanceModel");
   const enhancePrompt  = document.getElementById("enhancePrompt");
-  const processingSec  = document.getElementById("processingSection");
+  const enhancePanel   = document.getElementById("enhancePanel");
+
+  const uploadSection  = document.getElementById("uploadSection");
+  const resultSection  = document.getElementById("resultSection");
+  const errorSection   = document.getElementById("errorSection");
+
+  const batchBar       = document.getElementById("batchBar");
+  const batchStatus    = document.getElementById("batchStatus");
+  const batchProgressFill = document.getElementById("batchProgressFill");
+  const pageStrip      = document.getElementById("pageStrip");
+  const addPagesBtn    = document.getElementById("addPagesBtn");
+  const zipBtn         = document.getElementById("zipBtn");
+
+  const pageProcessing = document.getElementById("pageProcessing");
+  const pageResult     = document.getElementById("pageResult");
+  const stepsEl        = pageProcessing.querySelector(".steps");
+  const progressBarWrap= document.getElementById("progressBarWrap");
+  const progressFill   = document.getElementById("progressFill");
+  const progressMsg    = document.getElementById("progressMsg");
+  const retryPageBtn   = document.getElementById("retryPageBtn");
+
   const compLabelLeft  = document.getElementById("compLabelLeft");
   const compLabelRight = document.getElementById("compLabelRight");
-
-  const uploadSection     = document.getElementById("uploadSection");
-  const processingSection = document.getElementById("processingSection");
-  const resultSection     = document.getElementById("resultSection");
-  const errorSection      = document.getElementById("errorSection");
-
-  const progressFill = document.getElementById("progressFill");
-  const progressMsg  = document.getElementById("progressMsg");
+  const origImg  = document.getElementById("origImg");
+  const transImg = document.getElementById("transImg");
+  const origFull = document.getElementById("origFull");
+  const transFull= document.getElementById("transFull");
+  const tabTranslated = document.querySelector('.tab[data-tab="translated"]');
+  const detailsTab    = document.querySelector('.tab[data-tab="details"]');
 
   const downloadBtn = document.getElementById("downloadBtn");
   const newBtn      = document.getElementById("newBtn");
@@ -41,20 +58,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const errorMsg    = document.getElementById("errorMsg");
   const applyBtn    = document.getElementById("applyBtn");
 
-  let selectedFile = null;
-  let currentTaskId = null;
-  let pollTimer = null;
+  /* ── State ── */
   let workflow = "scan-translate";
-  let currentItems = [];          // editable translation items
-  const excluded = new Set();     // ids the user rejected
+  let pages = [];          // page objects
+  let activeUid = null;
+  let uidCounter = 0;
+  let running = 0;
+  const MAX_CONCURRENT = 2;
 
   const ENHANCE_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
-
   const ENGINE_CONFIG = {
     claude: {
-      label: "Claude API Key",
-      placeholder: "sk-ant-...",
-      storageKey: "manga_key_claude",
+      label: "Claude API Key", placeholder: "sk-ant-...", storageKey: "manga_key_claude",
       models: [
         { value: "claude-sonnet-4-6", text: "Sonnet 4.6 (Fast)" },
         { value: "claude-opus-4-6",   text: "Opus 4.6 (Best)" },
@@ -62,9 +77,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ],
     },
     gemini: {
-      label: "Gemini API Key",
-      placeholder: "AIza...",
-      storageKey: "manga_key_gemini",
+      label: "Gemini API Key", placeholder: "AIza...", storageKey: "manga_key_gemini",
       models: [
         { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast)" },
         { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (Best)" },
@@ -73,70 +86,44 @@ document.addEventListener("DOMContentLoaded", () => {
     },
   };
 
-  /* ══════════════════════════════════════════════════════════════════
-     WORKFLOW PICKER
-     ══════════════════════════════════════════════════════════════════ */
+  const getActive = () => pages.find(p => p.uid === activeUid) || null;
+  const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan";
+  const needsTranslate = wf => wf !== "raw-scan";
+
+  /* ══ WORKFLOW PICKER ══ */
   const wfCards = document.querySelectorAll(".wf-card");
-
-  function needsScan(wf)      { return wf === "raw-scan-translate" || wf === "raw-scan"; }
-  function needsTranslate(wf) { return wf !== "raw-scan"; }
-
   function setWorkflow(wf) {
     workflow = wf;
     wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
-
-    // Show/hide enhance panel
     enhancePanel.style.display = needsScan(wf) ? "" : "none";
-
-    // Show/hide translation settings
     document.querySelector(".settings-bar").style.display = needsTranslate(wf) ? "" : "none";
-
-    // Adapt Go button text
-    const labels = {
-      "scan-translate": "Translate",
-      "raw-scan-translate": "Enhance & Translate",
-      "raw-translate": "Translate Raw",
-      "raw-scan": "Enhance to Scan",
-    };
-    goBtn.textContent = labels[wf] || "Go";
-
+    goBtn.textContent = {
+      "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
+      "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
+    }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
   }
-
-  wfCards.forEach(card => {
-    card.addEventListener("click", () => setWorkflow(card.dataset.wf));
-  });
-
+  wfCards.forEach(card => card.addEventListener("click", () => setWorkflow(card.dataset.wf)));
   setWorkflow(localStorage.getItem("manga_workflow") || "scan-translate");
 
-  /* ══════════════════════════════════════════════════════════════════
-     ENGINE SWITCHING (Claude / Gemini for translation)
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ ENGINE SWITCHING ══ */
   function setEngine(eng) {
     const cfg = ENGINE_CONFIG[eng];
     if (!cfg) return;
-
-    // Save current key before switching
     const prev = ENGINE_CONFIG[engineSelect.value];
     if (prev) localStorage.setItem(prev.storageKey, apiKeyInput.value);
-
     engineSelect.value = eng;
     apiKeyLabel.textContent = cfg.label;
     apiKeyInput.placeholder = cfg.placeholder;
     apiKeyInput.value = localStorage.getItem(cfg.storageKey) || "";
-
-    // Populate model dropdown
     modelSelect.innerHTML = "";
     for (const m of cfg.models) {
       const opt = document.createElement("option");
-      opt.value = m.value;
-      opt.textContent = m.text;
+      opt.value = m.value; opt.textContent = m.text;
       modelSelect.appendChild(opt);
     }
-
     localStorage.setItem("manga_engine", eng);
   }
-
   engineSelect.addEventListener("change", () => setEngine(engineSelect.value));
   apiKeyInput.addEventListener("change", () => {
     const cfg = ENGINE_CONFIG[engineSelect.value];
@@ -144,9 +131,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   setEngine(localStorage.getItem("manga_engine") || "gemini");
 
-  /* ══════════════════════════════════════════════════════════════════
-     FONTS
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ FONTS ══ */
   async function loadFonts() {
     try {
       const res = await fetch("/api/fonts");
@@ -154,34 +139,25 @@ document.addEventListener("DOMContentLoaded", () => {
       fontSelect.innerHTML = '<option value="">Auto-detect</option>';
       for (const f of data.fonts) {
         const opt = document.createElement("option");
-        opt.value = f;
-        opt.textContent = f.replace(/\.(ttf|otf)$/i, "");
+        opt.value = f; opt.textContent = f.replace(/\.(ttf|otf)$/i, "");
         fontSelect.appendChild(opt);
       }
     } catch (_) {}
   }
   loadFonts();
-
   fontUpload.addEventListener("change", async () => {
     const file = fontUpload.files[0];
     if (!file) return;
-    const form = new FormData();
-    form.append("file", file);
+    const form = new FormData(); form.append("file", file);
     try {
       const res = await fetch("/api/upload-font", { method: "POST", body: form });
-      if (res.ok) {
-        await loadFonts();
-        fontSelect.value = file.name;
-      }
+      if (res.ok) { await loadFonts(); fontSelect.value = file.name; }
     } catch (_) {}
     fontUpload.value = "";
   });
 
-  /* ══════════════════════════════════════════════════════════════════
-     ENHANCEMENT SETTINGS (persisted per-provider)
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ ENHANCEMENT SETTINGS ══ */
   function enhKeyName() { return "manga_enh_key_" + enhanceProvider.value; }
-
   async function initEnhance() {
     let defaultPrompt = "Convert this rough manga sketch into a clean, professional black-and-white manga scan with crisp inked line art, screentones, pure whites and deep blacks. Keep the exact same composition, panels, characters, and text.";
     try {
@@ -192,12 +168,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.models) Object.assign(ENHANCE_MODELS, data.models);
       }
     } catch (_) {}
-
     enhanceProvider.value = localStorage.getItem("manga_enh_provider") || "gemini";
     enhancePrompt.value   = localStorage.getItem("manga_enh_prompt") || defaultPrompt;
     syncEnhanceFields();
   }
-
   function syncEnhanceFields() {
     const p = enhanceProvider.value;
     enhanceModel.placeholder = ENHANCE_MODELS[p] || "";
@@ -205,7 +179,6 @@ document.addEventListener("DOMContentLoaded", () => {
     enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
     enhanceKeyLabel.textContent = p === "openai" ? "OpenAI API Key" : "Gemini API Key";
   }
-
   enhanceProvider.addEventListener("change", () => {
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);
     syncEnhanceFields();
@@ -215,293 +188,361 @@ document.addEventListener("DOMContentLoaded", () => {
   enhancePrompt.addEventListener("change", () => localStorage.setItem("manga_enh_prompt", enhancePrompt.value));
   initEnhance();
 
-  /* ══════════════════════════════════════════════════════════════════
-     DRAG & DROP / FILE SELECT
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ FILE SELECTION ══ */
   dropZone.addEventListener("click", () => fileInput.click());
-
   dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
   dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
   dropZone.addEventListener("drop", e => {
-    e.preventDefault();
-    dropZone.classList.remove("drag-over");
-    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    e.preventDefault(); dropZone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   });
-  fileInput.addEventListener("change", () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) addFiles(fileInput.files);
+    fileInput.value = "";
+  });
 
-  function handleFile(file) {
-    if (!file.type.startsWith("image/")) return;
-    selectedFile = file;
-    previewImg.src = URL.createObjectURL(file);
-    fileName.textContent = file.name;
-    fileSize.textContent = formatBytes(file.size);
+  function addFiles(fileList) {
+    const incoming = [...fileList].filter(f => f.type.startsWith("image/"));
+    if (!incoming.length) return;
+    // natural sort by filename so chapter order is preserved
+    incoming.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    const startedBatch = resultSection.style.display !== "none";
+    for (const file of incoming) {
+      pages.push({
+        uid: ++uidCounter, file, name: file.name, size: file.size,
+        thumb: URL.createObjectURL(file), taskId: null, status: "pending",
+        progress: 0, step: 0, message: "", result: null, items: [],
+        excluded: new Set(), error: "", rev: 0,
+      });
+    }
+
+    if (startedBatch) {
+      // already running — enqueue & process the new pages
+      pages.forEach(p => { if (p.status === "pending") p.status = "queued"; });
+      renderStrip(); updateBatch(); pump();
+    } else {
+      showUploadPreview();
+    }
+  }
+
+  function showUploadPreview() {
+    if (!pages.length) return;
+    previewImg.src = pages[0].thumb;
+    if (pages.length === 1) {
+      fileName.textContent = pages[0].name;
+      fileSize.textContent = formatBytes(pages[0].size);
+    } else {
+      fileName.textContent = `${pages.length} pages selected`;
+      fileSize.textContent = "Sorted by filename · " + pages.map(p => p.name).slice(0, 3).join(", ") + (pages.length > 3 ? "…" : "");
+    }
     dropZone.style.display = "none";
     previewRow.style.display = "flex";
   }
 
-  clearBtn.addEventListener("click", () => {
-    selectedFile = null;
-    fileInput.value = "";
-    previewRow.style.display = "none";
-    dropZone.style.display = "";
-  });
+  clearBtn.addEventListener("click", resetAll);
 
-  /* ══════════════════════════════════════════════════════════════════
-     GO BUTTON — dispatches based on workflow
-     ══════════════════════════════════════════════════════════════════ */
-  goBtn.addEventListener("click", startWorkflow);
+  /* ══ START / QUEUE ══ */
+  goBtn.addEventListener("click", startBatch);
 
-  async function startWorkflow() {
-    if (!selectedFile) return;
-
-    const wantScan = needsScan(workflow);
-    const wantTranslate = needsTranslate(workflow);
-
-    // Validate keys
-    if (wantTranslate) {
-      const key = apiKeyInput.value.trim();
-      if (!key) { apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return; }
-      apiKeyInput.style.borderColor = "";
+  function startBatch() {
+    if (!pages.length) return;
+    if (needsTranslate(workflow) && !apiKeyInput.value.trim()) {
+      apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
-    if (wantScan) {
-      const key = enhanceKey.value.trim();
-      if (!key) { enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return; }
-      enhanceKey.style.borderColor = "";
+    apiKeyInput.style.borderColor = "";
+    if (needsScan(workflow) && !enhanceKey.value.trim()) {
+      enhancePanel.scrollIntoView({ behavior: "smooth" });
+      enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return;
     }
+    enhanceKey.style.borderColor = "";
 
-    showSection("processing");
-    resetProgress();
-
-    if (wantScan && wantTranslate) {
-      // Raw → Scan → Translate
-      const form = new FormData();
-      form.append("file", selectedFile);
-      form.append("api_key", apiKeyInput.value.trim());
-      form.append("target_lang", targetLang.value);
-      form.append("provider", engineSelect.value);
-      form.append("model", modelSelect.value);
-      form.append("smart_mode", smartMode.checked ? "true" : "false");
-      form.append("font", fontSelect.value);
-      form.append("enhance", "true");
-      form.append("enhance_provider", enhanceProvider.value);
-      form.append("enhance_key", enhanceKey.value.trim());
-      form.append("enhance_prompt", enhancePrompt.value);
-      form.append("enhance_model", enhanceModel.value);
-      await submit("/api/translate", form);
-
-    } else if (wantScan) {
-      // Raw → Scan only
-      const form = new FormData();
-      form.append("file", selectedFile);
-      form.append("provider", enhanceProvider.value);
-      form.append("api_key", enhanceKey.value.trim());
-      form.append("prompt", enhancePrompt.value);
-      form.append("model", enhanceModel.value);
-      await submit("/api/enhance", form);
-
-    } else {
-      // Scan → Translate or Raw → Translate (same endpoint, no enhance)
-      const form = new FormData();
-      form.append("file", selectedFile);
-      form.append("api_key", apiKeyInput.value.trim());
-      form.append("target_lang", targetLang.value);
-      form.append("provider", engineSelect.value);
-      form.append("model", modelSelect.value);
-      form.append("smart_mode", smartMode.checked ? "true" : "false");
-      form.append("font", fontSelect.value);
-      form.append("enhance", "false");
-      await submit("/api/translate", form);
-    }
+    pages.forEach(p => { if (p.status === "pending") p.status = "queued"; });
+    activeUid = pages[0].uid;
+    showSection("result");
+    renderStrip(); updateBatch(); renderActivePage();
+    pump();
   }
 
-  async function submit(url, form) {
+  function pump() {
+    while (running < MAX_CONCURRENT) {
+      const next = pages.find(p => p.status === "queued");
+      if (!next) break;
+      next.status = "processing";
+      running++;
+      processPage(next).finally(() => { running--; pump(); });
+    }
+    renderStrip();
+  }
+
+  function buildRequest(file) {
+    const f = new FormData();
+    f.append("file", file);
+    if (needsTranslate(workflow)) {
+      f.append("api_key", apiKeyInput.value.trim());
+      f.append("target_lang", targetLang.value);
+      f.append("provider", engineSelect.value);
+      f.append("model", modelSelect.value);
+      f.append("smart_mode", smartMode.checked ? "true" : "false");
+      f.append("font", fontSelect.value);
+      f.append("enhance", needsScan(workflow) ? "true" : "false");
+      if (needsScan(workflow)) {
+        f.append("enhance_provider", enhanceProvider.value);
+        f.append("enhance_key", enhanceKey.value.trim());
+        f.append("enhance_prompt", enhancePrompt.value);
+        f.append("enhance_model", enhanceModel.value);
+      }
+      return { url: "/api/translate", form: f };
+    }
+    f.append("provider", enhanceProvider.value);
+    f.append("api_key", enhanceKey.value.trim());
+    f.append("prompt", enhancePrompt.value);
+    f.append("model", enhanceModel.value);
+    return { url: "/api/enhance", form: f };
+  }
+
+  async function processPage(page) {
+    page.error = ""; page.progress = 0; page.step = 0; page.message = "Queued";
     try {
+      const { url, form } = buildRequest(page.file);
       const res = await fetch(url, { method: "POST", body: form });
       if (!res.ok) {
         let msg = res.statusText;
         try { msg = (await res.json()).detail || msg; } catch (_) {}
         throw new Error(msg);
       }
-      const data = await res.json();
-      currentTaskId = data.task_id;
-      pollStatus();
+      page.taskId = (await res.json()).task_id;
+      await pollPage(page);
     } catch (e) {
-      showError(e.message);
+      page.status = "error"; page.error = e.message;
+    } finally {
+      renderStrip(); updateBatch();
+      if (page.uid === activeUid) renderActivePage();
     }
   }
 
-  function pollStatus() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/status/${currentTaskId}`);
-        const data = await res.json();
-        updateProgress(data);
-        if (data.status === "done") {
-          clearInterval(pollTimer);
-          showResult(data);
-        } else if (data.status === "error") {
-          clearInterval(pollTimer);
-          showError(data.message);
+  function pollPage(page) {
+    return new Promise(resolve => {
+      const tick = async () => {
+        try {
+          const r = await fetch(`/api/status/${page.taskId}`);
+          const d = await r.json();
+          page.progress = d.progress || 0; page.step = d.step || 0; page.message = d.message || "";
+          if (d.status === "done") {
+            page.status = "done"; page.result = d;
+            page.items = (d.result && d.result.items) ? d.result.items : [];
+            page.excluded = new Set();
+            page.rev++;
+            renderStrip(); updateBatch();
+            if (page.uid === activeUid) renderActivePage();
+            return resolve();
+          }
+          if (d.status === "error") {
+            page.status = "error"; page.error = d.message || "Failed";
+            return resolve();
+          }
+          renderStrip();
+          if (page.uid === activeUid) renderActivePage();
+          setTimeout(tick, 600);
+        } catch (e) {
+          page.status = "error"; page.error = "Lost connection to server";
+          resolve();
         }
-      } catch (e) {
-        clearInterval(pollTimer);
-        showError("Lost connection to server");
-      }
-    }, 600);
-  }
-
-  /* ══════════════════════════════════════════════════════════════════
-     PROGRESS
-     ══════════════════════════════════════════════════════════════════ */
-  function resetProgress() {
-    progressFill.style.width = "0%";
-    progressMsg.textContent = "Starting...";
-    document.querySelectorAll(".step").forEach(s => s.classList.remove("active", "done"));
-    document.querySelectorAll(".step-line").forEach(l => l.classList.remove("done"));
-  }
-
-  function updateProgress(data) {
-    const pct = data.progress || 0;
-    progressFill.style.width = pct + "%";
-    progressMsg.textContent = data.message || "";
-    progressMsg.classList.toggle("processing-pulse", pct > 0 && pct < 100);
-
-    const currentStep = data.step || 0;
-    document.querySelectorAll(".step").forEach(el => {
-      const s = parseInt(el.dataset.step);
-      el.classList.toggle("done", s < currentStep);
-      el.classList.toggle("active", s === currentStep);
+      };
+      tick();
     });
-    const lines = document.querySelectorAll(".step-line");
-    lines.forEach((l, i) => l.classList.toggle("done", i + 1 < currentStep));
   }
 
-  /* ══════════════════════════════════════════════════════════════════
-     RESULT
-     ══════════════════════════════════════════════════════════════════ */
-  function showResult(data) {
-    const origUrl  = data.original_url;
-    const transUrl = data.output_url;
+  retryPageBtn.addEventListener("click", () => {
+    const p = getActive();
+    if (!p) return;
+    p.status = "queued"; renderActivePage(); renderStrip(); updateBatch(); pump();
+  });
 
-    document.getElementById("origImg").src = origUrl;
-    document.getElementById("transImg").src = transUrl;
-    document.getElementById("origFull").src = origUrl;
-    document.getElementById("transFull").src = transUrl;
+  /* ══ PAGE STRIP ══ */
+  function renderStrip() {
+    const multi = pages.length > 1;
+    batchBar.style.display = multi ? "" : "none";
+    pageStrip.style.display = multi ? "" : "none";
+    if (!multi) return;
 
+    pageStrip.innerHTML = "";
+    pages.forEach((p, i) => {
+      const chip = document.createElement("div");
+      chip.className = "pg-chip" + (p.uid === activeUid ? " active" : "");
+      chip.dataset.uid = p.uid;
+      const src = (p.status === "done" && p.taskId) ? `/api/result/${p.taskId}?t=${p.rev}` : p.thumb;
+      chip.innerHTML = `
+        <div class="pg-thumb"><img src="${src}" alt=""></div>
+        <span class="pg-idx">${i + 1}</span>
+        <span class="pg-dot ${p.status}"></span>
+        <div class="pg-tools">
+          <button data-act="left" title="Move left" ${i === 0 ? "disabled" : ""}>‹</button>
+          <button data-act="right" title="Move right" ${i === pages.length - 1 ? "disabled" : ""}>›</button>
+          <button data-act="remove" title="Remove">✕</button>
+        </div>`;
+      chip.querySelector(".pg-thumb").addEventListener("click", () => { activeUid = p.uid; renderStrip(); renderActivePage(); });
+      chip.querySelector(".pg-idx").addEventListener("click", () => { activeUid = p.uid; renderStrip(); renderActivePage(); });
+      chip.querySelectorAll(".pg-tools button").forEach(b => {
+        b.addEventListener("click", e => { e.stopPropagation(); stripAction(p.uid, b.dataset.act); });
+      });
+      pageStrip.appendChild(chip);
+    });
+  }
+
+  function stripAction(uid, act) {
+    const i = pages.findIndex(p => p.uid === uid);
+    if (i < 0) return;
+    if (act === "left" && i > 0) { [pages[i - 1], pages[i]] = [pages[i], pages[i - 1]]; }
+    else if (act === "right" && i < pages.length - 1) { [pages[i + 1], pages[i]] = [pages[i], pages[i + 1]]; }
+    else if (act === "remove") {
+      const wasActive = pages[i].uid === activeUid;
+      pages.splice(i, 1);
+      if (!pages.length) { resetAll(); return; }
+      if (wasActive) activeUid = pages[Math.min(i, pages.length - 1)].uid;
+    }
+    renderStrip(); updateBatch(); renderActivePage();
+  }
+
+  function updateBatch() {
+    const done = pages.filter(p => p.status === "done").length;
+    const err = pages.filter(p => p.status === "error").length;
+    batchStatus.textContent = `${done} / ${pages.length} done` + (err ? ` · ${err} failed` : "");
+    batchProgressFill.style.width = (pages.length ? (done / pages.length * 100) : 0) + "%";
+    zipBtn.disabled = done === 0;
+  }
+
+  addPagesBtn.addEventListener("click", () => fileInput.click());
+
+  /* ══ ACTIVE PAGE RENDER ══ */
+  function renderActivePage() {
+    const p = getActive();
+    if (!p) return;
     const scanOnly = workflow === "raw-scan";
-    compLabelLeft.textContent  = scanOnly ? "Rough" : "Original";
-    compLabelRight.textContent = scanOnly ? "Manga Scan" : "Translated";
-    document.querySelector('.tab[data-tab="translated"]').textContent = scanOnly ? "Scan" : "Translated";
-    document.querySelector('.tab[data-tab="details"]').style.display = scanOnly ? "none" : "";
 
-    excluded.clear();
-    buildTranslationsList(data.result);
-    showSection("result");
-    initComparison();
+    if (p.status === "done") {
+      pageProcessing.style.display = "none";
+      pageResult.style.display = "";
+      const bust = `?t=${p.rev}`;
+      origImg.src = `/api/original/${p.taskId}`;
+      transImg.src = `/api/result/${p.taskId}${bust}`;
+      origFull.src = origImg.src;
+      transFull.src = transImg.src;
+      compLabelLeft.textContent  = scanOnly ? "Rough" : "Original";
+      compLabelRight.textContent = scanOnly ? "Manga Scan" : "Translated";
+      tabTranslated.textContent  = scanOnly ? "Scan" : "Translated";
+      detailsTab.style.display   = scanOnly ? "none" : "";
+      buildTranslationsList(p);
+      initComparison();
+    } else if (p.status === "error") {
+      pageResult.style.display = "none";
+      pageProcessing.style.display = "";
+      stepsEl.style.display = "none";
+      progressBarWrap.style.display = "none";
+      progressMsg.innerHTML = '<span style="color:#f87171">⚠ ' + esc(p.error || "Failed") + "</span>";
+      retryPageBtn.style.display = "";
+    } else {
+      pageResult.style.display = "none";
+      pageProcessing.style.display = "";
+      stepsEl.style.display = scanOnly ? "none" : "";
+      progressBarWrap.style.display = "";
+      retryPageBtn.style.display = "none";
+      updateSteps(p);
+      progressFill.style.width = (p.progress || 0) + "%";
+      progressMsg.textContent = p.message || "Starting...";
+    }
   }
 
-  function buildTranslationsList(result) {
+  function updateSteps(p) {
+    const cur = p.step || 0;
+    stepsEl.querySelectorAll(".step").forEach(el => {
+      const s = parseInt(el.dataset.step);
+      el.classList.toggle("done", s < cur);
+      el.classList.toggle("active", s === cur);
+    });
+    stepsEl.querySelectorAll(".step-line").forEach((l, i) => l.classList.toggle("done", i + 1 < cur));
+  }
+
+  /* ══ DETAILS: edit / reject ══ */
+  function buildTranslationsList(page) {
     const el = document.getElementById("translationsList");
     el.innerHTML = "";
-
-    // Prefer the rich `items` (with placement + ids); fall back to translations
-    currentItems = (result && result.items) ? result.items.slice() : [];
-    if (currentItems.length === 0 && result && result.translations) {
-      currentItems = Object.entries(result.translations).map(([id, t]) => ({
-        id: Number(id), original: t.original, translation: t.translation,
-        type: t.type, placed: true,
+    let items = page.items || [];
+    if (items.length === 0 && page.result && page.result.result && page.result.result.translations) {
+      items = Object.entries(page.result.result.translations).map(([id, t]) => ({
+        id: Number(id), original: t.original, translation: t.translation, type: t.type, placed: true,
       }));
+      page.items = items;
     }
-
-    if (currentItems.length === 0) {
+    if (items.length === 0) {
       el.innerHTML = '<p style="color:var(--text-dim)">No text regions found</p>';
       return;
     }
 
-    for (const it of currentItems) {
-      const id = it.id;
-      const isExcluded = excluded.has(String(id));
-      const skipped = !it.placed && !isExcluded;  // detected but not put in a bubble
-
+    for (const it of items) {
+      const isExcluded = page.excluded.has(String(it.id));
+      const skipped = !it.placed && !isExcluded;
       const div = document.createElement("div");
       div.className = "tl-item" + (isExcluded ? " excluded" : "");
-      div.dataset.id = id;
-
-      let badge = "";
-      if (isExcluded) badge = '<span class="tl-badge skip">skipped by you</span>';
-      else if (skipped) badge = '<span class="tl-badge warn">not in a bubble</span>';
-      else badge = '<span class="tl-badge ok">in bubble</span>';
-
+      let badge = isExcluded ? '<span class="tl-badge skip">skipped by you</span>'
+        : skipped ? '<span class="tl-badge warn">not in a bubble</span>'
+        : '<span class="tl-badge ok">in bubble</span>';
       div.innerHTML = `
         <div class="tl-header">
-          <span class="tl-id">#${id}</span>
+          <span class="tl-id">#${it.id}</span>
           <span class="tl-type">${esc(it.type || "dialogue")}</span>
           ${badge}
-          <button class="tl-x" title="Skip this bubble" data-id="${id}">✕</button>
+          <button class="tl-x" title="Skip this bubble" data-id="${it.id}">✕</button>
         </div>
         <div class="tl-original">${esc(it.original || "")}</div>
-        <textarea class="tl-edit" data-id="${id}" rows="2"
-          ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>
-      `;
+        <textarea class="tl-edit" data-id="${it.id}" rows="2" ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>`;
       el.appendChild(div);
     }
-
-    // wire up X buttons
     el.querySelectorAll(".tl-x").forEach(btn => {
       btn.addEventListener("click", () => {
+        collectEdits(page);
         const id = btn.dataset.id;
-        if (excluded.has(id)) excluded.delete(id); else excluded.add(id);
-        buildTranslationsList(collectResult());
+        if (page.excluded.has(id)) page.excluded.delete(id); else page.excluded.add(id);
+        buildTranslationsList(page);
       });
     });
   }
 
-  // snapshot current edits back into an items structure for re-render
-  function collectResult() {
+  function collectEdits(page) {
     document.querySelectorAll(".tl-edit").forEach(t => {
-      const it = currentItems.find(i => String(i.id) === t.dataset.id);
+      const it = page.items.find(i => String(i.id) === t.dataset.id);
       if (it) it.translation = t.value;
     });
-    return { items: currentItems };
   }
 
+  applyBtn.addEventListener("click", applyChanges);
   async function applyChanges() {
-    if (!currentTaskId) return;
-    collectResult();
+    const page = getActive();
+    if (!page || !page.taskId) return;
+    collectEdits(page);
     const edits = {};
-    currentItems.forEach(it => { edits[it.id] = it.translation; });
+    page.items.forEach(it => { edits[it.id] = it.translation; });
 
-    applyBtn.disabled = true;
-    applyBtn.textContent = "Re-rendering...";
+    applyBtn.disabled = true; applyBtn.textContent = "Re-rendering...";
     try {
-      const res = await fetch(`/api/rerender/${currentTaskId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ excluded: [...excluded], edits }),
+      const res = await fetch(`/api/rerender/${page.taskId}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: [...page.excluded], edits }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const data = await res.json();
-      refreshResultImages();
-      buildTranslationsList({ items: data.items });
+      page.items = data.items; page.rev++;
+      renderStrip();
+      renderActivePage();
     } catch (e) {
       showError(e.message);
     } finally {
-      applyBtn.disabled = false;
-      applyBtn.textContent = "Apply & Re-render";
+      applyBtn.disabled = false; applyBtn.textContent = "Apply & Re-render";
     }
   }
 
-  function refreshResultImages() {
-    const ts = Date.now();
-    const url = `/api/result/${currentTaskId}?t=${ts}`;
-    document.getElementById("transImg").src = url;
-    document.getElementById("transFull").src = url;
-  }
-
-  /* ══════════════════════════════════════════════════════════════════
-     COMPARISON SLIDER
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ COMPARISON SLIDER ══ */
+  let compBound = false;
   function initComparison() {
     const container = document.getElementById("comparisonContainer");
     const overlay   = document.getElementById("compOverlay");
@@ -515,31 +556,23 @@ document.addEventListener("DOMContentLoaded", () => {
       overlay.style.width = pct + "%";
       slider.style.left = pct + "%";
     }
-
-    function onStart(e) {
-      dragging = true;
-      setPosition(e.touches ? e.touches[0].clientX : e.clientX);
+    if (!compBound) {
+      const onStart = e => { dragging = true; setPosition(e.touches ? e.touches[0].clientX : e.clientX); };
+      const onMove  = e => { if (!dragging) return; e.preventDefault(); setPosition(e.touches ? e.touches[0].clientX : e.clientX); };
+      const onEnd   = () => { dragging = false; };
+      container.addEventListener("mousedown", onStart);
+      container.addEventListener("touchstart", onStart, { passive: true });
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("touchmove", onMove, { passive: false });
+      document.addEventListener("mouseup", onEnd);
+      document.addEventListener("touchend", onEnd);
+      compBound = true;
     }
-    function onMove(e) {
-      if (!dragging) return;
-      e.preventDefault();
-      setPosition(e.touches ? e.touches[0].clientX : e.clientX);
-    }
-    function onEnd() { dragging = false; }
-
-    container.addEventListener("mousedown", onStart);
-    container.addEventListener("touchstart", onStart, { passive: true });
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("touchmove", onMove, { passive: false });
-    document.addEventListener("mouseup", onEnd);
-    document.addEventListener("touchend", onEnd);
-
-    setPosition(container.getBoundingClientRect().left + container.getBoundingClientRect().width / 2);
+    const rect = container.getBoundingClientRect();
+    setPosition(rect.left + rect.width / 2);
   }
 
-  /* ══════════════════════════════════════════════════════════════════
-     TABS
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ TABS ══ */
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -549,47 +582,59 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  /* ══════════════════════════════════════════════════════════════════
-     DOWNLOAD / NEW / RETRY
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ DOWNLOAD / ZIP / NEW ══ */
   downloadBtn.addEventListener("click", () => {
-    if (!currentTaskId) return;
+    const p = getActive();
+    if (!p || p.status !== "done") return;
     const a = document.createElement("a");
-    a.href = `/api/result/${currentTaskId}`;
-    a.download = "translated_page.png";
+    a.href = `/api/result/${p.taskId}?t=${p.rev}`;
+    a.download = "translated_" + (p.name || "page.png").replace(/\.[^.]+$/, "") + ".png";
     a.click();
   });
 
-  applyBtn.addEventListener("click", applyChanges);
-  newBtn.addEventListener("click", resetAll);
-  retryBtn.addEventListener("click", () => {
-    showSection("upload");
-    if (selectedFile) { dropZone.style.display = "none"; previewRow.style.display = "flex"; }
+  zipBtn.addEventListener("click", async () => {
+    const ids = pages.filter(p => p.status === "done").map(p => p.taskId);
+    if (!ids.length) return;
+    zipBtn.disabled = true; zipBtn.textContent = "Zipping...";
+    try {
+      const res = await fetch("/api/zip", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_ids: ids }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "translated_pages.zip";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      zipBtn.disabled = false; zipBtn.textContent = "Download All (ZIP)";
+      updateBatch();
+    }
   });
 
+  newBtn.addEventListener("click", resetAll);
+  retryBtn.addEventListener("click", () => showSection(pages.length ? "result" : "upload"));
+
   function resetAll() {
-    selectedFile = null;
-    currentTaskId = null;
+    pages.forEach(p => { try { URL.revokeObjectURL(p.thumb); } catch (_) {} });
+    pages = []; activeUid = null; running = 0;
     fileInput.value = "";
     previewRow.style.display = "none";
     dropZone.style.display = "";
     showSection("upload");
   }
 
-  /* ══════════════════════════════════════════════════════════════════
-     SECTION TOGGLE / ERROR / HELPERS
-     ══════════════════════════════════════════════════════════════════ */
+  /* ══ SECTIONS / HELPERS ══ */
   function showSection(name) {
-    uploadSection.style.display     = name === "upload"     ? "" : "none";
-    processingSection.style.display = name === "processing" ? "" : "none";
-    resultSection.style.display     = name === "result"     ? "" : "none";
-    errorSection.style.display      = name === "error"      ? "" : "none";
-    const scanOnly = workflow === "raw-scan";
-    processingSec.classList.toggle("enhance-mode", scanOnly);
+    uploadSection.style.display = name === "upload" ? "" : "none";
+    resultSection.style.display = name === "result" ? "" : "none";
+    errorSection.style.display  = name === "error"  ? "" : "none";
   }
-
   function showError(msg) { errorMsg.textContent = msg; showSection("error"); }
-
   function formatBytes(b) {
     if (b < 1024) return b + " B";
     if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
