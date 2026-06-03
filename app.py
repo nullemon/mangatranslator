@@ -175,9 +175,10 @@ async def _run(
         tasks[task_id].update(update)
 
     except Exception as e:
-        tasks[task_id].update(
-            {"status": "error", "message": str(e), "progress": 0}
-        )
+        if task_id in tasks:
+            tasks[task_id].update(
+                {"status": "error", "message": str(e), "progress": 0}
+            )
 
 
 @app.post("/api/enhance")
@@ -269,9 +270,10 @@ async def _run_enhance(
             }
         )
     except Exception as e:
-        tasks[task_id].update(
-            {"status": "error", "message": str(e), "progress": 0}
-        )
+        if task_id in tasks:
+            tasks[task_id].update(
+                {"status": "error", "message": str(e), "progress": 0}
+            )
 
 
 @app.get("/api/status/{task_id}")
@@ -319,7 +321,7 @@ async def rerender(task_id: str, request: Request):
     t = tasks[task_id]
     r = t.get("result") or {}
     base = r.get("base_path", "")
-    if not base or not os.path.exists(base) or not r.get("items"):
+    if not base or not os.path.exists(base):
         raise HTTPException(400, "This page can't be re-rendered")
 
     try:
@@ -328,11 +330,12 @@ async def rerender(task_id: str, request: Request):
         raise HTTPException(400, "Invalid JSON body")
     excluded = {str(i) for i in payload.get("excluded", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
-    font_scale = float(payload.get("font_scale", 1.0))
+    font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
+    covers = payload.get("covers") or []
 
     items = []
-    for it in r["items"]:
+    for it in r.get("items", []):
         nid = str(it["id"])
         text = edits.get(nid, it.get("translation", ""))
         if nid in excluded:
@@ -347,12 +350,31 @@ async def rerender(task_id: str, request: Request):
             "dark": it.get("dark", False),
         })
 
+    # Manually added text regions (drawn over missed / leftover spots).
+    added = []
+    for a in (payload.get("added") or []):
+        bbox = a.get("bbox")
+        text = (a.get("translation") or "").strip()
+        if not bbox or not text:
+            continue
+        added.append({
+            "id": str(a.get("id", f"m{len(added) + 1}")),
+            "bbox": [int(v) for v in bbox],
+            "original": a.get("original", ""),
+            "translation": text,
+            "type": "manual",
+            "in_bubble": False,
+            "manual": True,
+        })
+
+    all_items = items + added
+
     def work():
         base_img = cv2.imread(base)
         if base_img is None:
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"), font_scale=font_scale)
-        out = comp.compose(base_img, items, MASKS.get(task_id), offsets)
+        out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
         cv2.imwrite(r["output_path"], out)
 
     await asyncio.get_event_loop().run_in_executor(None, work)
@@ -367,15 +389,23 @@ async def rerender(task_id: str, request: Request):
         }
         for it in items
     ]
+    r["added"] = [
+        {
+            "id": it["id"], "bbox": it["bbox"], "translation": it["translation"],
+            "original": it.get("original", ""), "placed": it.get("placed", False),
+        }
+        for it in added
+    ]
+    r["covers"] = covers
     r["translations"] = {
         str(it["id"]): {
             "original": it["original"], "translation": it["translation"], "type": it["type"]
         }
         for it in items
     }
-    r["num_translated"] = sum(1 for it in items if it.get("placed"))
+    r["num_translated"] = sum(1 for it in all_items if it.get("placed"))
 
-    return {"items": r["items"], "ts": time.time()}
+    return {"items": r["items"], "added": r["added"], "ts": time.time()}
 
 
 @app.post("/api/zip")

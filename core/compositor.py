@@ -32,6 +32,7 @@ class Compositor:
         items: List[dict],
         masks: Optional[Dict] = None,
         offsets: Optional[Dict] = None,
+        covers: Optional[List] = None,
     ) -> np.ndarray:
         masks = masks or {}
         offsets = offsets or {}
@@ -39,6 +40,16 @@ class Compositor:
         page_area = h * w
         result = image.copy()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Manual cover/erase regions the user drew to wipe leftover or
+        # untranslated text. Erase them before placing anything else.
+        for cb in (covers or []):
+            try:
+                cx, cy, cw, ch = [int(v) for v in cb]
+            except Exception:
+                continue
+            if cw > 2 and ch > 2:
+                self._inpaint_text(result, cx, cy, cw, ch)
 
         placements = []     # (rect, text, color)
         used_boxes = []
@@ -64,6 +75,25 @@ class Compositor:
             if not bbox:
                 continue
             bx, by, bw, bh = [int(v) for v in bbox]
+
+            # Manually added text: the user drew this box over a missed or
+            # leftover region. Erase whatever's there and place the typed text
+            # using exactly the box they drew (no auto-refinement).
+            if it.get("manual"):
+                bx = max(0, min(bx, w - 1))
+                by = max(0, min(by, h - 1))
+                bw = min(bw, w - bx)
+                bh = min(bh, h - by)
+                if bw < 6 or bh < 6:
+                    continue
+                self._inpaint_text(result, bx, by, bw, bh)
+                dark = self._is_dark_region(gray, bx, by, bw, bh)
+                pad = max(2, min(bw, bh) // 16)
+                rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
+                color = (255, 255, 255) if dark else (0, 0, 0)
+                placements.append((offset_rect(it, rect), text, color))
+                it["placed"] = True
+                continue
 
             if it.get("in_bubble") is False:
                 bx = max(0, min(bx, w - 1))

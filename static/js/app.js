@@ -53,10 +53,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const detailsTab    = document.querySelector('.tab[data-tab="details"]');
   const fontScale     = document.getElementById("fontScale");
   const fontScaleVal  = document.getElementById("fontScaleVal");
-  const moveToggle    = document.getElementById("moveToggle");
-  const moveHint      = document.getElementById("moveHint");
-  const moveApply     = document.getElementById("moveApply");
+  const editHint      = document.getElementById("editHint");
+  const editApply     = document.getElementById("editApply");
   const moveLayer     = document.getElementById("moveLayer");
+  const toolBtns      = document.querySelectorAll(".tool-btn");
 
   fontScale.addEventListener("input", () => {
     fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
@@ -527,14 +527,14 @@ document.addEventListener("DOMContentLoaded", () => {
       }));
       page.items = items;
     }
-    if (items.length === 0) {
-      el.innerHTML = '<p style="color:var(--text-dim)">No text regions found</p>';
+    const added = page.added || [];
+    if (items.length === 0 && added.length === 0) {
+      el.innerHTML = '<p style="color:var(--text-dim)">No text regions found. Use the <strong>Translated</strong> tab → <strong>＋ Add</strong> to place text by hand.</p>';
       return;
     }
 
     for (const it of items) {
       const isExcluded = page.excluded.has(String(it.id));
-      const skipped = !it.placed && !isExcluded;
       const isBubble = it.in_bubble !== false;
       const div = document.createElement("div");
       div.className = "tl-item" + (isExcluded ? " excluded" : "") + (isBubble ? "" : " free-text");
@@ -559,6 +559,35 @@ document.addEventListener("DOMContentLoaded", () => {
         <textarea class="tl-edit" data-id="${it.id}" rows="2" ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>`;
       el.appendChild(div);
     }
+
+    // Manually added regions (drawn with the Add tool).
+    for (const it of added) {
+      const div = document.createElement("div");
+      div.className = "tl-item added-item";
+      div.innerHTML = `
+        <div class="tl-header">
+          <span class="tl-id">＋</span>
+          <span class="tl-type">added</span>
+          <span class="tl-badge added">manual</span>
+          <button class="tl-del" title="Delete this added text" data-id="${it.id}">✕</button>
+        </div>
+        <textarea class="tl-edit add-edit" data-id="${it.id}" rows="2">${esc(it.translation || "")}</textarea>`;
+      el.appendChild(div);
+    }
+
+    // Live sync: typing updates the page model immediately so on-image edits
+    // and Details edits never clobber each other.
+    el.querySelectorAll(".tl-edit").forEach(t => {
+      t.addEventListener("input", () => {
+        if (t.classList.contains("add-edit")) {
+          const a = (page.added || []).find(i => String(i.id) === t.dataset.id);
+          if (a) a.translation = t.value;
+        } else {
+          const it = (page.items || []).find(i => String(i.id) === t.dataset.id);
+          if (it) it.translation = t.value;
+        }
+      });
+    });
     el.querySelectorAll(".tl-x").forEach(btn => {
       btn.addEventListener("click", () => {
         collectEdits(page);
@@ -567,12 +596,23 @@ document.addEventListener("DOMContentLoaded", () => {
         buildTranslationsList(page);
       });
     });
+    el.querySelectorAll(".tl-del").forEach(btn => {
+      btn.addEventListener("click", () => {
+        page.added = (page.added || []).filter(a => String(a.id) !== btn.dataset.id);
+        buildTranslationsList(page);
+      });
+    });
   }
 
   function collectEdits(page) {
     document.querySelectorAll(".tl-edit").forEach(t => {
-      const it = page.items.find(i => String(i.id) === t.dataset.id);
-      if (it) it.translation = t.value;
+      if (t.classList.contains("add-edit")) {
+        const a = (page.added || []).find(i => String(i.id) === t.dataset.id);
+        if (a) a.translation = t.value;
+      } else {
+        const it = (page.items || []).find(i => String(i.id) === t.dataset.id);
+        if (it) it.translation = t.value;
+      }
     });
   }
 
@@ -582,7 +622,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!page || !page.taskId) return;
     collectEdits(page);
     const edits = {};
-    page.items.forEach(it => { edits[it.id] = it.translation; });
+    (page.items || []).forEach(it => { edits[it.id] = it.translation; });
 
     const useBtn = btn || applyBtn;
     const label = useBtn.textContent;
@@ -594,11 +634,20 @@ document.addEventListener("DOMContentLoaded", () => {
           excluded: [...page.excluded], edits,
           font_scale: parseFloat(fontScale.value),
           offsets: page.offsets || {},
+          covers: page.covers || [],
+          added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, translation: a.translation })),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const data = await res.json();
-      page.items = data.items; page.rev++;
+      page.items = data.items;
+      if (data.added) {
+        page.added = (page.added || []).map(a => {
+          const m = data.added.find(d => String(d.id) === String(a.id));
+          return m ? Object.assign({}, a, { placed: m.placed }) : a;
+        });
+      }
+      page.rev++;
       renderStrip();
       renderActivePage();
     } catch (e) {
@@ -608,45 +657,95 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  /* ══ MOVE TEXT (drag to reposition) ══ */
-  let moveMode = false;
-  moveToggle.addEventListener("click", () => {
-    moveMode = !moveMode;
-    moveLayer.classList.toggle("on", moveMode);
-    moveToggle.classList.toggle("btn-primary", moveMode);
-    moveToggle.classList.toggle("btn-ghost", !moveMode);
-    moveToggle.textContent = moveMode ? "Done moving" : "Move text";
-    moveApply.style.display = moveMode ? "" : "none";
-    moveHint.textContent = moveMode
-      ? "Drag any box, then Apply & Re-render."
-      : "Turn on to drag any translation into place.";
-    if (moveMode) buildMoveBoxes();
-  });
-  moveApply.addEventListener("click", () => applyChanges(moveApply));
+  /* ══ ON-IMAGE TOOLS: move · edit · cover · add ══ */
+  let tool = null;
+  const HINTS = {
+    move: "Drag any translation to move it, then Apply & Re-render.",
+    edit: "Click any translation to fix its text.",
+    cover: "Drag a box over leftover text to erase it, then Apply & Re-render.",
+    add: "Drag a box where text is missing, type it, then Apply & Re-render.",
+  };
 
-  function buildMoveBoxes() {
-    const page = getActive();
-    moveLayer.innerHTML = "";
-    if (!page || !page.items) return;
+  toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
+  editApply.addEventListener("click", () => applyChanges(editApply));
+
+  function setTool(t) {
+    tool = (tool === t) ? null : t;
+    toolBtns.forEach(b => {
+      const on = b.dataset.tool === tool;
+      b.classList.toggle("btn-primary", on);
+      b.classList.toggle("btn-ghost", !on);
+    });
+    moveLayer.classList.toggle("on", !!tool);
+    moveLayer.dataset.tool = tool || "";
+    editApply.style.display = tool ? "" : "none";
+    editHint.textContent = HINTS[tool] || "Pick a tool to fix anything by hand.";
+    closeEditor();
+    buildOverlay();
+  }
+
+  function curDims() {
     const W = transFull.naturalWidth, H = transFull.naturalHeight;
-    if (!W || !H) return;
-    page.offsets = page.offsets || {};
+    return (W && H) ? [W, H] : null;
+  }
 
-    for (const it of page.items) {
-      if (!it.placed || !it.bbox) continue;
-      if (page.excluded.has(String(it.id))) continue;
-      const [bx, by, bw, bh] = it.bbox;
-      const off = page.offsets[it.id] || [0, 0];
-      const box = document.createElement("div");
-      box.className = "move-box";
-      box.style.left   = ((bx + off[0]) / W * 100) + "%";
-      box.style.top    = ((by + off[1]) / H * 100) + "%";
-      box.style.width  = (bw / W * 100) + "%";
-      box.style.height = (bh / H * 100) + "%";
-      box.innerHTML = `<span class="move-tag">#${it.id}</span>`;
-      bindDrag(box, it, page, W, H);
+  function makeBox(bx, by, bw, bh, W, H, cls) {
+    const box = document.createElement("div");
+    box.className = cls;
+    box.style.left = (bx / W * 100) + "%";
+    box.style.top = (by / H * 100) + "%";
+    box.style.width = (bw / W * 100) + "%";
+    box.style.height = (bh / H * 100) + "%";
+    return box;
+  }
+
+  function buildOverlay() {
+    const page = getActive();
+    closeEditor();
+    moveLayer.innerHTML = "";
+    if (!page || !tool) return;
+    const dims = curDims();
+    if (!dims) return;
+    const [W, H] = dims;
+    page.offsets = page.offsets || {};
+    page.covers = page.covers || [];
+    page.added = page.added || [];
+
+    // Existing cover regions — always visible, click to remove.
+    page.covers.forEach((cb, i) => {
+      const box = makeBox(cb[0], cb[1], cb[2], cb[3], W, H, "cover-box");
+      box.innerHTML = `<span class="ov-tag">erase ✕</span>`;
+      box.title = "Click to remove this cover";
+      box.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
       moveLayer.appendChild(box);
+    });
+
+    if (tool === "move" || tool === "edit") {
+      for (const it of (page.items || [])) {
+        if (!it.placed || !it.bbox || page.excluded.has(String(it.id))) continue;
+        addItemBox(it, page, W, H, false);
+      }
+      for (const it of (page.added || [])) {
+        if (!it.bbox) continue;
+        addItemBox(it, page, W, H, true);
+      }
     }
+  }
+
+  function addItemBox(it, page, W, H, isAdded) {
+    const [bx, by, bw, bh] = it.bbox;
+    const off = page.offsets[it.id] || [0, 0];
+    const box = makeBox(bx + off[0], by + off[1], bw, bh, W, H,
+                        "move-box" + (isAdded ? " added-box" : ""));
+    box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>`;
+    if (tool === "move") {
+      box.classList.add("draggable");
+      bindDrag(box, it, page, W, H);
+    } else {
+      box.classList.add("editable");
+      box.addEventListener("click", () => openEditor(it, page, isAdded));
+    }
+    moveLayer.appendChild(box);
   }
 
   function bindDrag(box, it, page, W, H) {
@@ -655,7 +754,7 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       dragging = true;
       box.classList.add("dragging");
-      box.setPointerCapture(e.pointerId);
+      try { box.setPointerCapture(e.pointerId); } catch (_) {}
       startX = e.clientX; startY = e.clientY;
       const off = page.offsets[it.id] || [0, 0];
       baseX = off[0]; baseY = off[1];
@@ -663,13 +762,13 @@ document.addEventListener("DOMContentLoaded", () => {
     box.addEventListener("pointermove", e => {
       if (!dragging) return;
       const rect = transFull.getBoundingClientRect();
-      const sx = W / rect.width, sy = H / rect.height;   // screen→image px
+      const sx = W / rect.width, sy = H / rect.height;
       const dx = Math.round(baseX + (e.clientX - startX) * sx);
       const dy = Math.round(baseY + (e.clientY - startY) * sy);
       page.offsets[it.id] = [dx, dy];
       const [bx, by] = it.bbox;
       box.style.left = ((bx + dx) / W * 100) + "%";
-      box.style.top  = ((by + dy) / H * 100) + "%";
+      box.style.top = ((by + dy) / H * 100) + "%";
     });
     const end = e => {
       if (!dragging) return;
@@ -680,6 +779,112 @@ document.addEventListener("DOMContentLoaded", () => {
     box.addEventListener("pointerup", end);
     box.addEventListener("pointercancel", end);
   }
+
+  /* inline text editor popup (Edit tool) */
+  function closeEditor() {
+    const ex = moveLayer.querySelector(".edit-pop");
+    if (ex) ex.remove();
+  }
+  function openEditor(it, page, isAdded) {
+    closeEditor();
+    const dims = curDims();
+    if (!dims) return;
+    const [W, H] = dims;
+    const off = page.offsets[it.id] || [0, 0];
+    const [bx, by, , bh] = it.bbox;
+    const pop = document.createElement("div");
+    pop.className = "edit-pop";
+    pop.style.left = Math.min((bx + off[0]) / W * 100, 62) + "%";
+    pop.style.top = Math.min((by + off[1] + bh) / H * 100 + 1, 82) + "%";
+    pop.innerHTML = `
+      ${it.original ? `<div class="edit-pop-orig">${esc(it.original)}</div>` : ""}
+      <textarea class="edit-pop-text" rows="3">${esc(it.translation || "")}</textarea>
+      <div class="edit-pop-row">
+        <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm epop-cancel">Cancel</button>
+        <button class="btn btn-primary btn-sm epop-save">Save</button>
+      </div>`;
+    pop.addEventListener("pointerdown", e => e.stopPropagation());
+    moveLayer.appendChild(pop);
+    const ta = pop.querySelector(".edit-pop-text");
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    pop.querySelector(".epop-cancel").addEventListener("click", closeEditor);
+    pop.querySelector(".epop-save").addEventListener("click", () => {
+      it.translation = ta.value;
+      const f = document.querySelector('.tl-edit[data-id="' + it.id + '"]');
+      if (f) f.value = ta.value;
+      closeEditor();
+      applyChanges(editApply);
+    });
+    pop.querySelector(".epop-remove").addEventListener("click", () => {
+      if (isAdded) {
+        page.added = (page.added || []).filter(a => String(a.id) !== String(it.id));
+      } else {
+        page.excluded.add(String(it.id));
+      }
+      closeEditor();
+      applyChanges(editApply);
+    });
+  }
+
+  /* draw-a-box surface (Cover / Add tools) — bound once on the overlay */
+  (function initDraw() {
+    let drawing = false, sx, sy, rectEl = null;
+    moveLayer.addEventListener("pointerdown", e => {
+      if (tool !== "cover" && tool !== "add") return;
+      if (e.target !== moveLayer) return;   // don't start when clicking a box
+      const page = getActive(); if (!page || !curDims()) return;
+      drawing = true;
+      const r = moveLayer.getBoundingClientRect();
+      sx = e.clientX - r.left; sy = e.clientY - r.top;
+      rectEl = document.createElement("div");
+      rectEl.className = (tool === "cover" ? "cover-box" : "add-box") + " drawing";
+      rectEl.style.left = (sx / r.width * 100) + "%";
+      rectEl.style.top = (sy / r.height * 100) + "%";
+      moveLayer.appendChild(rectEl);
+      try { moveLayer.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    moveLayer.addEventListener("pointermove", e => {
+      if (!drawing) return;
+      const r = moveLayer.getBoundingClientRect();
+      const cx = e.clientX - r.left, cy = e.clientY - r.top;
+      rectEl.style.left = (Math.min(sx, cx) / r.width * 100) + "%";
+      rectEl.style.top = (Math.min(sy, cy) / r.height * 100) + "%";
+      rectEl.style.width = (Math.abs(cx - sx) / r.width * 100) + "%";
+      rectEl.style.height = (Math.abs(cy - sy) / r.height * 100) + "%";
+    });
+    const finish = e => {
+      if (!drawing) return;
+      drawing = false;
+      try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
+      const page = getActive(), dims = curDims();
+      const r = moveLayer.getBoundingClientRect();
+      const cx = e.clientX - r.left, cy = e.clientY - r.top;
+      if (rectEl) { rectEl.remove(); rectEl = null; }
+      if (!page || !dims) return;
+      const [W, H] = dims;
+      const x = Math.round(Math.min(sx, cx) / r.width * W);
+      const y = Math.round(Math.min(sy, cy) / r.height * H);
+      const w = Math.round(Math.abs(cx - sx) / r.width * W);
+      const h = Math.round(Math.abs(cy - sy) / r.height * H);
+      if (w < 6 || h < 6) return;
+      page.covers = page.covers || []; page.added = page.added || [];
+      if (tool === "cover") {
+        page.covers.push([x, y, w, h]);
+        buildOverlay();
+      } else {
+        const txt = prompt("Type the English text for this spot:", "");
+        if (txt && txt.trim()) {
+          page.addSeq = (page.addSeq || 0) + 1;
+          page.added.push({ id: "m" + page.addSeq, bbox: [x, y, w, h], translation: txt.trim(), placed: true });
+          buildOverlay();
+        }
+      }
+    };
+    moveLayer.addEventListener("pointerup", finish);
+    moveLayer.addEventListener("pointercancel", finish);
+  })();
 
   /* ══ COMPARISON SLIDER ══ */
   let compBound = false;
@@ -719,11 +924,11 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       tab.classList.add("active");
       document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
-      if (tab.dataset.tab === "translated" && moveMode) buildMoveBoxes();
+      if (tab.dataset.tab === "translated" && tool) buildOverlay();
     });
   });
-  // Rebuild drag boxes once the translated image has its real dimensions.
-  transFull.addEventListener("load", () => { if (moveMode) buildMoveBoxes(); });
+  // Rebuild the tool overlay once the translated image has its real dimensions.
+  transFull.addEventListener("load", () => { if (tool) buildOverlay(); });
 
   /* ══ DOWNLOAD / ZIP / NEW ══ */
   downloadBtn.addEventListener("click", () => {

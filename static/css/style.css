@@ -261,18 +261,41 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .pg-tools button:hover:not(:disabled){background:var(--accent)}
 .pg-tools button:disabled{opacity:.3;cursor:default}
 
-/* ── Move text (drag to reposition) ── */
-.move-bar{display:flex;align-items:center;gap:.8rem;margin-bottom:.8rem;flex-wrap:wrap}
-.move-hint{font-size:.8rem;color:var(--text-dim)}
+/* ── On-image edit tools (move · edit · cover · add) ── */
+.edit-toolbar{display:flex;align-items:center;gap:.7rem;margin-bottom:.8rem;flex-wrap:wrap}
+.tool-group{display:flex;gap:.35rem;flex-wrap:wrap}
+.tool-btn{font-weight:600}
+.edit-hint{font-size:.8rem;color:var(--text-dim);flex:1;min-width:140px}
 .trans-stage{position:relative;display:block;line-height:0}
 .move-layer{position:absolute;inset:0;display:none}
 .move-layer.on{display:block}
+.move-layer[data-tool="cover"],.move-layer[data-tool="add"]{cursor:crosshair}
 .move-box{position:absolute;border:2px dashed var(--accent);background:rgba(59,130,246,.10);
-  cursor:grab;border-radius:4px;touch-action:none;transition:background .12s,border-color .12s}
+  border-radius:4px;touch-action:none;transition:background .12s,border-color .12s}
+.move-box.draggable{cursor:grab}
+.move-box.editable{cursor:pointer}
 .move-box:hover{background:rgba(59,130,246,.20)}
 .move-box.dragging{cursor:grabbing;background:rgba(59,130,246,.28);border-style:solid}
+.move-box.added-box{border-color:#16a34a;background:rgba(22,163,74,.12)}
+.move-box.added-box .move-tag{background:#16a34a}
 .move-box .move-tag{position:absolute;top:-9px;left:-2px;font-size:.6rem;font-weight:700;
   background:var(--accent);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4}
+.cover-box{position:absolute;border:2px dashed var(--danger);background:rgba(220,38,38,.18);
+  border-radius:3px;cursor:pointer;touch-action:none}
+.cover-box.drawing{pointer-events:none}
+.cover-box .ov-tag{position:absolute;top:-9px;left:-2px;font-size:.6rem;font-weight:700;
+  background:var(--danger);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4}
+.add-box{position:absolute;border:2px dashed #16a34a;background:rgba(22,163,74,.14);border-radius:3px;touch-action:none}
+.add-box.drawing{pointer-events:none}
+/* inline text editor popup */
+.edit-pop{position:absolute;z-index:20;width:min(260px,60vw);background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);
+  padding:.6rem;line-height:1.3;cursor:default}
+.edit-pop-orig{font-size:.72rem;color:var(--text-dim);margin-bottom:.4rem;max-height:3.2em;overflow:auto}
+.edit-pop-text{width:100%;resize:vertical;font-size:.85rem;padding:.4rem;border-radius:6px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text)}
+.edit-pop-row{display:flex;align-items:center;gap:.4rem;margin-top:.5rem}
+.edit-pop-row .spacer{flex:1}
 
 /* ── Details / editable translations ── */
 .details-bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
@@ -292,7 +315,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-badge.warn{color:var(--warn);background:rgba(180,83,9,.12)}
 .tl-badge.skip{color:var(--danger);background:var(--danger-soft)}
 .tl-badge.free{color:var(--accent);background:rgba(59,130,246,.12)}
+.tl-badge.added{color:#16a34a;background:rgba(22,163,74,.12)}
 .tl-item.free-text{border-left:3px solid var(--accent)}
+.tl-item.added-item{border-left:3px solid #16a34a}
+.tl-del{margin-left:auto;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.75rem;line-height:1;transition:.15s}
+.tl-del:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-x{margin-left:auto;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.75rem;line-height:1;transition:.15s}
 .tl-x:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-original{font-size:.85rem;color:var(--text-dim);margin-bottom:.45rem;word-break:break-word}
