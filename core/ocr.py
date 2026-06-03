@@ -9,6 +9,19 @@ from PIL import Image
 from typing import Optional
 
 
+def _has_japanese(text: str) -> bool:
+    """True if the string contains at least one hiragana, katakana, or kanji.
+    Filters OCR hallucinations on non-text regions (eyes, mouths, art), which
+    come back as latin garbage or bare punctuation rather than real Japanese."""
+    for ch in text:
+        o = ord(ch)
+        if (0x3040 <= o <= 0x30FF      # hiragana + katakana
+                or 0x4E00 <= o <= 0x9FFF  # CJK unified ideographs (kanji)
+                or 0xFF66 <= o <= 0xFF9D):  # half-width katakana
+            return True
+    return False
+
+
 class MangaOCR:
     _shared = None  # process-wide cache of the loaded model
 
@@ -42,12 +55,17 @@ class MangaOCR:
             return False
 
     def read(self, bgr: np.ndarray) -> str:
-        """OCR a BGR image crop → Japanese text (empty string on failure)."""
+        """OCR a BGR image crop → Japanese text (empty string on failure).
+        Returns "" when the result has no real Japanese characters, so text
+        is never placed into a non-bubble region (eye, mouth, stray art)."""
         if not self.ok or bgr is None or bgr.size == 0:
             return ""
         try:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            return (self._mocr(Image.fromarray(rgb)) or "").strip()
+            text = (self._mocr(Image.fromarray(rgb)) or "").strip()
+            if not _has_japanese(text):
+                return ""
+            return text
         except Exception as e:
             print(f"[ocr] read failed: {e}")
             return ""

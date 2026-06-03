@@ -140,15 +140,22 @@ class BubbleDetector:
         if vals.size == 0:
             return None
         if dark:
+            # A dark balloon is solidly dark AND holds white *lettering* —
+            # several separated character blobs. This is what rejects eyeballs
+            # (a single glint) and open mouths (teeth/highlights): they are dark
+            # enclosed regions too, but they are NOT speech bubbles.
             fill_ratio = float(np.mean(vals < self.dark_thresh + 40))
-            text_ratio = float(np.mean(vals > 170))
+            if fill_ratio < 0.55:
+                return None
+            if not self._dark_has_lettering(gray, inner):
+                return None
         else:
             fill_ratio = float(np.mean(vals > self.white_thresh - 30))
             text_ratio = float(np.mean(vals < 110))
-        if fill_ratio < 0.45:
-            return None
-        if text_ratio < 0.002 or text_ratio > 0.55:
-            return None
+            if fill_ratio < 0.45:
+                return None
+            if text_ratio < 0.002 or text_ratio > 0.55:
+                return None
 
         M = cv2.moments(cnt)
         cx = int(M["m10"] / M["m00"]) if M["m00"] else x + bw // 2
@@ -157,6 +164,30 @@ class BubbleDetector:
             id=0, bbox=(x, y, bw, bh), mask=mask, center=(cx, cy),
             area=area, dark=dark, region_type="bubble",
         )
+
+    def _dark_has_lettering(self, gray: np.ndarray, inner_mask: np.ndarray) -> bool:
+        """True only if a dark region contains white lettering: multiple
+        separated character-like blobs covering a text-like fraction of the
+        area. An eyeball has a single glint; an open mouth has teeth or a
+        highlight — neither forms several distinct character blobs, so both
+        are rejected here."""
+        area = int(cv2.countNonZero(inner_mask))
+        if area == 0:
+            return False
+        white = ((inner_mask > 0) & (gray > 160)).astype(np.uint8) * 255
+        white_frac = float(cv2.countNonZero(white)) / area
+        # Too little white = a glint (eye); too much = not real dark text.
+        if white_frac < 0.04 or white_frac > 0.55:
+            return False
+        n, _, stats, _ = cv2.connectedComponentsWithStats(white, 8)
+        min_blob = max(area * 0.0015, 6)
+        max_blob = area * 0.45  # a single huge white patch isn't lettering
+        chars = 0
+        for i in range(1, n):
+            a = stats[i, cv2.CC_STAT_AREA]
+            if min_blob <= a <= max_blob:
+                chars += 1
+        return chars >= 2
 
     # ── dedupe / order ──
     def _merge_overlapping(self, regions: List[TextRegion]) -> List[TextRegion]:

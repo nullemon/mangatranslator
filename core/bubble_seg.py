@@ -69,7 +69,7 @@ def _load():
 
 
 class BubbleSegDetector:
-    def __init__(self, conf: float = 0.30):
+    def __init__(self, conf: float = 0.22):
         self.conf = conf
         self.model = _load()
 
