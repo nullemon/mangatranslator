@@ -69,6 +69,9 @@ class TranslationPipeline:
             items, ann_path, masks = self._smart_detect(image, output_path, update)
         else:
             items, ann_path, masks = self._standard_detect(image, output_path, update)
+            if not items:
+                update(2, "No bubbles or free text found — trying full AI scan...", 52)
+                items, ann_path, masks = self._smart_detect(image, output_path, update)
         self.last_masks = masks
 
         if not items:
@@ -140,8 +143,10 @@ class TranslationPipeline:
             detections = self.translator.detect_free_text(
                 image, self.target_lang, bubble_ids
             )
+            print(f"[pipeline] free text detection returned {len(detections)} regions")
         except Exception as e:
             print(f"[pipeline] free text detection failed: {e}")
+            update(2, "Free text detection failed, will retry with AI scan", 52)
             return []
         items = []
         for det in detections:
