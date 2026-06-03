@@ -8,6 +8,34 @@ from .translator import make_translator
 from .compositor import Compositor
 
 
+def auto_crop_page(image: np.ndarray) -> np.ndarray:
+    """Detect the manga page in a photo and crop away the background."""
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (15, 15), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=3)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return image
+    largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
+    if area < (h * w) * 0.25:
+        return image
+    x, y, rw, rh = cv2.boundingRect(largest)
+    if rw < w * 0.35 or rh < h * 0.35:
+        return image
+    if rw >= w * 0.98 and rh >= h * 0.98:
+        return image
+    pad = 3
+    x, y = max(0, x - pad), max(0, y - pad)
+    rw = min(w - x, rw + 2 * pad)
+    rh = min(h - y, rh + 2 * pad)
+    print(f"[pipeline] auto-crop: {w}x{h} -> {rw}x{rh} (removed background)")
+    return image[y:y + rh, x:x + rw].copy()
+
+
 def make_detector(use_seg: bool = True):
     """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
     if use_seg:
@@ -59,8 +87,9 @@ class TranslationPipeline:
             scale = max_dim / max(h, w)
             image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
-        # Persist the exact image we operate on so the comparison view aligns
-        # and re-renders start from a pristine (un-composited) base.
+        update(0, "Preprocessing image...", 2)
+        image = auto_crop_page(image)
+
         base_path = self._base_path(output_path)
         cv2.imwrite(base_path, image)
 

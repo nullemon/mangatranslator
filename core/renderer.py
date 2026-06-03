@@ -26,8 +26,8 @@ class TextRenderer:
         self.font_path = font_path or self._find_font()
         self.font_scale = max(0.5, min(font_scale, 3.0))
         self.min_font_size = 10
-        self.padding_ratio = 0.04
-        self.line_spacing_ratio = 0.12
+        self.padding_ratio = max(0.0, 0.04 / self.font_scale)
+        self.line_spacing_ratio = max(0.04, 0.12 / self.font_scale)
         self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
 
     def _find_font(self) -> Optional[str]:
@@ -85,8 +85,8 @@ class TextRenderer:
         text = text.upper()
         x, y, w, h = rect
 
-        pad_x = max(int(w * self.padding_ratio), 2)
-        pad_y = max(int(h * self.padding_ratio), 2)
+        pad_x = max(int(w * self.padding_ratio), 1)
+        pad_y = max(int(h * self.padding_ratio), 1)
         inner_x, inner_y = x + pad_x, y + pad_y
         inner_w, inner_h = w - 2 * pad_x, h - 2 * pad_y
 
@@ -139,8 +139,7 @@ class TextRenderer:
             else:
                 hi = mid - 1
 
-        scaled = max(self.min_font_size, int(best * self.font_scale))
-        return scaled
+        return best
 
     def _text_fits(
         self,

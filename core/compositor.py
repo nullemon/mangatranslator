@@ -47,19 +47,32 @@ class Compositor:
             bx, by, bw, bh = [int(v) for v in bbox]
 
             if it.get("in_bubble") is False:
+                bx = max(0, min(bx, w - 1))
+                by = max(0, min(by, h - 1))
+                bw = min(bw, w - bx)
+                bh = min(bh, h - by)
                 if bw < 10 or bh < 10:
                     continue
-                bb = (bx, by, bw, bh)
+                rx, ry, rw, rh = self._refine_free_bbox(gray, bx, by, bw, bh)
+                bb = (rx, ry, rw, rh)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
                 used_boxes.append(bb)
-                self._inpaint_text(result, bx, by, bw, bh)
-                dark = self._is_dark_region(gray, bx, by, bw, bh)
-                pad = max(2, min(bw, bh) // 16)
-                rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
+                self._inpaint_text(result, rx, ry, rw, rh)
+                it["bbox"] = [rx, ry, rw, rh]
+                dark = self._is_dark_region(gray, rx, ry, rw, rh)
+                pad = max(2, min(rw, rh) // 16)
+                rect = (rx + pad, ry + pad, rw - 2 * pad, rh - 2 * pad)
                 color = (255, 255, 255) if dark else (0, 0, 0)
                 placements.append((rect, text, color))
                 it["placed"] = True
+                continue
+
+            bx = max(0, min(bx, w - 1))
+            by = max(0, min(by, h - 1))
+            bw = min(bw, w - bx)
+            bh = min(bh, h - by)
+            if bw < 10 or bh < 10:
                 continue
 
             mask = masks.get(it["id"])
@@ -87,8 +100,6 @@ class Compositor:
                 if rect is None:
                     rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
             else:
-                if bw < 14 or bh < 14:
-                    continue
                 bb = (bx, by, bw, bh)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
@@ -140,6 +151,35 @@ class Compositor:
         text_mask = cv2.dilate(thresh, kernel, iterations=1)
         inpainted = cv2.inpaint(roi, text_mask, 5, cv2.INPAINT_TELEA)
         result[y0:y1, x0:x1] = inpainted
+
+    def _refine_free_bbox(self, gray, x, y, w, h):
+        """Refine an AI-estimated free text bbox using CV to find actual text."""
+        H, W = gray.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return x, y, w, h
+        roi = gray[y0:y1, x0:x1]
+        bg_med = float(np.median(roi))
+        if bg_med > 160:
+            _, text_mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        else:
+            _, text_mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        text_mask = cv2.dilate(text_mask, kernel, iterations=2)
+        contours, _ = cv2.findContours(text_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return x, y, w, h
+        all_pts = np.vstack(contours)
+        rx, ry, rw, rh = cv2.boundingRect(all_pts)
+        if rw < 5 or rh < 5:
+            return x, y, w, h
+        pad = max(3, min(rw, rh) // 8)
+        fx = max(x0, x0 + rx - pad)
+        fy = max(y0, y0 + ry - pad)
+        fw = min(x1 - fx, rw + 2 * pad)
+        fh = min(y1 - fy, rh + 2 * pad)
+        return fx, fy, fw, fh
 
     def _is_dark_region(self, gray, x, y, w, h):
         H, W = gray.shape[:2]
