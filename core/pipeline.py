@@ -25,29 +25,48 @@ def auto_crop_page(image: np.ndarray) -> np.ndarray:
 
     Finds the page's 4 corners and applies a perspective transform so an
     angled phone photo becomes a clean, rectangular, front-on page. Falls
-    back to an axis-aligned crop, then to the original, if that fails."""
+    back to an axis-aligned crop, then to the original, if that fails.
+
+    The page is found as everything that differs from the photo's border tone,
+    so DARK page content — black panels, or a score/timer strip along the very
+    bottom — counts as page and is never sliced off. A plain bright threshold
+    would treat that dark strip as background and crop the content away."""
     h, w = image.shape[:2]
     page_area = h * w
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=3)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Page mask = pixels that differ from the surrounding background (sampled
+    # from the image border), so both bright paper and dark inked content count.
+    border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
+    bg = int(round(float(np.median(border))))
+    diff = cv2.absdiff(blurred, np.full_like(blurred, bg))
+    _, mask = cv2.threshold(diff, 24, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    k = max(9, (min(h, w) // 40) | 1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)), iterations=2)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return image
 
-    largest = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(largest)
-    if area < page_area * 0.25:
+    # Full extent of the page content = union of every non-trivial blob, so a
+    # detached corner or the bottom UI strip is included, not cropped away.
+    sig = [c for c in contours if cv2.contourArea(c) > page_area * 0.004]
+    if not sig:
         return image
-    # Already fills the frame → nothing to crop.
-    bx, by, bw, bh = cv2.boundingRect(largest)
-    if bw >= w * 0.98 and bh >= h * 0.98:
+    allpts = np.vstack(sig)
+    bx, by, bw, bh = cv2.boundingRect(allpts)
+    if bw * bh < page_area * 0.25:
+        return image
+    # Already fills the frame → nothing to crop (don't risk shaving content).
+    if bw >= w * 0.95 and bh >= h * 0.95:
         return image
 
     # Try to approximate the page outline as a 4-corner quad for a perspective
     # warp (fixes rotation + keystone). Loosen epsilon until we get a quad.
+    largest = max(sig, key=cv2.contourArea)
     peri = cv2.arcLength(largest, True)
     quad = None
     for eps in (0.02, 0.03, 0.04, 0.05, 0.06, 0.08):
@@ -65,7 +84,10 @@ def auto_crop_page(image: np.ndarray) -> np.ndarray:
         hB = np.linalg.norm(tl - bl)
         out_w = int(max(wA, wB))
         out_h = int(max(hA, hB))
-        if out_w >= w * 0.35 and out_h >= h * 0.35:
+        # Only accept the warp when it actually spans the detected content — a
+        # quad smaller than the content box would slice text off an edge.
+        if (out_w >= w * 0.35 and out_h >= h * 0.35
+                and out_w >= bw * 0.92 and out_h >= bh * 0.92):
             dst = np.array([[0, 0], [out_w - 1, 0],
                             [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
             M = cv2.getPerspectiveTransform(rect, dst)
@@ -73,10 +95,10 @@ def auto_crop_page(image: np.ndarray) -> np.ndarray:
             print(f"[pipeline] auto-crop+deskew: {w}x{h} -> {out_w}x{out_h}")
             return warped
 
-    # Fallback: axis-aligned crop.
+    # Fallback: axis-aligned crop of the content box, with a small safety pad.
     if bw < w * 0.35 or bh < h * 0.35:
         return image
-    pad = 3
+    pad = max(3, int(min(w, h) * 0.005))
     bx, by = max(0, bx - pad), max(0, by - pad)
     bw = min(w - bx, bw + 2 * pad)
     bh = min(h - by, bh + 2 * pad)
@@ -272,23 +294,27 @@ class TranslationPipeline:
         update(1, f"Detecting balloons with {self.detector_name}...", 10)
         regions: List[TextRegion] = self.detector.detect(image)
 
-        # GPU model is trained on white speech bubbles — supplement with CV
-        # dark-bubble detection so dark/inverted bubbles aren't missed.
+        # The GPU model is trained on smooth, rounded speech balloons, so it
+        # can skip dark/inverted bubbles and small or edge ones. Supplement it
+        # with the CV detector and keep any balloon it found that the GPU
+        # missed. Safe for recall: a region that isn't really a bubble gets no
+        # Japanese from OCR, so it's never wiped or drawn over.
         if self.detector_name != "CV detector":
             try:
                 cv_det = BubbleDetector()
                 cv_regions = cv_det.detect(image)
-                dark_extras = [r for r in cv_regions if r.dark]
                 existing_boxes = [r.bbox for r in regions]
-                for dr in dark_extras:
+                added = 0
+                for dr in cv_regions:
                     if not any(_boxes_overlap(list(dr.bbox), list(eb)) for eb in existing_boxes):
                         regions.append(dr)
                         existing_boxes.append(dr.bbox)
-                if dark_extras:
+                        added += 1
+                if added:
                     for idx, r in enumerate(regions):
                         r.id = idx + 1
             except Exception as e:
-                print(f"[pipeline] dark bubble supplement failed: {e}")
+                print(f"[pipeline] bubble supplement failed: {e}")
 
         bubble_count = len(regions) if regions else 0
         if bubble_count:
