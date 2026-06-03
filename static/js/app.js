@@ -58,6 +58,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const errorMsg    = document.getElementById("errorMsg");
   const applyBtn    = document.getElementById("applyBtn");
 
+  const themeToggle      = document.getElementById("themeToggle");
+  const apiKeyStatus     = document.getElementById("apiKeyStatus");
+  const apiKeyReveal     = document.getElementById("apiKeyReveal");
+  const enhanceKeyStatus = document.getElementById("enhanceKeyStatus");
+  const enhanceKeyReveal = document.getElementById("enhanceKeyReveal");
+
   /* ── State ── */
   let workflow = "scan-translate";
   let pages = [];          // page objects
@@ -90,6 +96,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan";
   const needsTranslate = wf => wf !== "raw-scan";
 
+  /* ══ THEME ══ */
+  function applyTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    localStorage.setItem("manga_theme", t);
+  }
+  if (themeToggle) themeToggle.addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+    applyTheme(cur === "light" ? "dark" : "light");
+  });
+
+  /* ══ API KEY: persist + reveal + saved badge ══ */
+  function showSaved(el, has) { if (el) el.classList.toggle("on", !!has); }
+  function bindReveal(btn, input) {
+    if (!btn || !input) return;
+    btn.addEventListener("click", () => {
+      input.type = input.type === "password" ? "text" : "password";
+    });
+  }
+  bindReveal(apiKeyReveal, apiKeyInput);
+  bindReveal(enhanceKeyReveal, enhanceKey);
+
   /* ══ WORKFLOW PICKER ══ */
   const wfCards = document.querySelectorAll(".wf-card");
   function setWorkflow(wf) {
@@ -116,6 +143,7 @@ document.addEventListener("DOMContentLoaded", () => {
     apiKeyLabel.textContent = cfg.label;
     apiKeyInput.placeholder = cfg.placeholder;
     apiKeyInput.value = localStorage.getItem(cfg.storageKey) || "";
+    showSaved(apiKeyStatus, apiKeyInput.value.trim());
     modelSelect.innerHTML = "";
     for (const m of cfg.models) {
       const opt = document.createElement("option");
@@ -125,9 +153,10 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.setItem("manga_engine", eng);
   }
   engineSelect.addEventListener("change", () => setEngine(engineSelect.value));
-  apiKeyInput.addEventListener("change", () => {
+  apiKeyInput.addEventListener("input", () => {
     const cfg = ENGINE_CONFIG[engineSelect.value];
     if (cfg) localStorage.setItem(cfg.storageKey, apiKeyInput.value);
+    showSaved(apiKeyStatus, apiKeyInput.value.trim());
   });
   setEngine(localStorage.getItem("manga_engine") || "gemini");
 
@@ -146,13 +175,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   loadFonts();
   fontUpload.addEventListener("change", async () => {
-    const file = fontUpload.files[0];
-    if (!file) return;
-    const form = new FormData(); form.append("file", file);
-    try {
-      const res = await fetch("/api/upload-font", { method: "POST", body: form });
-      if (res.ok) { await loadFonts(); fontSelect.value = file.name; }
-    } catch (_) {}
+    const files = [...fontUpload.files];
+    if (!files.length) return;
+    let last = "";
+    for (const file of files) {
+      const form = new FormData(); form.append("file", file);
+      try {
+        const res = await fetch("/api/upload-font", { method: "POST", body: form });
+        if (res.ok) last = file.name;
+      } catch (_) {}
+    }
+    await loadFonts();
+    if (last) fontSelect.value = last;
     fontUpload.value = "";
   });
 
@@ -177,13 +211,17 @@ document.addEventListener("DOMContentLoaded", () => {
     enhanceModel.placeholder = ENHANCE_MODELS[p] || "";
     enhanceModel.value = localStorage.getItem("manga_enh_model_" + p) || "";
     enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
+    showSaved(enhanceKeyStatus, enhanceKey.value.trim());
     enhanceKeyLabel.textContent = p === "openai" ? "OpenAI API Key" : "Gemini API Key";
   }
   enhanceProvider.addEventListener("change", () => {
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);
     syncEnhanceFields();
   });
-  enhanceKey.addEventListener("change", () => localStorage.setItem(enhKeyName(), enhanceKey.value));
+  enhanceKey.addEventListener("input", () => {
+    localStorage.setItem(enhKeyName(), enhanceKey.value);
+    showSaved(enhanceKeyStatus, enhanceKey.value.trim());
+  });
   enhanceModel.addEventListener("change", () => localStorage.setItem("manga_enh_model_" + enhanceProvider.value, enhanceModel.value));
   enhancePrompt.addEventListener("change", () => localStorage.setItem("manga_enh_prompt", enhancePrompt.value));
   initEnhance();
