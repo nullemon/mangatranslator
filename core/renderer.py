@@ -91,11 +91,11 @@ class TextRenderer:
         inner_w, inner_h = w - 2 * pad_x, h - 2 * pad_y
 
         if inner_w < 16 or inner_h < 12:
-            # Tight bubble — drop padding and try anyway
-            inner_x, inner_y = x + 2, y + 2
-            inner_w, inner_h = max(w - 4, 1), max(h - 4, 1)
-            if inner_w < 10 or inner_h < 8:
-                return image
+            # Tight bubble — drop padding and use the whole rect. We never
+            # bail out (a wiped-but-empty bubble loses content): a tiny bubble
+            # gets text at the minimum size even if it slightly overflows.
+            inner_x, inner_y = x + 1, y + 1
+            inner_w, inner_h = max(w - 2, 1), max(h - 2, 1)
 
         draw = ImageDraw.Draw(image)
         font_size = self._optimal_size(text, inner_w, inner_h, draw)

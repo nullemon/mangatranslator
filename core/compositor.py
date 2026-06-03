@@ -90,11 +90,18 @@ class Compositor:
             if mask is None:
                 mask = masks.get(str(it["id"]))
             dark = bool(it.get("dark", False))
+            from_detector = mask is not None  # precise mask (seg/CV) — trust it
 
+            # No precise mask (AI-located bubble): try to recover the real
+            # enclosed bubble from the box, but reject a recovery that grabs
+            # far more than the box (that means it leaked into the background).
             if mask is None:
                 resolved = self._resolve_bubble(gray, bbox, page_area)
                 if resolved is not None:
-                    mask, _, dark = resolved
+                    rmask, rbb, rdark = resolved
+                    box_area = max(bw * bh, 1)
+                    if rbb[2] * rbb[3] <= box_area * 2.6:
+                        mask, dark = rmask, rdark
 
             if mask is not None:
                 rr = cv2.boundingRect(mask)
@@ -111,14 +118,16 @@ class Compositor:
                 if rect is None:
                     rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
             else:
+                # No reliable bubble shape. Don't draw a big white ellipse
+                # (that's what put boxes in random / out-of-bounds places).
+                # Instead clear just the original text strokes inside the box
+                # and place the translation there — tight and always in-bounds.
                 bb = (bx, by, bw, bh)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
                 used_boxes.append(bb)
-                ell = np.zeros((h, w), np.uint8)
-                cv2.ellipse(ell, (bx + bw // 2, by + bh // 2),
-                            (max(bw // 2 - 2, 4), max(bh // 2 - 2, 4)), 0, 0, 360, 255, -1)
-                self._wipe(result, ell, dark)
+                self._inpaint_text(result, bx, by, bw, bh)
+                dark = self._is_dark_region(gray, bx, by, bw, bh)
                 pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 

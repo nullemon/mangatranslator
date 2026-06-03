@@ -149,6 +149,18 @@ def _det_to_bbox(det, w, h):
     return [x, y, bw, bh]
 
 
+def _has_text_strokes(gray, bbox, lo=0.005, hi=0.85) -> bool:
+    """True if the box plausibly contains text: some — but not overwhelming —
+    dark ink. Filters out blank areas (AI hallucinations) and solid-black art."""
+    x, y, bw, bh = bbox
+    roi = gray[y:y + bh, x:x + bw]
+    if roi.size == 0:
+        return False
+    _, th = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    frac = float(cv2.countNonZero(th)) / roi.size
+    return lo < frac < hi
+
+
 def make_detector(use_seg: bool = True):
     """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
     if use_seg:
@@ -281,6 +293,7 @@ class TranslationPipeline:
             print(f"[pipeline] completeness scan failed: {e}")
             return 0
 
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         existing = [it["bbox"] for it in items]
         next_id = max((it["id"] for it in items), default=0) + 1
         added = 0
@@ -296,6 +309,8 @@ class TranslationPipeline:
                 continue
             if any(_boxes_overlap(bbox, e) for e in existing):
                 continue  # already handled by a detected bubble
+            if not _has_text_strokes(gray, bbox):
+                continue  # AI imagined text on a blank/empty area — skip it
             in_bubble = det.get("in_bubble", True)
             items.append({
                 "id": next_id,
