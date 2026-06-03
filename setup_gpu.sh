@@ -6,6 +6,13 @@ set -e
 echo "==> Installing GPU bubble-segmentation dependencies (torch, ultralytics)..."
 pip3 install --user --break-system-packages -r requirements-gpu.txt
 
+echo "==> Installing hf_transfer (Rust-based fast downloads)..."
+pip3 install --user --break-system-packages hf_transfer
+export HF_HUB_ENABLE_HF_TRANSFER=1
+
+echo "==> Enabling fast HuggingFace downloads..."
+echo "    (hf_transfer uses Rust for 10-100x faster model downloads)"
+
 echo "==> Checking CUDA..."
 python3 - <<'PY'
 import torch
