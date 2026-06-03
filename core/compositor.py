@@ -5,19 +5,10 @@ from typing import List, Optional
 
 from .renderer import TextRenderer
 
-# Region types we never translate — sound effects / onomatopoeia / art text.
 SFX_TYPES = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
 
 
 class Compositor:
-    """Bubble-aware text replacement.
-
-    For each detected region we locate the REAL enclosed speech bubble it sits
-    in (a white blob bounded by the inked outline), wipe its entire interior so
-    the original Japanese disappears completely, then fit the translation inside
-    the true bubble shape. Regions that are not inside a real bubble (sound
-    effects, free art text) are left untouched.
-    """
 
     def __init__(self, font_path: Optional[str] = None):
         self.renderer = TextRenderer(font_path)
@@ -28,8 +19,8 @@ class Compositor:
         result = image.copy()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        placements = []     # (rect, text, dark)
-        used_boxes = []     # bubble bboxes already consumed
+        placements = []
+        used_boxes = []
 
         for it in items:
             it["placed"] = False
@@ -45,21 +36,35 @@ class Compositor:
             if not bbox:
                 continue
 
+            bx, by, bw, bh = [int(v) for v in bbox]
+
             bubble = self._resolve_bubble(gray, bbox, page_area)
-            if bubble is None:
-                continue
-            mask, bb, dark = bubble
-
-            if any(self._overlaps(bb, ub) for ub in used_boxes):
-                continue
-            used_boxes.append(bb)
-
-            self._wipe(result, mask, dark)
-            rect = self._inner_rect(mask)
-            if rect is None:
-                continue
-            placements.append((rect, text, dark))
-            it["placed"] = True
+            if bubble is not None:
+                mask, bb, dark = bubble
+                if any(self._overlaps(bb, ub) for ub in used_boxes):
+                    continue
+                used_boxes.append(bb)
+                self._wipe(result, mask, dark)
+                rect = self._inner_rect(mask)
+                if rect is None:
+                    rect = (bx + 4, by + 4, max(bw - 8, 10), max(bh - 8, 10))
+                placements.append((rect, text, dark))
+                it["placed"] = True
+            elif bw >= 15 and bh >= 15:
+                bb = (bx, by, bw, bh)
+                if any(self._overlaps(bb, ub) for ub in used_boxes):
+                    continue
+                used_boxes.append(bb)
+                pad = max(2, min(bw, bh) // 15)
+                ry0 = max(0, by + pad)
+                ry1 = min(h, by + bh - pad)
+                rx0 = max(0, bx + pad)
+                rx1 = min(w, bx + bw - pad)
+                result[ry0:ry1, rx0:rx1] = (255, 255, 255)
+                placements.append(
+                    ((bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad), text, False)
+                )
+                it["placed"] = True
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
@@ -70,7 +75,6 @@ class Compositor:
 
         return result
 
-    # ── Resolve the actual bubble enclosing a detected region ──
     def _resolve_bubble(self, gray, bbox, page_area):
         H, W = gray.shape[:2]
         x, y, bw, bh = [int(v) for v in bbox]
@@ -78,25 +82,26 @@ class Compositor:
             return None
         cx, cy = x + bw // 2, y + bh // 2
 
-        mx = int(max(bw * 0.7, 50))
-        my = int(max(bh * 0.7, 50))
+        mx = int(max(bw * 0.8, 60))
+        my = int(max(bh * 0.8, 60))
         x0, y0 = max(0, x - mx), max(0, y - my)
         x1, y1 = min(W, x + bw + mx), min(H, y + bh + my)
         roi = gray[y0:y1, x0:x1]
         if roi.size == 0:
             return None
 
-        _, white = cv2.threshold(roi, 195, 255, cv2.THRESH_BINARY)
-        # Denoise + bridge tiny outline breaks WITHOUT crossing the inked
-        # border (a big close would merge the interior with the page). The
-        # text inside is recovered later by filling holes in the contour.
-        white = cv2.morphologyEx(
-            white, cv2.MORPH_OPEN,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-        )
+        # Heavy blur smooths text characters inside bubbles so the interior
+        # registers as one solid white blob instead of fragments between chars.
+        ks = max(21, min(bw, bh) // 2) | 1
+        blurred = cv2.GaussianBlur(roi, (ks, ks), 0)
+
+        _, white = cv2.threshold(blurred, 180, 255, cv2.THRESH_BINARY)
+
+        ck = max(5, min(bw, bh) // 6) | 1
+        ck = min(ck, 15)
         white = cv2.morphologyEx(
             white, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ck, ck)),
         )
 
         num, labels, stats, _ = cv2.connectedComponentsWithStats(white)
@@ -105,10 +110,10 @@ class Compositor:
         if 0 <= lcy < labels.shape[0] and 0 <= lcx < labels.shape[1]:
             lbl = int(labels[lcy, lcx])
         if lbl == 0:
-            iy0 = max(0, (y - bh // 4) - y0)
-            iy1 = min(roi.shape[0], (y + bh + bh // 4) - y0)
-            ix0 = max(0, (x - bw // 4) - x0)
-            ix1 = min(roi.shape[1], (x + bw + bw // 4) - x0)
+            iy0 = max(0, y - y0 - bh // 4)
+            iy1 = min(roi.shape[0], y + bh - y0 + bh // 4)
+            ix0 = max(0, x - x0 - bw // 4)
+            ix1 = min(roi.shape[1], x + bw - x0 + bw // 4)
             sub = labels[iy0:iy1, ix0:ix1]
             vals, counts = np.unique(sub[sub > 0], return_counts=True)
             if len(vals) == 0:
@@ -117,7 +122,6 @@ class Compositor:
 
         comp = (labels == lbl).astype(np.uint8) * 255
 
-        # Reject the page background (a blob touching all four ROI edges).
         if comp[0, :].any() and comp[-1, :].any() and comp[:, 0].any() and comp[:, -1].any():
             return None
 
@@ -129,10 +133,10 @@ class Compositor:
         cv2.drawContours(filled, [cnt], -1, 255, -1)
 
         area = int(cv2.countNonZero(filled))
-        if area < page_area * 0.0006 or area > page_area * 0.16:
+        if area < page_area * 0.0003 or area > page_area * 0.22:
             return None
         rx, ry, rw, rh = cv2.boundingRect(cnt)
-        if rw * rh == 0 or area / float(rw * rh) < 0.45:
+        if rw * rh == 0 or area / float(rw * rh) < 0.30:
             return None
 
         eroded = cv2.erode(
@@ -156,9 +160,8 @@ class Compositor:
         return inter / max(min(aw * ah, bw * bh), 1) > 0.5
 
     def _wipe(self, result, mask, dark):
-        # Erode a touch so we keep the inked bubble outline intact.
         inner = cv2.erode(
-            mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1
+            mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1
         )
         result[inner > 0] = (0, 0, 0) if dark else (255, 255, 255)
 
@@ -169,7 +172,7 @@ class Compositor:
         H, W = m.shape
         dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
         _, maxv, _, loc = cv2.minMaxLoc(dt)
-        if maxv < 6:
+        if maxv < 3:
             return None
         px, py = int(loc[0]), int(loc[1])
         l = r = t = b = 1
