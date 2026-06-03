@@ -48,7 +48,8 @@ Return ONLY a JSON array — no markdown fences, no commentary:
     "height_pct": 8.0,
     "original": "日本語テキスト",
     "translation": "{target_lang.upper()} TEXT",
-    "type": "speech_bubble"
+    "type": "speech_bubble",
+    "in_bubble": true
   }}
 ]
 
@@ -58,6 +59,10 @@ Rules:
 - Use UPPERCASE for dialogue and narration.
 - Keep translations concise so they fit inside speech bubbles.
 - type: "speech_bubble", "narration_box", "sfx", or "title".
+- "in_bubble": true ONLY if the text is enclosed in a speech bubble or a
+  drawn narration box. Set it to false for sound effects (onomatopoeia) and
+  any text drawn directly over the artwork — these must NOT be replaced.
+- Set type to "sfx" for sound effects / onomatopoeia (e.g. ドーン, バァン, わぁぁ).
 - Return ONLY the JSON array."""
 
 

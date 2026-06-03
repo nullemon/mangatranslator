@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.requests import Request
 
 from core.pipeline import TranslationPipeline
+from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
 app = FastAPI(title="MangaTranslator")
@@ -56,6 +58,8 @@ async def translate(
     with open(upload_path, "wb") as f:
         f.write(content)
 
+    font_path = f"fonts/{font}" if font and os.path.exists(f"fonts/{font}") else None
+
     tasks[task_id] = {
         "status": "processing",
         "step": 0,
@@ -63,10 +67,9 @@ async def translate(
         "progress": 0,
         "upload_path": upload_path,
         "output_path": output_path,
+        "font_path": font_path,
         "mode": "translate",
     }
-
-    font_path = f"fonts/{font}" if font and os.path.exists(f"fonts/{font}") else None
 
     asyncio.create_task(
         _run(
@@ -238,6 +241,9 @@ async def status(task_id: str):
     return tasks[task_id]
 
 
+_NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @app.get("/api/result/{task_id}")
 async def result(task_id: str):
     if task_id not in tasks:
@@ -248,17 +254,81 @@ async def result(task_id: str):
     p = t["result"]["output_path"]
     if not os.path.exists(p):
         raise HTTPException(404)
-    return FileResponse(p, media_type="image/png")
+    return FileResponse(p, media_type="image/png", headers=_NO_CACHE)
 
 
 @app.get("/api/original/{task_id}")
 async def original(task_id: str):
     if task_id not in tasks:
         raise HTTPException(404)
-    p = tasks[task_id].get("upload_path", "")
+    t = tasks[task_id]
+    # Prefer the processed base (same dimensions as the result, so the
+    # before/after comparison aligns perfectly); fall back to the upload.
+    p = (t.get("result") or {}).get("base_path", "")
+    if not p or not os.path.exists(p):
+        p = t.get("upload_path", "")
     if not p or not os.path.exists(p):
         raise HTTPException(404)
-    return FileResponse(p)
+    return FileResponse(p, media_type="image/png")
+
+
+@app.post("/api/rerender/{task_id}")
+async def rerender(task_id: str, request: Request):
+    if task_id not in tasks:
+        raise HTTPException(404, "Task not found")
+    t = tasks[task_id]
+    r = t.get("result") or {}
+    base = r.get("base_path", "")
+    if not base or not os.path.exists(base) or not r.get("items"):
+        raise HTTPException(400, "This page can't be re-rendered")
+
+    payload = await request.json()
+    excluded = {str(i) for i in payload.get("excluded", [])}
+    edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
+
+    items = []
+    for it in r["items"]:
+        nid = str(it["id"])
+        text = edits.get(nid, it.get("translation", ""))
+        if nid in excluded:
+            text = ""
+        items.append({
+            "id": it["id"],
+            "bbox": it["bbox"],
+            "original": it.get("original", ""),
+            "translation": text,
+            "type": it.get("type", ""),
+            "in_bubble": it.get("in_bubble", True),
+        })
+
+    def work():
+        base_img = cv2.imread(base)
+        if base_img is None:
+            raise ValueError("Base image missing")
+        comp = Compositor(t.get("font_path"))
+        out = comp.compose(base_img, items)
+        cv2.imwrite(r["output_path"], out)
+
+    await asyncio.get_event_loop().run_in_executor(None, work)
+
+    # Reflect new placement / edits back into the stored result.
+    r["items"] = [
+        {
+            "id": it["id"], "bbox": it["bbox"], "original": it["original"],
+            "translation": it["translation"], "type": it["type"],
+            "in_bubble": it["in_bubble"], "placed": it.get("placed", False),
+        }
+        for it in items
+    ]
+    r["translations"] = {
+        str(it["id"]): {
+            "original": it["original"], "translation": it["translation"], "type": it["type"]
+        }
+        for it in items
+    }
+    r["num_translated"] = sum(1 for it in items if it.get("placed"))
+
+    return {"items": r["items"], "ts": time.time()}
 
 
 @app.get("/api/enhanced/{task_id}")

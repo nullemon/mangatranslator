@@ -71,18 +71,29 @@ class TextRenderer:
     def _render_in_region(
         self, image: Image.Image, region, text: str
     ) -> Image.Image:
-        x, y, w, h = region.bbox
+        return self.draw_in_rect(image, region.bbox, text, (0, 0, 0))
+
+    def draw_in_rect(
+        self,
+        image: Image.Image,
+        rect: Tuple[int, int, int, int],
+        text: str,
+        color: Tuple[int, int, int] = (0, 0, 0),
+    ) -> Image.Image:
+        """Fit `text` (wrapped, auto-sized, centered) inside `rect`."""
+        x, y, w, h = rect
 
         pad_x = max(int(w * self.padding_ratio), 4)
         pad_y = max(int(h * self.padding_ratio), 4)
+        inner_x, inner_y = x + pad_x, y + pad_y
+        inner_w, inner_h = w - 2 * pad_x, h - 2 * pad_y
 
-        inner_x = x + pad_x
-        inner_y = y + pad_y
-        inner_w = w - 2 * pad_x
-        inner_h = h - 2 * pad_y
-
-        if inner_w < 20 or inner_h < 15:
-            return image
+        if inner_w < 16 or inner_h < 12:
+            # Tight bubble — drop padding and try anyway
+            inner_x, inner_y = x + 2, y + 2
+            inner_w, inner_h = max(w - 4, 1), max(h - 4, 1)
+            if inner_w < 10 or inner_h < 8:
+                return image
 
         draw = ImageDraw.Draw(image)
         font_size = self._optimal_size(text, inner_w, inner_h, draw)
@@ -103,8 +114,8 @@ class TextRenderer:
             bb = draw.textbbox((0, 0), line, font=font)
             lw = bb[2] - bb[0]
             lx = inner_x + max(0, (inner_w - lw) // 2)
-
-            draw.text((lx, cur_y), line, fill=(0, 0, 0), font=font)
+            # offset by the bbox origin so the glyph sits where we expect
+            draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font)
             cur_y += heights[i] + spacing
 
         return image

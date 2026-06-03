@@ -39,11 +39,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const newBtn      = document.getElementById("newBtn");
   const retryBtn    = document.getElementById("retryBtn");
   const errorMsg    = document.getElementById("errorMsg");
+  const applyBtn    = document.getElementById("applyBtn");
 
   let selectedFile = null;
   let currentTaskId = null;
   let pollTimer = null;
   let workflow = "scan-translate";
+  let currentItems = [];          // editable translation items
+  const excluded = new Set();     // ids the user rejected
 
   const ENHANCE_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
 
@@ -392,6 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelector('.tab[data-tab="translated"]').textContent = scanOnly ? "Scan" : "Translated";
     document.querySelector('.tab[data-tab="details"]').style.display = scanOnly ? "none" : "";
 
+    excluded.clear();
     buildTranslationsList(data.result);
     showSection("result");
     initComparison();
@@ -400,27 +404,99 @@ document.addEventListener("DOMContentLoaded", () => {
   function buildTranslationsList(result) {
     const el = document.getElementById("translationsList");
     el.innerHTML = "";
-    if (!result || !result.translations) return;
 
-    const entries = Object.entries(result.translations);
-    if (entries.length === 0) {
-      el.innerHTML = '<p style="color:var(--text-dim)">No translations available</p>';
+    // Prefer the rich `items` (with placement + ids); fall back to translations
+    currentItems = (result && result.items) ? result.items.slice() : [];
+    if (currentItems.length === 0 && result && result.translations) {
+      currentItems = Object.entries(result.translations).map(([id, t]) => ({
+        id: Number(id), original: t.original, translation: t.translation,
+        type: t.type, placed: true,
+      }));
+    }
+
+    if (currentItems.length === 0) {
+      el.innerHTML = '<p style="color:var(--text-dim)">No text regions found</p>';
       return;
     }
 
-    for (const [id, t] of entries) {
+    for (const it of currentItems) {
+      const id = it.id;
+      const isExcluded = excluded.has(String(id));
+      const skipped = !it.placed && !isExcluded;  // detected but not put in a bubble
+
       const div = document.createElement("div");
-      div.className = "tl-item";
+      div.className = "tl-item" + (isExcluded ? " excluded" : "");
+      div.dataset.id = id;
+
+      let badge = "";
+      if (isExcluded) badge = '<span class="tl-badge skip">skipped by you</span>';
+      else if (skipped) badge = '<span class="tl-badge warn">not in a bubble</span>';
+      else badge = '<span class="tl-badge ok">in bubble</span>';
+
       div.innerHTML = `
         <div class="tl-header">
-          <span class="tl-id">Region ${id}</span>
-          <span class="tl-type">${t.type || "dialogue"}</span>
+          <span class="tl-id">#${id}</span>
+          <span class="tl-type">${esc(it.type || "dialogue")}</span>
+          ${badge}
+          <button class="tl-x" title="Skip this bubble" data-id="${id}">✕</button>
         </div>
-        <div class="tl-original">${esc(t.original || "")}</div>
-        <div class="tl-translation">${esc(t.translation || "")}</div>
+        <div class="tl-original">${esc(it.original || "")}</div>
+        <textarea class="tl-edit" data-id="${id}" rows="2"
+          ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>
       `;
       el.appendChild(div);
     }
+
+    // wire up X buttons
+    el.querySelectorAll(".tl-x").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        if (excluded.has(id)) excluded.delete(id); else excluded.add(id);
+        buildTranslationsList(collectResult());
+      });
+    });
+  }
+
+  // snapshot current edits back into an items structure for re-render
+  function collectResult() {
+    document.querySelectorAll(".tl-edit").forEach(t => {
+      const it = currentItems.find(i => String(i.id) === t.dataset.id);
+      if (it) it.translation = t.value;
+    });
+    return { items: currentItems };
+  }
+
+  async function applyChanges() {
+    if (!currentTaskId) return;
+    collectResult();
+    const edits = {};
+    currentItems.forEach(it => { edits[it.id] = it.translation; });
+
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Re-rendering...";
+    try {
+      const res = await fetch(`/api/rerender/${currentTaskId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: [...excluded], edits }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const data = await res.json();
+      refreshResultImages();
+      buildTranslationsList({ items: data.items });
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      applyBtn.disabled = false;
+      applyBtn.textContent = "Apply & Re-render";
+    }
+  }
+
+  function refreshResultImages() {
+    const ts = Date.now();
+    const url = `/api/result/${currentTaskId}?t=${ts}`;
+    document.getElementById("transImg").src = url;
+    document.getElementById("transFull").src = url;
   }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -484,6 +560,7 @@ document.addEventListener("DOMContentLoaded", () => {
     a.click();
   });
 
+  applyBtn.addEventListener("click", applyChanges);
   newBtn.addEventListener("click", resetAll);
   retryBtn.addEventListener("click", () => {
     showSection("upload");
