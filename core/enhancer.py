@@ -90,14 +90,21 @@ class ImageEnhancer:
 
     # ── Google Gemini (2.5 Flash Image / "Nano Banana") ──
     def _gemini(self, image, prompt, api_key, model) -> np.ndarray:
-        png = self._encode_png(image)
-        b64 = base64.b64encode(png).decode()
+        h, w = image.shape[:2]
+        max_dim = 2048
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise ValueError("Failed to encode image for Gemini")
+        b64 = base64.b64encode(buf.tobytes()).decode()
         body = {
             "contents": [
                 {
                     "parts": [
                         {"text": prompt},
-                        {"inlineData": {"mimeType": "image/png", "data": b64}},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
                     ]
                 }
             ],
@@ -106,9 +113,13 @@ class ImageEnhancer:
         url = self.GEMINI_URL.format(model=model)
         headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
 
+        img_kb = len(b64) * 3 // 4 // 1024
+        print(f"[enhance] Gemini request: model={model}, image={img_kb}KB")
+
         with httpx.Client(timeout=self.timeout) as client:
             resp = client.post(url, headers=headers, json=body)
 
+        print(f"[enhance] Gemini response: {resp.status_code}")
         if resp.status_code != 200:
             raise RuntimeError(self._err("Gemini", resp))
 
