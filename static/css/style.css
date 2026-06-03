@@ -261,6 +261,19 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .pg-tools button:hover:not(:disabled){background:var(--accent)}
 .pg-tools button:disabled{opacity:.3;cursor:default}
 
+/* ── Move text (drag to reposition) ── */
+.move-bar{display:flex;align-items:center;gap:.8rem;margin-bottom:.8rem;flex-wrap:wrap}
+.move-hint{font-size:.8rem;color:var(--text-dim)}
+.trans-stage{position:relative;display:block;line-height:0}
+.move-layer{position:absolute;inset:0;display:none}
+.move-layer.on{display:block}
+.move-box{position:absolute;border:2px dashed var(--accent);background:rgba(59,130,246,.10);
+  cursor:grab;border-radius:4px;touch-action:none;transition:background .12s,border-color .12s}
+.move-box:hover{background:rgba(59,130,246,.20)}
+.move-box.dragging{cursor:grabbing;background:rgba(59,130,246,.28);border-style:solid}
+.move-box .move-tag{position:absolute;top:-9px;left:-2px;font-size:.6rem;font-weight:700;
+  background:var(--accent);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4}
+
 /* ── Details / editable translations ── */
 .details-bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
 .details-hint{font-size:.8rem;color:var(--text-dim)}

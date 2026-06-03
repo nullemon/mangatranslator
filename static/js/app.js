@@ -53,6 +53,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const detailsTab    = document.querySelector('.tab[data-tab="details"]');
   const fontScale     = document.getElementById("fontScale");
   const fontScaleVal  = document.getElementById("fontScaleVal");
+  const moveToggle    = document.getElementById("moveToggle");
+  const moveHint      = document.getElementById("moveHint");
+  const moveApply     = document.getElementById("moveApply");
+  const moveLayer     = document.getElementById("moveLayer");
 
   fontScale.addEventListener("input", () => {
     fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
@@ -257,7 +261,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), error: "", rev: 0,
+        excluded: new Set(), offsets: {}, error: "", rev: 0,
       });
     }
 
@@ -567,19 +571,25 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  applyBtn.addEventListener("click", applyChanges);
-  async function applyChanges() {
+  applyBtn.addEventListener("click", () => applyChanges());
+  async function applyChanges(btn) {
     const page = getActive();
     if (!page || !page.taskId) return;
     collectEdits(page);
     const edits = {};
     page.items.forEach(it => { edits[it.id] = it.translation; });
 
-    applyBtn.disabled = true; applyBtn.textContent = "Re-rendering...";
+    const useBtn = btn || applyBtn;
+    const label = useBtn.textContent;
+    useBtn.disabled = true; useBtn.textContent = "Re-rendering...";
     try {
       const res = await fetch(`/api/rerender/${page.taskId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ excluded: [...page.excluded], edits, font_scale: parseFloat(fontScale.value) }),
+        body: JSON.stringify({
+          excluded: [...page.excluded], edits,
+          font_scale: parseFloat(fontScale.value),
+          offsets: page.offsets || {},
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const data = await res.json();
@@ -589,8 +599,81 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       showError(e.message);
     } finally {
-      applyBtn.disabled = false; applyBtn.textContent = "Apply & Re-render";
+      useBtn.disabled = false; useBtn.textContent = label;
     }
+  }
+
+  /* ══ MOVE TEXT (drag to reposition) ══ */
+  let moveMode = false;
+  moveToggle.addEventListener("click", () => {
+    moveMode = !moveMode;
+    moveLayer.classList.toggle("on", moveMode);
+    moveToggle.classList.toggle("btn-primary", moveMode);
+    moveToggle.classList.toggle("btn-ghost", !moveMode);
+    moveToggle.textContent = moveMode ? "Done moving" : "Move text";
+    moveApply.style.display = moveMode ? "" : "none";
+    moveHint.textContent = moveMode
+      ? "Drag any box, then Apply & Re-render."
+      : "Turn on to drag any translation into place.";
+    if (moveMode) buildMoveBoxes();
+  });
+  moveApply.addEventListener("click", () => applyChanges(moveApply));
+
+  function buildMoveBoxes() {
+    const page = getActive();
+    moveLayer.innerHTML = "";
+    if (!page || !page.items) return;
+    const W = transFull.naturalWidth, H = transFull.naturalHeight;
+    if (!W || !H) return;
+    page.offsets = page.offsets || {};
+
+    for (const it of page.items) {
+      if (!it.placed || !it.bbox) continue;
+      if (page.excluded.has(String(it.id))) continue;
+      const [bx, by, bw, bh] = it.bbox;
+      const off = page.offsets[it.id] || [0, 0];
+      const box = document.createElement("div");
+      box.className = "move-box";
+      box.style.left   = ((bx + off[0]) / W * 100) + "%";
+      box.style.top    = ((by + off[1]) / H * 100) + "%";
+      box.style.width  = (bw / W * 100) + "%";
+      box.style.height = (bh / H * 100) + "%";
+      box.innerHTML = `<span class="move-tag">#${it.id}</span>`;
+      bindDrag(box, it, page, W, H);
+      moveLayer.appendChild(box);
+    }
+  }
+
+  function bindDrag(box, it, page, W, H) {
+    let startX, startY, baseX, baseY, dragging = false;
+    box.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      dragging = true;
+      box.classList.add("dragging");
+      box.setPointerCapture(e.pointerId);
+      startX = e.clientX; startY = e.clientY;
+      const off = page.offsets[it.id] || [0, 0];
+      baseX = off[0]; baseY = off[1];
+    });
+    box.addEventListener("pointermove", e => {
+      if (!dragging) return;
+      const rect = transFull.getBoundingClientRect();
+      const sx = W / rect.width, sy = H / rect.height;   // screen→image px
+      const dx = Math.round(baseX + (e.clientX - startX) * sx);
+      const dy = Math.round(baseY + (e.clientY - startY) * sy);
+      page.offsets[it.id] = [dx, dy];
+      const [bx, by] = it.bbox;
+      box.style.left = ((bx + dx) / W * 100) + "%";
+      box.style.top  = ((by + dy) / H * 100) + "%";
+    });
+    const end = e => {
+      if (!dragging) return;
+      dragging = false;
+      box.classList.remove("dragging");
+      try { box.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+    box.addEventListener("pointerup", end);
+    box.addEventListener("pointercancel", end);
   }
 
   /* ══ COMPARISON SLIDER ══ */
@@ -631,8 +714,11 @@ document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       tab.classList.add("active");
       document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+      if (tab.dataset.tab === "translated" && moveMode) buildMoveBoxes();
     });
   });
+  // Rebuild drag boxes once the translated image has its real dimensions.
+  transFull.addEventListener("load", () => { if (moveMode) buildMoveBoxes(); });
 
   /* ══ DOWNLOAD / ZIP / NEW ══ */
   downloadBtn.addEventListener("click", () => {

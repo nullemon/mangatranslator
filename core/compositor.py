@@ -23,8 +23,10 @@ class Compositor:
         image: np.ndarray,
         items: List[dict],
         masks: Optional[Dict] = None,
+        offsets: Optional[Dict] = None,
     ) -> np.ndarray:
         masks = masks or {}
+        offsets = offsets or {}
         h, w = image.shape[:2]
         page_area = h * w
         result = image.copy()
@@ -32,6 +34,15 @@ class Compositor:
 
         placements = []     # (rect, text, color)
         used_boxes = []
+
+        def offset_rect(item, rect):
+            off = offsets.get(item["id"])
+            if off is None:
+                off = offsets.get(str(item["id"]))
+            if not off:
+                return rect
+            dx, dy = int(off[0]), int(off[1])
+            return (rect[0] + dx, rect[1] + dy, rect[2], rect[3])
 
         for it in items:
             it["placed"] = False
@@ -64,7 +75,7 @@ class Compositor:
                 pad = max(2, min(rw, rh) // 16)
                 rect = (rx + pad, ry + pad, rw - 2 * pad, rh - 2 * pad)
                 color = (255, 255, 255) if dark else (0, 0, 0)
-                placements.append((rect, text, color))
+                placements.append((offset_rect(it, rect), text, color))
                 it["placed"] = True
                 continue
 
@@ -112,7 +123,7 @@ class Compositor:
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 
             color = (255, 255, 255) if dark else (0, 0, 0)
-            placements.append((rect, text, color))
+            placements.append((offset_rect(it, rect), text, color))
             it["placed"] = True
 
         if placements:

@@ -259,7 +259,15 @@
         </div>
 
         <div class="tab-panel" id="panel-translated">
-          <img id="transFull" class="full-img" alt="Translated">
+          <div class="move-bar">
+            <button class="btn btn-ghost btn-sm" id="moveToggle">Move text</button>
+            <span class="move-hint" id="moveHint">Turn on to drag any translation into place.</span>
+            <button class="btn btn-primary btn-sm" id="moveApply" style="display:none">Apply &amp; Re-render</button>
+          </div>
+          <div class="trans-stage" id="transStage">
+            <img id="transFull" class="full-img" alt="Translated">
+            <div class="move-layer" id="moveLayer"></div>
+          </div>
         </div>
 
         <div class="tab-panel" id="panel-details">

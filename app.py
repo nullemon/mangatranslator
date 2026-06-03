@@ -313,6 +313,7 @@ async def rerender(task_id: str, request: Request):
     excluded = {str(i) for i in payload.get("excluded", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale", 1.0))
+    offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
 
     items = []
     for it in r["items"]:
@@ -335,7 +336,7 @@ async def rerender(task_id: str, request: Request):
         if base_img is None:
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"), font_scale=font_scale)
-        out = comp.compose(base_img, items, MASKS.get(task_id))
+        out = comp.compose(base_img, items, MASKS.get(task_id), offsets)
         cv2.imwrite(r["output_path"], out)
 
     await asyncio.get_event_loop().run_in_executor(None, work)
