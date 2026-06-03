@@ -120,6 +120,35 @@ def scan_cleanup(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
+_SFX_KINDS = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
+
+
+def _boxes_overlap(a, b, thresh=0.3) -> bool:
+    """True if box a (x,y,w,h) overlaps b enough to be the same region."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    xi, yi = max(ax, bx), max(ay, by)
+    xf, yf = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    if xi >= xf or yi >= yf:
+        return False
+    inter = (xf - xi) * (yf - yi)
+    smaller = max(min(aw * ah, bw * bh), 1)
+    # Also treat "center of one inside the other" as overlap.
+    acx, acy = ax + aw / 2, ay + ah / 2
+    bcx, bcy = bx + bw / 2, by + bh / 2
+    center_in = (bx <= acx <= bx + bw and by <= acy <= by + bh) or \
+                (ax <= bcx <= ax + aw and ay <= bcy <= ay + ah)
+    return inter / smaller > thresh or center_in
+
+
+def _det_to_bbox(det, w, h):
+    x = max(0, min(int(det.get("x_pct", 0) / 100 * w), w - 1))
+    y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
+    bw = max(8, min(int(det.get("width_pct", 0) / 100 * w), w - x))
+    bh = max(8, min(int(det.get("height_pct", 0) / 100 * h), h - y))
+    return [x, y, bw, bh]
+
+
 def make_detector(use_seg: bool = True):
     """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
     if use_seg:
@@ -182,9 +211,6 @@ class TranslationPipeline:
             items, ann_path, masks = self._smart_detect(image, output_path, update)
         else:
             items, ann_path, masks = self._standard_detect(image, output_path, update)
-            if not items:
-                update(2, "No bubbles or free text found — trying full AI scan...", 52)
-                items, ann_path, masks = self._smart_detect(image, output_path, update)
         self.last_masks = masks
 
         if not items:
@@ -235,51 +261,55 @@ class TranslationPipeline:
                 })
                 masks[r.id] = r.mask
 
-        update(2, "Detecting free text (titles, credits)...", 50)
-        bubble_ids = [it["id"] for it in items]
-        free_items = self._detect_free_text(image, bubble_ids, update)
-        if free_items:
-            next_id = max((it["id"] for it in items), default=0) + 1
-            for fi in free_items:
-                fi["id"] = next_id
-                next_id += 1
-            items.extend(free_items)
-            update(2, f"Found {len(free_items)} free text regions", 55)
-        else:
-            update(2, "No free text found", 55)
+        # Completeness pass: the detector can miss small / spiky shout bubbles
+        # and free text (titles, credits). Ask the AI to find EVERY text region
+        # and add anything not already covered by a detected bubble.
+        update(2, "Scanning for any missed text...", 50)
+        added = self._add_missed_text(image, items, update)
+        update(2, f"Added {added} region(s) the detector missed", 55)
 
         return items, ann_path, masks
 
-    def _detect_free_text(self, image, bubble_ids, update):
+    def _add_missed_text(self, image, items, update) -> int:
+        """Run AI full-page detection and append any text region that the
+        bubble detector didn't already cover. Returns how many were added."""
         h, w = image.shape[:2]
         try:
-            detections = self.translator.detect_free_text(
-                image, self.target_lang, bubble_ids
-            )
-            print(f"[pipeline] free text detection returned {len(detections)} regions")
+            dets = self.translator.smart_detect_and_translate(image, self.target_lang)
+            print(f"[pipeline] completeness scan found {len(dets)} total text regions")
         except Exception as e:
-            print(f"[pipeline] free text detection failed: {e}")
-            update(2, "Free text detection failed, will retry with AI scan", 52)
-            return []
-        items = []
-        for det in detections:
-            x = max(0, min(int(det.get("x_pct", 0) / 100 * w), w - 1))
-            y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
-            bw = max(10, min(int(det.get("width_pct", 0) / 100 * w), w - x))
-            bh = max(10, min(int(det.get("height_pct", 0) / 100 * h), h - y))
+            print(f"[pipeline] completeness scan failed: {e}")
+            return 0
+
+        existing = [it["bbox"] for it in items]
+        next_id = max((it["id"] for it in items), default=0) + 1
+        added = 0
+        for det in dets:
             kind = (det.get("type") or "").lower().replace(" ", "_")
-            if kind in ("sfx", "sound", "sound_effect"):
+            if kind in _SFX_KINDS:
                 continue
+            text = (det.get("translation") or "").strip()
+            if not text:
+                continue
+            bbox = _det_to_bbox(det, w, h)
+            if bbox[2] < 8 or bbox[3] < 8:
+                continue
+            if any(_boxes_overlap(bbox, e) for e in existing):
+                continue  # already handled by a detected bubble
+            in_bubble = det.get("in_bubble", True)
             items.append({
-                "id": 0,
-                "bbox": [x, y, bw, bh],
+                "id": next_id,
+                "bbox": bbox,
                 "original": det.get("original", ""),
-                "translation": det.get("translation", ""),
-                "type": kind or "title",
-                "in_bubble": False,
+                "translation": text,
+                "type": kind or ("dialogue" if in_bubble else "caption"),
+                "in_bubble": bool(in_bubble),
                 "dark": False,
             })
-        return items
+            existing.append(bbox)
+            next_id += 1
+            added += 1
+        return added
 
     def _smart_detect(self, image, output_path, update):
         update(1, "AI is analyzing the page...", 10)
