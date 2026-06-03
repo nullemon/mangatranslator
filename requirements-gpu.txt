@@ -1,0 +1,12 @@
+# ── Optional GPU acceleration (recommended on your RTX 4080) ──
+# Unlocks the trained speech-balloon segmentation model, which produces precise
+# per-balloon pixel masks — far better text removal and containment than CV.
+# Without these, the app automatically falls back to the built-in CV detector.
+#
+# Install with:  ./setup_gpu.sh
+#
+# On Linux, the default torch wheels already ship CUDA support for the 4080.
+torch>=2.2.0
+torchvision>=0.17.0
+ultralytics>=8.2.0
+huggingface_hub>=0.24.0

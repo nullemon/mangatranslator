@@ -250,7 +250,7 @@ header{margin-bottom:1.5rem}
 /* ── Comparison slider ── */
 .comparison{
   position:relative;overflow:hidden;border-radius:8px;
-  cursor:ew-resize;user-select:none;max-height:80vh;
+  cursor:ew-resize;user-select:none;
 }
 .comp-img{display:block;width:100%;height:auto}
 .comp-overlay{

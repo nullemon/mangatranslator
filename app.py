@@ -26,6 +26,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 tasks: dict = {}
+# Balloon interior masks per task (numpy arrays — kept out of `tasks` so the
+# JSON status endpoint stays serializable). Reused for clean re-renders.
+MASKS: dict = {}
 
 
 @app.get("/")
@@ -140,6 +143,7 @@ async def _run(
             None,
             lambda: pipeline.process(image_path, output_path, on_progress),
         )
+        MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
 
         update = {
             "status": "done",
@@ -306,6 +310,7 @@ async def rerender(task_id: str, request: Request):
             "translation": text,
             "type": it.get("type", ""),
             "in_bubble": it.get("in_bubble", True),
+            "dark": it.get("dark", False),
         })
 
     def work():
@@ -313,7 +318,7 @@ async def rerender(task_id: str, request: Request):
         if base_img is None:
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"))
-        out = comp.compose(base_img, items)
+        out = comp.compose(base_img, items, MASKS.get(task_id))
         cv2.imwrite(r["output_path"], out)
 
     await asyncio.get_event_loop().run_in_executor(None, work)
@@ -323,7 +328,8 @@ async def rerender(task_id: str, request: Request):
         {
             "id": it["id"], "bbox": it["bbox"], "original": it["original"],
             "translation": it["translation"], "type": it["type"],
-            "in_bubble": it["in_bubble"], "placed": it.get("placed", False),
+            "in_bubble": it["in_bubble"], "dark": it.get("dark", False),
+            "placed": it.get("placed", False),
         }
         for it in items
     ]

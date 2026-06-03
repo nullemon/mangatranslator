@@ -8,6 +8,19 @@ from .translator import make_translator
 from .compositor import Compositor
 
 
+def make_detector(use_seg: bool = True):
+    """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
+    if use_seg:
+        try:
+            from .bubble_seg import BubbleSegDetector
+            d = BubbleSegDetector()
+            if d.ok:
+                return d, "segmentation model (GPU)"
+        except Exception as e:
+            print(f"[pipeline] seg detector unavailable: {e}")
+    return BubbleDetector(), "CV detector"
+
+
 class TranslationPipeline:
     def __init__(
         self,
@@ -17,12 +30,14 @@ class TranslationPipeline:
         font_path: Optional[str] = None,
         use_smart_detection: bool = False,
         provider: str = "claude",
+        use_seg: bool = True,
     ):
-        self.detector = BubbleDetector()
+        self.detector, self.detector_name = make_detector(use_seg)
         self.translator = make_translator(provider, api_key, model)
         self.compositor = Compositor(font_path)
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
+        self.last_masks: Dict[int, np.ndarray] = {}
 
     def process(
         self,
@@ -49,43 +64,45 @@ class TranslationPipeline:
         base_path = self._base_path(output_path)
         cv2.imwrite(base_path, image)
 
+        self.last_masks = {}
         if self.use_smart_detection:
-            items, ann_path = self._smart_detect(image, output_path, update)
+            items, ann_path, masks = self._smart_detect(image, output_path, update)
         else:
-            items, ann_path = self._standard_detect(image, output_path, update)
+            items, ann_path, masks = self._standard_detect(image, output_path, update)
+        self.last_masks = masks
 
         if not items:
             cv2.imwrite(output_path, image)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
 
-        update(3, "Removing original text...", 60)
-        update(4, "Fitting translations into bubbles...", 80)
-        result = self.compositor.compose(image, items)
+        update(3, "Erasing original text...", 60)
+        update(4, "Fitting translations into balloons...", 80)
+        result = self.compositor.compose(image, items, masks)
         cv2.imwrite(output_path, result)
         update(5, "Complete!", 100)
 
         return self._result(output_path, base_path, items, ann_path)
 
-    # ── Detection strategies → unified `items` list ──
+    # ── Detection strategies → (items, annotated_path, masks) ──
     def _standard_detect(self, image, output_path, update):
-        update(1, "Detecting text regions...", 10)
-        regions = self.detector.detect(image)
+        update(1, f"Detecting balloons with {self.detector_name}...", 10)
+        regions: List[TextRegion] = self.detector.detect(image)
         if not regions:
-            return [], ""
-        update(1, f"Found {len(regions)} text regions", 20)
+            return [], "", {}
+        update(1, f"Found {len(regions)} balloons", 22)
 
         annotated = self.detector.create_annotated_image(image, regions)
         ann_path = self._suffix_path(output_path, "annotated")
         cv2.imwrite(ann_path, annotated)
 
-        update(2, "Translating...", 30)
+        update(2, "Translating...", 32)
         translations = self.translator.translate_regions(
             image, annotated, len(regions), self.target_lang
         )
         update(2, f"Translated {len(translations)} regions", 55)
 
-        items = []
+        items, masks = [], {}
         for r in regions:
             tr = translations.get(r.id, {})
             items.append({
@@ -95,15 +112,17 @@ class TranslationPipeline:
                 "translation": tr.get("translation", ""),
                 "type": tr.get("type", "dialogue"),
                 "in_bubble": True,
+                "dark": bool(getattr(r, "dark", False)),
             })
-        return items, ann_path
+            masks[r.id] = r.mask
+        return items, ann_path, masks
 
     def _smart_detect(self, image, output_path, update):
         update(1, "AI is analyzing the page...", 10)
         detections = self.translator.smart_detect_and_translate(image, self.target_lang)
         update(2, f"Found {len(detections)} text regions", 45)
         if not detections:
-            return [], ""
+            return [], "", {}
 
         h, w = image.shape[:2]
         items = []
@@ -119,15 +138,17 @@ class TranslationPipeline:
                 "translation": det.get("translation", ""),
                 "type": det.get("type", "dialogue"),
                 "in_bubble": det.get("in_bubble", True),
+                "dark": False,
             })
-        return items, ""
+        return items, "", {}
 
     # ── Re-render with an edited / filtered item set ──
-    def recompose(self, base_path: str, items: List[dict], output_path: str) -> np.ndarray:
+    def recompose(self, base_path: str, items: List[dict], output_path: str,
+                  masks: Optional[Dict] = None) -> np.ndarray:
         image = cv2.imread(base_path)
         if image is None:
             raise ValueError(f"Cannot load base image: {base_path}")
-        result = self.compositor.compose(image, items)
+        result = self.compositor.compose(image, items, masks)
         cv2.imwrite(output_path, result)
         return result
 
@@ -144,6 +165,7 @@ class TranslationPipeline:
             "output_path": output_path,
             "base_path": base_path,
             "annotated_path": annotated_path,
+            "detector": self.detector_name,
             "items": [
                 {
                     "id": it["id"],
@@ -152,6 +174,7 @@ class TranslationPipeline:
                     "translation": it.get("translation", ""),
                     "type": it.get("type", ""),
                     "in_bubble": it.get("in_bubble", True),
+                    "dark": it.get("dark", False),
                     "placed": it.get("placed", False),
                 }
                 for it in items
