@@ -294,18 +294,18 @@ class TranslationPipeline:
         update(1, f"Detecting balloons with {self.detector_name}...", 10)
         regions: List[TextRegion] = self.detector.detect(image)
 
-        # The GPU model is trained on smooth, rounded speech balloons, so it
-        # can skip dark/inverted bubbles and small or edge ones. Supplement it
-        # with the CV detector and keep any balloon it found that the GPU
-        # missed. Safe for recall: a region that isn't really a bubble gets no
-        # Japanese from OCR, so it's never wiped or drawn over.
+        # The GPU model handles white/light bubbles well but misses dark /
+        # inverted ones. Supplement with ONLY the CV detector's dark-bubble
+        # results — adding all CV results causes false positives on eyes,
+        # highlights, and small artwork gaps.
         if self.detector_name != "CV detector":
             try:
                 cv_det = BubbleDetector()
                 cv_regions = cv_det.detect(image)
+                dark_extras = [r for r in cv_regions if r.dark]
                 existing_boxes = [r.bbox for r in regions]
                 added = 0
-                for dr in cv_regions:
+                for dr in dark_extras:
                     if not any(_boxes_overlap(list(dr.bbox), list(eb)) for eb in existing_boxes):
                         regions.append(dr)
                         existing_boxes.append(dr.bbox)
@@ -314,7 +314,7 @@ class TranslationPipeline:
                     for idx, r in enumerate(regions):
                         r.id = idx + 1
             except Exception as e:
-                print(f"[pipeline] bubble supplement failed: {e}")
+                print(f"[pipeline] dark bubble supplement failed: {e}")
 
         bubble_count = len(regions) if regions else 0
         if bubble_count:
