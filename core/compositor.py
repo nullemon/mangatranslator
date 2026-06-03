@@ -71,7 +71,7 @@ class Compositor:
                 self._wipe(result, mask, dark)
                 rect = self._inner_rect(mask)
                 if rect is None:
-                    rect = (bb[0] + 4, bb[1] + 4, max(bb[2] - 8, 10), max(bb[3] - 8, 10))
+                    rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
             else:
                 # Last resort: no shape found. Wipe an inscribed ellipse in the
                 # bbox (rounded, won't bleed past a real balloon outline).
@@ -85,7 +85,7 @@ class Compositor:
                 cv2.ellipse(ell, (bx + bw // 2, by + bh // 2),
                             (max(bw // 2 - 2, 4), max(bh // 2 - 2, 4)), 0, 0, 360, 255, -1)
                 self._wipe(result, ell, dark)
-                pad = max(3, min(bw, bh) // 12)
+                pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 
             color = (255, 255, 255) if dark else (0, 0, 0)
@@ -193,7 +193,7 @@ class Compositor:
             return None
         px, py = int(loc[0]), int(loc[1])
         l = r = t = b = 1
-        step = 2
+        step = 3
 
         def ok(l, r, t, b):
             X0, X1, Y0, Y1 = px - l, px + r, py - t, py + b

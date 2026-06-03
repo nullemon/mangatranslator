@@ -24,9 +24,9 @@ class TextRenderer:
 
     def __init__(self, font_path: Optional[str] = None):
         self.font_path = font_path or self._find_font()
-        self.min_font_size = 8
-        self.padding_ratio = 0.10
-        self.line_spacing_ratio = 0.25
+        self.min_font_size = 10
+        self.padding_ratio = 0.04
+        self.line_spacing_ratio = 0.12
         self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
 
     def _find_font(self) -> Optional[str]:
@@ -81,10 +81,11 @@ class TextRenderer:
         color: Tuple[int, int, int] = (0, 0, 0),
     ) -> Image.Image:
         """Fit `text` (wrapped, auto-sized, centered) inside `rect`."""
+        text = text.upper()
         x, y, w, h = rect
 
-        pad_x = max(int(w * self.padding_ratio), 4)
-        pad_y = max(int(h * self.padding_ratio), 4)
+        pad_x = max(int(w * self.padding_ratio), 2)
+        pad_y = max(int(h * self.padding_ratio), 2)
         inner_x, inner_y = x + pad_x, y + pad_y
         inner_w, inner_h = w - 2 * pad_x, h - 2 * pad_y
 
@@ -123,7 +124,7 @@ class TextRenderer:
     def _optimal_size(
         self, text: str, max_w: int, max_h: int, draw: ImageDraw.ImageDraw
     ) -> int:
-        upper = min(max_w, max_h // 2, 72)
+        upper = min(max_w, max_h, 150)
         upper = max(upper, self.min_font_size)
 
         best = self.min_font_size
