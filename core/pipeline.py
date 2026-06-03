@@ -163,9 +163,6 @@ def compress_upload(data: bytes, max_dim: int = 2600, target_kb: int = 1024) -> 
     return out
 
 
-_SFX_KINDS = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
-
-
 def _boxes_overlap(a, b, thresh=0.3) -> bool:
     """True if box a (x,y,w,h) overlaps b enough to be the same region."""
     ax, ay, aw, ah = a
@@ -182,26 +179,6 @@ def _boxes_overlap(a, b, thresh=0.3) -> bool:
     center_in = (bx <= acx <= bx + bw and by <= acy <= by + bh) or \
                 (ax <= bcx <= ax + aw and ay <= bcy <= ay + ah)
     return inter / smaller > thresh or center_in
-
-
-def _det_to_bbox(det, w, h):
-    x = max(0, min(int(det.get("x_pct", 0) / 100 * w), w - 1))
-    y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
-    bw = max(8, min(int(det.get("width_pct", 0) / 100 * w), w - x))
-    bh = max(8, min(int(det.get("height_pct", 0) / 100 * h), h - y))
-    return [x, y, bw, bh]
-
-
-def _has_text_strokes(gray, bbox, lo=0.005, hi=0.85) -> bool:
-    """True if the box plausibly contains text: some — but not overwhelming —
-    dark ink. Filters out blank areas (AI hallucinations) and solid-black art."""
-    x, y, bw, bh = bbox
-    roi = gray[y:y + bh, x:x + bw]
-    if roi.size == 0:
-        return False
-    _, th = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    frac = float(cv2.countNonZero(th)) / roi.size
-    return lo < frac < hi
 
 
 def make_detector(use_seg: bool = True):
@@ -377,50 +354,6 @@ class TranslationPipeline:
         )
         update(2, f"Translated {len(out)} bubble regions", 50)
         return out
-
-    def _add_missed_text(self, image, items, update) -> int:
-        """Run AI full-page detection and append any text region that the
-        bubble detector didn't already cover. Returns how many were added."""
-        h, w = image.shape[:2]
-        try:
-            dets = self.translator.smart_detect_and_translate(image, self.target_lang)
-            print(f"[pipeline] completeness scan found {len(dets)} total text regions")
-        except Exception as e:
-            print(f"[pipeline] completeness scan failed: {e}")
-            return 0
-
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        existing = [it["bbox"] for it in items]
-        next_id = max((it["id"] for it in items), default=0) + 1
-        added = 0
-        for det in dets:
-            kind = (det.get("type") or "").lower().replace(" ", "_")
-            if kind in _SFX_KINDS:
-                continue
-            text = (det.get("translation") or "").strip()
-            if not text:
-                continue
-            bbox = _det_to_bbox(det, w, h)
-            if bbox[2] < 8 or bbox[3] < 8:
-                continue
-            if any(_boxes_overlap(bbox, e) for e in existing):
-                continue  # already handled by a detected bubble
-            if not _has_text_strokes(gray, bbox):
-                continue  # AI imagined text on a blank/empty area — skip it
-            in_bubble = det.get("in_bubble", True)
-            items.append({
-                "id": next_id,
-                "bbox": bbox,
-                "original": det.get("original", ""),
-                "translation": text,
-                "type": kind or ("dialogue" if in_bubble else "caption"),
-                "in_bubble": bool(in_bubble),
-                "dark": False,
-            })
-            existing.append(bbox)
-            next_id += 1
-            added += 1
-        return added
 
     def _smart_detect(self, image, output_path, update):
         update(1, "AI is analyzing the page...", 10)
