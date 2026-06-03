@@ -9,8 +9,7 @@
 torch>=2.2.0
 torchvision>=0.17.0
 ultralytics>=8.2.0
-huggingface_hub>=0.24.0
-hf_transfer>=0.1.6
+huggingface_hub[hf_xet]>=0.24.0
 
 # ── Local OCR + clean removal (all run on your GPU, all free) ──
 # manga-ocr: reads each bubble's own Japanese text so a translation can never

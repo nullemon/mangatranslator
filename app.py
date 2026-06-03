@@ -6,7 +6,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 
 import cv2
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
