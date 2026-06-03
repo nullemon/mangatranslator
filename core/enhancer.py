@@ -1,7 +1,29 @@
 import base64
+import time
 import cv2
 import numpy as np
 import httpx
+
+# Status codes worth retrying: rate limits and transient server errors.
+_RETRY_CODES = {429, 500, 502, 503, 504}
+
+
+def _post_with_retry(client, url, *, headers, json=None, data=None, files=None,
+                     attempts=3):
+    """POST with exponential backoff on rate-limits / transient 5xx errors, so
+    one throttled page in a bulk run doesn't silently drop to the local
+    fallback. Returns the final response (caller checks status_code)."""
+    resp = None
+    for i in range(attempts):
+        resp = client.post(url, headers=headers, json=json, data=data, files=files)
+        if resp.status_code not in _RETRY_CODES:
+            return resp
+        if i < attempts - 1:
+            wait = 2 ** i  # 1s, 2s, 4s
+            print(f"[enhance] {resp.status_code} from API, retrying in {wait}s "
+                  f"({i + 1}/{attempts})")
+            time.sleep(wait)
+    return resp
 
 
 class ImageEnhancer:
@@ -77,7 +99,8 @@ class ImageEnhancer:
         headers = {"Authorization": f"Bearer {api_key}"}
 
         with httpx.Client(timeout=self.timeout) as client:
-            resp = client.post(self.OPENAI_URL, headers=headers, data=data, files=files)
+            resp = _post_with_retry(client, self.OPENAI_URL, headers=headers,
+                                    data=data, files=files)
 
         if resp.status_code != 200:
             raise RuntimeError(self._err("OpenAI", resp))
@@ -117,7 +140,7 @@ class ImageEnhancer:
         print(f"[enhance] Gemini request: model={model}, image={img_kb}KB")
 
         with httpx.Client(timeout=self.timeout) as client:
-            resp = client.post(url, headers=headers, json=body)
+            resp = _post_with_retry(client, url, headers=headers, json=body)
 
         print(f"[enhance] Gemini response: {resp.status_code}")
         if resp.status_code != 200:

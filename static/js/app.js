@@ -80,7 +80,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeUid = null;
   let uidCounter = 0;
   let running = 0;
-  const MAX_CONCURRENT = 2;
+  // Process one page at a time. The local GPU stack (segmentation + manga-ocr
+  // + LaMa) and the cloud enhancer both give consistent, full-quality results
+  // only when a page has the resources to itself; running pages in parallel
+  // caused GPU out-of-memory fallbacks and enhancer rate-limits, so some pages
+  // came out translated/clean and others didn't. Sequential = uniform output.
+  const MAX_CONCURRENT = 1;
 
   const ENHANCE_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
   const ENGINE_CONFIG = {
