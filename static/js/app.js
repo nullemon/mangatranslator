@@ -266,7 +266,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), offsets: {}, error: "", rev: 0,
+        excluded: new Set(), offsets: {}, colors: {}, error: "", rev: 0,
       });
     }
 
@@ -548,11 +548,17 @@ document.addEventListener("DOMContentLoaded", () => {
         badge = `<span class="tl-badge free">${esc(label)}</span>`;
       }
       const skipTitle = isBubble ? "Skip this bubble" : "Skip this text";
+      const c = (page.colors || {})[it.id] || "auto";
       div.innerHTML = `
         <div class="tl-header">
           <span class="tl-id">#${it.id}</span>
           <span class="tl-type">${esc(it.type || "dialogue")}</span>
           ${badge}
+          <span class="tl-color" data-id="${it.id}">
+            <button class="tl-clr${c === "auto" ? " on" : ""}" data-c="auto" title="Auto color">A</button>
+            <button class="tl-clr${c === "black" ? " on" : ""}" data-c="black" title="Black text">B</button>
+            <button class="tl-clr${c === "white" ? " on" : ""}" data-c="white" title="White text">W</button>
+          </span>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
         </div>
         <div class="tl-original">${esc(it.original || "")}</div>
@@ -564,11 +570,17 @@ document.addEventListener("DOMContentLoaded", () => {
     for (const it of added) {
       const div = document.createElement("div");
       div.className = "tl-item added-item";
+      const ac = (page.colors || {})[it.id] || "auto";
       div.innerHTML = `
         <div class="tl-header">
           <span class="tl-id">＋</span>
           <span class="tl-type">added</span>
           <span class="tl-badge added">manual</span>
+          <span class="tl-color" data-id="${it.id}">
+            <button class="tl-clr${ac === "auto" ? " on" : ""}" data-c="auto" title="Auto color">A</button>
+            <button class="tl-clr${ac === "black" ? " on" : ""}" data-c="black" title="Black text">B</button>
+            <button class="tl-clr${ac === "white" ? " on" : ""}" data-c="white" title="White text">W</button>
+          </span>
           <button class="tl-del" title="Delete this added text" data-id="${it.id}">✕</button>
         </div>
         <textarea class="tl-edit add-edit" data-id="${it.id}" rows="2">${esc(it.translation || "")}</textarea>`;
@@ -600,6 +612,15 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.addEventListener("click", () => {
         page.added = (page.added || []).filter(a => String(a.id) !== btn.dataset.id);
         buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-color").forEach(grp => {
+      grp.querySelectorAll(".tl-clr").forEach(btn => {
+        btn.addEventListener("click", () => {
+          page.colors = page.colors || {};
+          page.colors[grp.dataset.id] = btn.dataset.c;
+          grp.querySelectorAll(".tl-clr").forEach(b => b.classList.toggle("on", b === btn));
+        });
       });
     });
   }
@@ -635,6 +656,7 @@ document.addEventListener("DOMContentLoaded", () => {
           font_scale: parseFloat(fontScale.value),
           offsets: page.offsets || {},
           covers: page.covers || [],
+          colors: page.colors || {},
           added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, translation: a.translation })),
         }),
       });
@@ -796,9 +818,16 @@ document.addEventListener("DOMContentLoaded", () => {
     pop.className = "edit-pop";
     pop.style.left = Math.min((bx + off[0]) / W * 100, 62) + "%";
     pop.style.top = Math.min((by + off[1] + bh) / H * 100 + 1, 82) + "%";
+    const curClr = (page.colors || {})[it.id] || "auto";
     pop.innerHTML = `
       ${it.original ? `<div class="edit-pop-orig">${esc(it.original)}</div>` : ""}
       <textarea class="edit-pop-text" rows="3">${esc(it.translation || "")}</textarea>
+      <div class="edit-pop-color">
+        <span class="epop-clabel">Color</span>
+        <button class="clr-opt${curClr === "auto" ? " active" : ""}" data-c="auto">Auto</button>
+        <button class="clr-opt${curClr === "black" ? " active" : ""}" data-c="black"><span class="clr-dot" style="background:#111"></span> Black</button>
+        <button class="clr-opt${curClr === "white" ? " active" : ""}" data-c="white"><span class="clr-dot" style="background:#fff;border-color:#999"></span> White</button>
+      </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
         <span class="spacer"></span>
@@ -816,6 +845,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (f) f.value = ta.value;
       closeEditor();
       applyChanges(editApply);
+    });
+    pop.querySelectorAll(".clr-opt").forEach(btn => {
+      btn.addEventListener("click", () => {
+        page.colors = page.colors || {};
+        page.colors[it.id] = btn.dataset.c;
+        pop.querySelectorAll(".clr-opt").forEach(b => b.classList.toggle("active", b === btn));
+      });
     });
     pop.querySelector(".epop-remove").addEventListener("click", () => {
       if (isAdded) {

@@ -333,6 +333,7 @@ async def rerender(task_id: str, request: Request):
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
     covers = payload.get("covers") or []
+    colors = {str(k): v for k, v in (payload.get("colors") or {}).items()}
 
     items = []
     for it in r.get("items", []):
@@ -348,6 +349,7 @@ async def rerender(task_id: str, request: Request):
             "type": it.get("type", ""),
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
+            "color": colors.get(nid, "auto"),
         })
 
     # Manually added text regions (drawn over missed / leftover spots).
@@ -357,14 +359,16 @@ async def rerender(task_id: str, request: Request):
         text = (a.get("translation") or "").strip()
         if not bbox or not text:
             continue
+        aid = str(a.get("id", f"m{len(added) + 1}"))
         added.append({
-            "id": str(a.get("id", f"m{len(added) + 1}")),
+            "id": aid,
             "bbox": [int(v) for v in bbox],
             "original": a.get("original", ""),
             "translation": text,
             "type": "manual",
             "in_bubble": False,
             "manual": True,
+            "color": colors.get(aid, "auto"),
         })
 
     all_items = items + added

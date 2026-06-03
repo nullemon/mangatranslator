@@ -90,7 +90,7 @@ class Compositor:
                 dark = self._is_dark_region(gray, bx, by, bw, bh)
                 pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
-                color = (255, 255, 255) if dark else (0, 0, 0)
+                color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color))
                 it["placed"] = True
                 continue
@@ -112,7 +112,7 @@ class Compositor:
                 dark = self._is_dark_region(gray, rx, ry, rw, rh)
                 pad = max(2, min(rw, rh) // 16)
                 rect = (rx + pad, ry + pad, rw - 2 * pad, rh - 2 * pad)
-                color = (255, 255, 255) if dark else (0, 0, 0)
+                color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color))
                 it["placed"] = True
                 continue
@@ -169,7 +169,7 @@ class Compositor:
                 pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 
-            color = (255, 255, 255) if dark else (0, 0, 0)
+            color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color))
             it["placed"] = True
 
@@ -180,6 +180,16 @@ class Compositor:
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         return result
+
+    def _pick_color(self, dark, it):
+        """Text color: honor a manual override ("black"/"white") when set,
+        otherwise pick automatically (white on dark bubbles, black on light)."""
+        ov = (it.get("color") or "auto").lower()
+        if ov == "white":
+            return (255, 255, 255)
+        if ov == "black":
+            return (0, 0, 0)
+        return (255, 255, 255) if dark else (0, 0, 0)
 
     def _wipe(self, result, mask, dark):
         inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
