@@ -15,9 +15,42 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.requests import Request
 
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
 from core.pipeline import TranslationPipeline, scan_cleanup, compress_upload
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
+
+
+def _stamp_watermark(image_path: str, text: str):
+    """Render a repeating diagonal watermark at low opacity."""
+    img = cv2.imread(image_path)
+    if img is None:
+        return
+    h, w = img.shape[:2]
+    pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font_size = max(16, min(w, h) // 28)
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    bb = draw.textbbox((0, 0), text, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    step_x = tw + max(80, tw)
+    step_y = th + max(120, th * 3)
+    alpha = 28
+    for y in range(-h, h * 2, step_y):
+        for x in range(-w, w * 2, step_x):
+            draw.text((x, y), text, fill=(128, 128, 128, alpha), font=font)
+    rotated = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
+    pil = pil.convert("RGBA")
+    pil = Image.alpha_composite(pil, rotated)
+    result = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+    cv2.imwrite(image_path, result)
 
 app = FastAPI(title="MangaTranslator")
 
@@ -52,6 +85,7 @@ async def translate(
     enhance_key: str = Form(""),
     enhance_prompt: str = Form(""),
     enhance_model: str = Form(""),
+    watermark: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -75,6 +109,7 @@ async def translate(
         "upload_path": upload_path,
         "output_path": output_path,
         "font_path": font_path,
+        "watermark": watermark.strip(),
         "name": file.filename or "page.png",
         "mode": "translate",
     }
@@ -84,6 +119,7 @@ async def translate(
             task_id, upload_path, output_path, api_key, target_lang, provider, model,
             smart_mode == "true", font_path,
             enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
+            watermark=watermark.strip(),
         )
     )
 
@@ -105,6 +141,7 @@ async def _run(
     enhance_key: str = "",
     enhance_prompt: str = "",
     enhance_model: str = "",
+    watermark: str = "",
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -161,6 +198,9 @@ async def _run(
             lambda: pipeline.process(image_path, output_path, on_progress),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
+
+        if watermark:
+            _stamp_watermark(output_path, watermark)
 
         update = {
             "status": "done",
@@ -380,6 +420,9 @@ async def rerender(task_id: str, request: Request):
         comp = Compositor(t.get("font_path"), font_scale=font_scale)
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
         cv2.imwrite(r["output_path"], out)
+        wm = t.get("watermark", "")
+        if wm:
+            _stamp_watermark(r["output_path"], wm)
 
     await asyncio.get_event_loop().run_in_executor(None, work)
 

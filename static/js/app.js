@@ -57,6 +57,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const editApply     = document.getElementById("editApply");
   const moveLayer     = document.getElementById("moveLayer");
   const toolBtns      = document.querySelectorAll(".tool-btn");
+  const watermarkInput = document.getElementById("watermark");
+
+  if (watermarkInput) {
+    watermarkInput.value = localStorage.getItem("manga_watermark") || "";
+    watermarkInput.addEventListener("input", () =>
+      localStorage.setItem("manga_watermark", watermarkInput.value));
+  }
 
   fontScale.addEventListener("input", () => {
     fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
@@ -344,6 +351,9 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("enhance_key", enhanceKey.value.trim());
         f.append("enhance_prompt", enhancePrompt.value);
         f.append("enhance_model", enhanceModel.value);
+      }
+      if (watermarkInput && watermarkInput.value.trim()) {
+        f.append("watermark", watermarkInput.value.trim());
       }
       return { url: "/api/translate", form: f };
     }
