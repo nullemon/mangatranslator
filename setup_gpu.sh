@@ -46,6 +46,18 @@ except Exception as e:
     print("LaMa skipped:", e)
 PY
 
+echo "==> Pre-downloading CRAFT text detector (free text / narration)..."
+python3 - <<'PY'
+try:
+    from craft_text_detector import Craft
+    import torch
+    Craft(output_dir=None, cuda=torch.cuda.is_available(), crop_type="box")
+    print("CRAFT ready")
+except Exception as e:
+    print("CRAFT skipped:", e)
+PY
+
 echo "==> Done. Restart the app:  python3 app.py"
 echo "    Detect step shows 'segmentation model (GPU)'; bubbles are read by"
 echo "    manga-ocr and erased with LaMa when those models are installed."
+echo "    Free text (narration/labels) detected by CRAFT when installed."

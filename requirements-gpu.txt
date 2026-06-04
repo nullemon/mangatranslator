@@ -18,3 +18,8 @@ huggingface_hub[hf_xet]>=0.24.0
 #   and screentones (much better than OpenCV inpaint).
 manga-ocr>=0.1.11
 simple-lama-inpainting>=0.1.0
+
+# ── Free text detection (narration, labels, dramatic text) ──
+# CRAFT finds text anywhere on the page, not just inside bubbles.
+# Without this the pipeline still works but only translates bubble text.
+craft-text-detector>=0.4.3

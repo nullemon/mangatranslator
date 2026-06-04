@@ -8,6 +8,21 @@ from .translator import make_translator
 from .compositor import Compositor
 
 
+def _is_sfx(text: str) -> bool:
+    """True if text looks like a sound effect (SFX / onomatopoeia).
+    Manga SFX are short, mostly-katakana text: ドン, ガッ, ゴゴゴ, etc."""
+    t = text.strip().replace(" ", "").replace("\n", "")
+    if not t:
+        return False
+    n = len(t)
+    kata = sum(1 for c in t if '゠' <= c <= 'ヿ' or '･' <= c <= 'ﾟ')
+    if n <= 5 and kata / max(n, 1) > 0.6:
+        return True
+    if n <= 3 and kata > 0:
+        return True
+    return False
+
+
 def _order_corners(pts: np.ndarray) -> np.ndarray:
     """Order 4 points as top-left, top-right, bottom-right, bottom-left."""
     rect = np.zeros((4, 2), dtype=np.float32)
@@ -236,12 +251,21 @@ class TranslationPipeline:
         # Optional local OCR: read each bubble's own text so translations can
         # never be matched to the wrong bubble. Lazily loaded; no-op if absent.
         self.ocr = None
+        self.text_detector = None
         if use_seg:
             try:
                 from .ocr import MangaOCR
                 self.ocr = MangaOCR()
             except Exception as e:
                 print(f"[pipeline] OCR unavailable: {e}")
+            try:
+                from .text_detect import FreeTextDetector
+                td = FreeTextDetector()
+                if td.ok:
+                    self.text_detector = td
+                    print("[pipeline] free-text detector ready (CRAFT)")
+            except Exception as e:
+                print(f"[pipeline] free-text detector unavailable: {e}")
 
     def process(
         self,
@@ -343,10 +367,11 @@ class TranslationPipeline:
                 })
                 masks[r.id] = r.mask
 
-        # NOTE: the AI "completeness pass" was removed — its imprecise
-        # coordinates dumped duplicate/free text into the gutters. Catching
-        # missed text is now handled precisely by the local GPU detector
-        # (comic-text-detector) when available.
+        # Free text pass: find narration, dramatic text, labels that aren't
+        # inside any detected bubble. Uses CRAFT + manga-ocr + SFX filter.
+        free = self._detect_free_text(image, regions, update)
+        items.extend(free)
+
         return items, ann_path, masks
 
     def _translate_regions(self, image, regions, annotated, update) -> Dict[int, dict]:
@@ -380,6 +405,60 @@ class TranslationPipeline:
         )
         update(2, f"Translated {len(out)} bubble regions", 50)
         return out
+
+    def _detect_free_text(self, image, bubble_regions, update) -> List[dict]:
+        """Second pass: find text not in any bubble (narration, labels, etc.)."""
+        if self.text_detector is None or not self.text_detector.ok:
+            return []
+        if self.ocr is None or not self.ocr.ok:
+            return []
+
+        update(2, "Scanning for free text (narration / labels)...", 52)
+        bubble_boxes = [tuple(r.bbox) for r in bubble_regions]
+        free_boxes = self.text_detector.detect(image, bubble_boxes)
+        if not free_boxes:
+            return []
+
+        next_id = max((r.id for r in bubble_regions), default=0) + 1
+        id_to_text: Dict[int, str] = {}
+        box_map: Dict[int, tuple] = {}
+
+        for box in free_boxes:
+            jp = self.ocr.read_region(image, box, None)
+            if not jp:
+                continue
+            if _is_sfx(jp):
+                continue
+            fid = next_id
+            next_id += 1
+            id_to_text[fid] = jp
+            box_map[fid] = box
+
+        if not id_to_text:
+            return []
+
+        update(2, f"Translating {len(id_to_text)} free text regions...", 55)
+        try:
+            translations = self.translator.translate_texts(id_to_text, self.target_lang)
+        except Exception as e:
+            print(f"[pipeline] free-text translation failed: {e}")
+            return []
+
+        items = []
+        for fid, jp in id_to_text.items():
+            tr = translations.get(fid, {})
+            items.append({
+                "id": fid,
+                "bbox": [int(v) for v in box_map[fid]],
+                "original": jp,
+                "translation": tr.get("translation", ""),
+                "type": tr.get("type", "narration"),
+                "in_bubble": False,
+                "dark": False,
+            })
+        if items:
+            update(2, f"Found {len(items)} free text regions", 58)
+        return items
 
     def _smart_detect(self, image, output_path, update):
         update(1, "AI is analyzing the page...", 10)
