@@ -1,11 +1,13 @@
 """Free text detection for manga pages.
 
-Uses CRAFT (Character Region Awareness for Text detection) to find text
-not inside speech bubbles — narration, dramatic overlaid text, labels,
-etc. Loaded lazily; the pipeline falls back gracefully when
-craft-text-detector isn't installed.
+Finds text not inside speech bubbles — narration, dramatic overlaid text,
+labels, banner captions, etc.  Two backends:
 
-Install:  pip install craft-text-detector
+  1. CRAFT (pip install craft-text-detector) — more accurate, GPU-accelerated.
+  2. Built-in CV detector — zero extra dependencies, uses morphological ops +
+     MSER to find character clusters.  Always available.
+
+The class picks CRAFT when present and falls back to CV automatically.
 """
 
 import cv2
@@ -16,15 +18,7 @@ _CRAFT = None
 _TRIED = False
 
 
-def available() -> bool:
-    try:
-        import craft_text_detector  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def _load():
+def _load_craft():
     global _CRAFT, _TRIED
     if _CRAFT is not None or _TRIED:
         return _CRAFT
@@ -42,7 +36,7 @@ def _load():
         )
         print("[text_detect] CRAFT loaded OK")
     except Exception as e:
-        print(f"[text_detect] CRAFT unavailable: {e}")
+        print(f"[text_detect] CRAFT unavailable, using CV fallback: {e}")
     return _CRAFT
 
 
@@ -50,35 +44,41 @@ class FreeTextDetector:
     """Finds text regions not inside any detected bubble."""
 
     def __init__(self):
-        self.craft = _load()
+        self.craft = _load_craft()
+        self._method = "CRAFT" if self.craft else "CV"
+        print(f"[text_detect] using {self._method}")
 
     @property
     def ok(self) -> bool:
-        return self.craft is not None
+        return True
 
     def detect(
         self,
         image: np.ndarray,
         existing_boxes: List[Tuple[int, int, int, int]],
     ) -> List[Tuple[int, int, int, int]]:
-        if not self.ok:
-            return []
+        if self.craft:
+            boxes = self._detect_craft(image, existing_boxes)
+        else:
+            boxes = self._detect_cv(image, existing_boxes)
+        return boxes
 
+    # ── CRAFT backend ──
+    def _detect_craft(self, image, existing_boxes):
         h, w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
         try:
             result = self.craft.detect_text(rgb)
         except Exception as e:
-            print(f"[text_detect] CRAFT inference failed: {e}")
-            return []
+            print(f"[text_detect] CRAFT failed, trying CV: {e}")
+            return self._detect_cv(image, existing_boxes)
 
-        boxes = result.get("boxes", [])
-        if not boxes or len(boxes) == 0:
-            return []
+        char_boxes = result.get("boxes", [])
+        if not char_boxes:
+            return self._detect_cv(image, existing_boxes)
 
-        rects: List[Tuple[int, int, int, int]] = []
-        for box in boxes:
+        rects = []
+        for box in char_boxes:
             pts = np.array(box, dtype=np.float32)
             x = max(0, int(pts[:, 0].min()))
             y = max(0, int(pts[:, 1].min()))
@@ -87,35 +87,97 @@ class FreeTextDetector:
             bw, bh = x2 - x, y2 - y
             if bw < 8 or bh < 8:
                 continue
-            if bw * bh < h * w * 0.0002:
-                continue
             if any(_overlaps((x, y, bw, bh), eb) for eb in existing_boxes):
                 continue
             rects.append((x, y, bw, bh))
 
         gap_x = max(int(w * 0.025), 8)
         gap_y = max(int(h * 0.018), 6)
-        blocks = _group_boxes(rects, gap_x=gap_x, gap_y=gap_y)
+        blocks = _group_boxes(rects, gap_x, gap_y)
+        return _filter_blocks(blocks, h, w, existing_boxes)
 
-        filtered = []
+    # ── CV fallback backend ──
+    def _detect_cv(self, image, existing_boxes):
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         page_area = h * w
-        for bx, by, bw, bh in blocks:
+
+        candidates: List[Tuple[int, int, int, int]] = []
+
+        # Pass 1: dark text on light background
+        candidates += self._cv_pass(gray, h, w, bright_text=False)
+        # Pass 2: light text on dark background (banners, dark panels)
+        candidates += self._cv_pass(gray, h, w, bright_text=True)
+
+        # Dedupe and filter
+        candidates = _dedupe(candidates)
+        return _filter_blocks(candidates, h, w, existing_boxes)
+
+    def _cv_pass(self, gray, h, w, bright_text=False):
+        """Find text-like regions using morphological operations."""
+        page_area = h * w
+
+        if bright_text:
+            _, binary = cv2.threshold(gray, 0, 255,
+                                      cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        else:
+            _, binary = cv2.threshold(gray, 0, 255,
+                                      cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Connect nearby strokes into text-like clusters.
+        # Horizontal kernel for horizontal text lines.
+        kw = max(12, w // 50)
+        kh = max(3, h // 200)
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+        h_closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, h_kernel)
+
+        # Vertical kernel for vertical Japanese text columns.
+        vw = max(3, w // 200)
+        vh = max(12, h // 50)
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (vw, vh))
+        v_closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, v_kernel)
+
+        combined = cv2.bitwise_or(h_closed, v_closed)
+
+        # Clean up noise
+        clean_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, clean_k)
+
+        contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        results = []
+        for cnt in contours:
+            x, y, bw, bh = cv2.boundingRect(cnt)
             area = bw * bh
-            if area < page_area * 0.0008:
+            if area < page_area * 0.0015 or area > page_area * 0.18:
                 continue
-            if area > page_area * 0.20:
+            if bw < 15 or bh < 15:
                 continue
-            if any(_overlaps((bx, by, bw, bh), eb, 0.25) for eb in existing_boxes):
-                continue
-            pad = max(3, min(bw, bh) // 10)
-            bx = max(0, bx - pad)
-            by = max(0, by - pad)
-            bw = min(w - bx, bw + 2 * pad)
-            bh = min(h - by, bh + 2 * pad)
-            filtered.append((bx, by, bw, bh))
 
-        return filtered
+            # Text has moderate stroke density — art is either very sparse
+            # (lines) or very dense (screentone/fill).
+            roi = binary[y:y + bh, x:x + bw]
+            density = cv2.countNonZero(roi) / max(area, 1)
+            if density < 0.08 or density > 0.70:
+                continue
 
+            # Text regions have multiple separated blobs (characters).
+            roi_clean = cv2.morphologyEx(roi, cv2.MORPH_OPEN, clean_k)
+            n_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+                roi_clean, 8)
+            min_char = max(area * 0.001, 12)
+            max_char = area * 0.35
+            chars = sum(1 for i in range(1, n_labels)
+                        if min_char <= stats[i, cv2.CC_STAT_AREA] <= max_char)
+            if chars < 3:
+                continue
+
+            results.append((x, y, bw, bh))
+
+        return results
+
+
+# ── Shared helpers ──
 
 def _overlaps(a, b, thresh=0.3):
     ax, ay, aw, ah = a
@@ -126,19 +188,16 @@ def _overlaps(a, b, thresh=0.3):
         return False
     inter = (xf - xi) * (yf - yi)
     smaller = min(aw * ah, bw * bh)
-    if smaller <= 0:
-        return False
-    return inter / smaller > thresh
+    return smaller > 0 and inter / smaller > thresh
 
 
 def _group_boxes(boxes, gap_x=20, gap_y=15):
-    """Merge nearby CRAFT character boxes into larger text blocks."""
+    """Merge nearby character boxes into larger text blocks."""
     if not boxes:
         return []
     boxes = list(boxes)
     used = [False] * len(boxes)
     merged = []
-
     for i in range(len(boxes)):
         if used[i]:
             continue
@@ -158,11 +217,40 @@ def _group_boxes(boxes, gap_x=20, gap_y=15):
                         used[j] = True
                         changed = True
                         break
-
         xs = [b[0] for b in group]
         ys = [b[1] for b in group]
         x2s = [b[0] + b[2] for b in group]
         y2s = [b[1] + b[3] for b in group]
         merged.append((min(xs), min(ys), max(x2s) - min(xs), max(y2s) - min(ys)))
-
     return merged
+
+
+def _filter_blocks(blocks, h, w, existing_boxes):
+    """Keep text-sized blocks that don't overlap detected bubbles."""
+    page_area = h * w
+    out = []
+    for bx, by, bw, bh in blocks:
+        area = bw * bh
+        if area < page_area * 0.0008 or area > page_area * 0.20:
+            continue
+        if any(_overlaps((bx, by, bw, bh), eb, 0.25) for eb in existing_boxes):
+            continue
+        pad = max(3, min(bw, bh) // 10)
+        bx = max(0, bx - pad)
+        by = max(0, by - pad)
+        bw = min(w - bx, bw + 2 * pad)
+        bh = min(h - by, bh + 2 * pad)
+        out.append((bx, by, bw, bh))
+    return out
+
+
+def _dedupe(boxes, iou_thresh=0.4):
+    """Remove near-duplicate boxes."""
+    if len(boxes) <= 1:
+        return boxes
+    boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)
+    kept = []
+    for b in boxes:
+        if not any(_overlaps(b, k, iou_thresh) for k in kept):
+            kept.append(b)
+    return kept

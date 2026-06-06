@@ -260,10 +260,7 @@ class TranslationPipeline:
                 print(f"[pipeline] OCR unavailable: {e}")
             try:
                 from .text_detect import FreeTextDetector
-                td = FreeTextDetector()
-                if td.ok:
-                    self.text_detector = td
-                    print("[pipeline] free-text detector ready (CRAFT)")
+                self.text_detector = FreeTextDetector()
             except Exception as e:
                 print(f"[pipeline] free-text detector unavailable: {e}")
 
