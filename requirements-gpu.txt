@@ -22,4 +22,6 @@ simple-lama-inpainting>=0.1.0
 # ── Free text detection (narration, labels, dramatic text) ──
 # CRAFT finds text anywhere on the page, not just inside bubbles.
 # Without this the pipeline still works but only translates bubble text.
+# Install with --no-deps to avoid its strict old opencv pin (our opencv works fine).
 craft-text-detector>=0.4.3
+gdown>=4.6.0

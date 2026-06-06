@@ -46,7 +46,11 @@ except Exception as e:
     print("LaMa skipped:", e)
 PY
 
-echo "==> Pre-downloading CRAFT text detector (free text / narration)..."
+echo "==> Installing CRAFT text detector (free text / narration)..."
+pip3 install --user --break-system-packages gdown
+pip3 install --user --break-system-packages --no-deps craft-text-detector
+
+echo "==> Pre-downloading CRAFT model weights..."
 python3 - <<'PY'
 try:
     from craft_text_detector import Craft
