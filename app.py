@@ -455,6 +455,82 @@ async def rerender(task_id: str, request: Request):
     return {"items": r["items"], "added": r["added"], "ts": time.time()}
 
 
+_OCR_INSTANCE = None
+
+def _get_ocr():
+    global _OCR_INSTANCE
+    if _OCR_INSTANCE is None:
+        try:
+            from core.ocr import MangaOCR
+            _OCR_INSTANCE = MangaOCR()
+        except Exception:
+            pass
+    return _OCR_INSTANCE
+
+
+@app.post("/api/ocr-translate/{task_id}")
+async def ocr_translate(task_id: str, request: Request):
+    if task_id not in tasks:
+        raise HTTPException(404, "Task not found")
+    t = tasks[task_id]
+    r = t.get("result") or {}
+    base = r.get("base_path", "")
+    if not base or not os.path.exists(base):
+        raise HTTPException(400, "Base image not available")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+    bbox = payload.get("bbox")
+    api_key = payload.get("api_key", "")
+    provider = payload.get("provider", "claude")
+    model = payload.get("model", "")
+    target_lang = payload.get("target_lang", "English")
+
+    if not bbox or len(bbox) != 4:
+        raise HTTPException(400, "bbox must be [x, y, w, h]")
+    if not api_key:
+        raise HTTPException(400, "api_key is required")
+
+    x, y, w, h = [int(v) for v in bbox]
+
+    def work():
+        from core.translator import make_translator
+        img = cv2.imread(base)
+        if img is None:
+            raise ValueError("Cannot read base image")
+        H, W = img.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return {"original": "", "translation": ""}
+
+        crop = img[y0:y1, x0:x1]
+
+        original = ""
+        ocr = _get_ocr()
+        if ocr and ocr.ok:
+            padded = cv2.copyMakeBorder(
+                crop, 12, 12, 12, 12,
+                cv2.BORDER_CONSTANT, value=(255, 255, 255))
+            original = ocr.read(padded)
+
+        if not original:
+            return {"original": "", "translation": ""}
+
+        translator = make_translator(provider, api_key, model)
+        out = translator.translate_texts({"0": original}, target_lang)
+        entry = out.get(0) or out.get("0") or {}
+        translation = entry.get("translation", original)
+        return {"original": original, "translation": translation}
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, work)
+    return result
+
+
 @app.post("/api/zip")
 async def make_zip(request: Request):
     try:
