@@ -80,8 +80,12 @@ class TextRenderer:
         rect: Tuple[int, int, int, int],
         text: str,
         color: Tuple[int, int, int] = (0, 0, 0),
+        italic: bool = False,
     ) -> Image.Image:
-        """Fit `text` (wrapped, auto-sized, centered) inside `rect`."""
+        """Fit `text` (wrapped, auto-sized, centered) inside `rect`.
+
+        When `italic` is set the text is sheared into a slanted style — used to
+        set sound effects / expression beats apart from ordinary dialogue."""
         text = text.upper()
         x, y, w, h = rect
 
@@ -121,11 +125,37 @@ class TextRenderer:
             bb = draw.textbbox((0, 0), line, font=font)
             lw = bb[2] - bb[0]
             lx = inner_x + max(0, (inner_w - lw) // 2)
-            draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font,
-                      stroke_width=stroke_w, stroke_fill=stroke_c)
+            if italic:
+                self._draw_italic_line(image, lx - bb[0], cur_y - bb[1], line,
+                                       font, color, stroke_w, stroke_c)
+            else:
+                draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font,
+                          stroke_width=stroke_w, stroke_fill=stroke_c)
             cur_y += heights[i] + spacing
 
         return image
+
+    def _draw_italic_line(self, image, ax, ay, line, font, color, stroke_w, stroke_c):
+        """Render one line slanted (faux-italic) and composite it onto `image`,
+        landing where an upright draw.text((ax, ay), ...) would have placed it."""
+        probe = ImageDraw.Draw(image)
+        bb = probe.textbbox((0, 0), line, font=font, stroke_width=stroke_w)
+        lw = max(bb[2] + stroke_w + 2, 1)
+        lh = max(bb[3] + stroke_w + 2, 1)
+        layer = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+        ImageDraw.Draw(layer).text(
+            (0, 0), line, font=font, fill=color + (255,),
+            stroke_width=stroke_w, stroke_fill=stroke_c + (255,),
+        )
+        shear = 0.24
+        ext = int(np.ceil(shear * lh))
+        # AFFINE maps output->input: top rows sample further right, so the glyph
+        # leans right while its baseline stays put.
+        sheared = layer.transform(
+            (lw + ext, lh), Image.AFFINE, (1, shear, -shear * lh, 0, 1, 0),
+            resample=Image.BICUBIC,
+        )
+        image.paste(sheared, (int(ax), int(ay)), sheared)
 
     def _optimal_size(
         self, text: str, max_w: int, max_h: int, draw: ImageDraw.ImageDraw

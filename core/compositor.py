@@ -8,6 +8,17 @@ from .renderer import TextRenderer
 SFX_TYPES = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
 
 
+def _is_expressive(text: str, it: dict) -> bool:
+    """Sound effects and expression beats (rendered as *GRIN*, *GASP*, a placed
+    BOOM, ...) get a slanted italic treatment so they read distinctly from
+    ordinary dialogue."""
+    kind = (it.get("type") or "").lower().replace(" ", "_")
+    if kind in SFX_TYPES:
+        return True
+    t = (text or "").strip()
+    return len(t) >= 2 and t.startswith("*") and t.endswith("*")
+
+
 class Compositor:
     """Replaces balloon text. Given a precise interior mask per region it wipes
     the whole interior (so the original Japanese vanishes completely) and fits
@@ -75,6 +86,7 @@ class Compositor:
             kind = (it.get("type") or "").lower().replace(" ", "_")
             if kind in SFX_TYPES and it.get("in_bubble") is False:
                 continue
+            ital = _is_expressive(text, it)
             bbox = it.get("bbox")
             if not bbox:
                 continue
@@ -95,7 +107,7 @@ class Compositor:
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
                 rect, dark = self._apply_free_region(result, gray, cap, bb)
                 color = self._pick_color(dark, it)
-                placements.append((offset_rect(it, rect), text, color))
+                placements.append((offset_rect(it, rect), text, color, ital))
                 it["placed"] = True
                 continue
 
@@ -115,7 +127,7 @@ class Compositor:
                 rect, dark = self._apply_free_region(result, gray, cap, bb)
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
-                placements.append((offset_rect(it, rect), text, color))
+                placements.append((offset_rect(it, rect), text, color, ital))
                 it["placed"] = True
                 continue
 
@@ -172,13 +184,13 @@ class Compositor:
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 
             color = self._pick_color(dark, it)
-            placements.append((offset_rect(it, rect), text, color))
+            placements.append((offset_rect(it, rect), text, color, ital))
             it["placed"] = True
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color in placements:
-                self.renderer.draw_in_rect(pil, rect, text, color)
+            for rect, text, color, ital in placements:
+                self.renderer.draw_in_rect(pil, rect, text, color, italic=ital)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         result = self._final_cleanup(result)
