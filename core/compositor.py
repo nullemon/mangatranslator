@@ -185,34 +185,38 @@ class Compositor:
         return result
 
     def _final_cleanup(self, image):
-        """Push the output toward a crisp, scan-like manga look: melt scanner
-        grain with an edge-preserving denoise, stretch contrast so paper goes
-        pure white and ink goes solid black, then sharpen the linework."""
+        """Gentle scan-clean: even out the page tone and melt scanner grain into
+        a smooth field, keeping paper clean and ink solid — WITHOUT crushing the
+        soft pencil shading or amplifying grain into crunchy speckle (which is
+        what a heavy unsharp + hard snap does)."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        bp = float(np.percentile(gray, 2))
-        wp = float(np.percentile(gray, 98))
+        bp = float(np.percentile(gray, 1))
+        wp = float(np.percentile(gray, 99))
         if wp - bp < 40:
             return image
 
-        # Auto-levels: stretch so the darkest inks and brightest paper reach the
-        # ends of the range.
+        # Gentle auto-levels: pull paper toward white and ink toward black
+        # without slamming the midtones — those are the soft grays we keep.
         out = image.astype(np.float32)
         out = (out - bp) * (255.0 / (wp - bp))
         out = np.clip(out, 0, 255).astype(np.uint8)
 
-        # Edge-preserving denoise melts the film-grain of a rough scan while
-        # keeping linework sharp — grain is the main thing that reads as "dirty".
-        out = cv2.bilateralFilter(out, 7, 55, 7)
+        # Melt the film-grain into a smooth field. Non-local-means is far better
+        # than a tiny bilateral at killing grain while preserving edges and the
+        # soft gradients on faces — grain is the main thing that reads "dirty".
+        out = cv2.fastNlMeansDenoisingColored(out, None, 6, 6, 7, 21)
 
-        # Snap paper to pure white and solid inks to true black for that clean
-        # printed look; mid-tones / screentone shading are left untouched.
+        # Snap only the *near*-pure tones: clean the paper to white and deepen
+        # the blackest inks, but leave every shade in between untouched so the
+        # pencil shading survives instead of posterizing.
         g2 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        out[g2 > 226] = 255
-        out[g2 < 24] = 0
+        out[g2 > 244] = 255
+        out[g2 < 14] = 0
 
-        # Unsharp mask to put the bite back into edges after denoising.
+        # A whisper of unsharp just to recover the edge crispness lost to
+        # denoising — small enough that it doesn't bring the grain back.
         blurred = cv2.GaussianBlur(out, (0, 0), 1.0)
-        out = cv2.addWeighted(out, 1.5, blurred, -0.5, 0)
+        out = cv2.addWeighted(out, 1.18, blurred, -0.18, 0)
         return out
 
     def _pick_color(self, dark, it):
@@ -304,66 +308,94 @@ class Compositor:
     def _detect_caption_box(self, gray, x, y, w, h):
         """Detect a caption / narration / title slab with a flat interior.
 
-        A light box (dark text on white) returns just its framed interior, so
-        the border survives. A dark slab (light text on black — e.g. a full-bleed
-        vertical title bar) returns its whole extent, so big characters that
-        split the black field into chunks can't leave broken slivers behind.
+        Light box (dark text on white): we search a slightly PADDED window and
+        return the framed white interior that encloses the AI's text box — so a
+        loose or clipped AI box snaps to the real frame and the border survives.
+        We only accept it when the interior is genuinely enclosed by a frame; an
+        unframed bright patch (text lying on light artwork) returns None so the
+        caller inpaints the strokes tightly instead of stamping a giant white
+        rectangle at the wrong size.
+
+        Dark slab (light text on black — e.g. a full-bleed vertical title bar)
+        returns its whole extent, so big characters that split the black field
+        into chunks can't leave broken slivers behind.
         Returns (ix, iy, iw, ih, dark), or None for textured artwork."""
         H, W = gray.shape[:2]
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(W, x + w), min(H, y + h)
-        if x1 - x0 < 14 or y1 - y0 < 14:
+        ox0, oy0 = max(0, x), max(0, y)
+        ox1, oy1 = min(W, x + w), min(H, y + h)
+        if ox1 - ox0 < 14 or oy1 - oy0 < 14:
             return None
-        roi = gray[y0:y1, x0:x1]
-        rh, rw = roi.shape[:2]
-        roi_area = rh * rw
-        dark = float(np.median(roi)) < 110
+        # Decide light vs dark from the AI box itself, so padding into a black
+        # gutter (light case) or white margin (dark case) can't flip it.
+        inner = gray[oy0:oy1, ox0:ox1]
+        dark = float(np.median(inner)) < 110
 
-        # Flat "paper" field: bright for a white box, dark for an inverted slab.
         if dark:
+            roi = inner
+            roi_area = roi.shape[0] * roi.shape[1]
             _, field = cv2.threshold(roi, 80, 255, cv2.THRESH_BINARY_INV)
-        else:
-            _, field = cv2.threshold(roi, 185, 255, cv2.THRESH_BINARY)
-        ks = int(np.clip(min(rh, rw) // 10, 7, 25))
-        k = cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks))
-        field = cv2.morphologyEx(field, cv2.MORPH_CLOSE, k)
-
-        if dark:
-            # The whole dark extent becomes one clean black panel — frame and
-            # interior are both dark, so there's nothing to preserve. Using the
-            # union bounding box (not the largest blob) keeps a full-height title
-            # bar from fragmenting around big characters.
+            ks = int(np.clip(min(roi.shape[:2]) // 10, 7, 25))
+            k = cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks))
+            field = cv2.morphologyEx(field, cv2.MORPH_CLOSE, k)
+            # Union bbox of the whole dark extent (not the largest blob) keeps a
+            # full-height title bar from fragmenting around big characters.
             ys, xs = np.where(field > 0)
             if xs.size == 0:
                 return None
             bx, by = int(xs.min()), int(ys.min())
             bw, bh = int(xs.max()) - bx + 1, int(ys.max()) - by + 1
-        else:
-            # A framed light box: keep just the largest interior blob so the
-            # border around it stays intact.
-            num, _, stats, _ = cv2.connectedComponentsWithStats(field, 8)
-            if num <= 1:
+            if bw < 10 or bh < 10 or bw * bh < roi_area * 0.35:
                 return None
-            best, best_a = 0, 0
+            dens = float(np.count_nonzero(field[by:by + bh, bx:bx + bw])) / float(bw * bh)
+            if dens < 0.55:
+                return None
+            return (ox0 + bx, oy0 + by, bw, bh, True)
+
+        # Light box: search a padded window so we can recover a frame the AI box
+        # clipped, then snap to the white interior that holds the AI box centre.
+        px, py = int(w * 0.30), int(h * 0.30)
+        X0, Y0 = max(0, x - px), max(0, y - py)
+        X1, Y1 = min(W, x + w + px), min(H, y + h + py)
+        roi = gray[Y0:Y1, X0:X1]
+        rh, rw = roi.shape[:2]
+        if rh < 14 or rw < 14:
+            return None
+        _, field = cv2.threshold(roi, 185, 255, cv2.THRESH_BINARY)
+        ks = int(np.clip(min(rh, rw) // 10, 7, 25))
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks))
+        field = cv2.morphologyEx(field, cv2.MORPH_CLOSE, k)
+
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(field, 8)
+        if num <= 1:
+            return None
+        # Prefer the blob covering the AI box's centre; else the largest blob.
+        cx = int(np.clip((x + w // 2) - X0, 0, rw - 1))
+        cy = int(np.clip((y + h // 2) - Y0, 0, rh - 1))
+        pick = int(labels[cy, cx])
+        if pick == 0:
+            best_a = 0
             for i in range(1, num):
                 a = int(stats[i, cv2.CC_STAT_AREA])
                 if a > best_a:
-                    best, best_a = i, a
-            if best == 0:
-                return None
-            bx = int(stats[best, cv2.CC_STAT_LEFT])
-            by = int(stats[best, cv2.CC_STAT_TOP])
-            bw = int(stats[best, cv2.CC_STAT_WIDTH])
-            bh = int(stats[best, cv2.CC_STAT_HEIGHT])
+                    pick, best_a = i, a
+        if pick == 0:
+            return None
+        bx = int(stats[pick, cv2.CC_STAT_LEFT])
+        by = int(stats[pick, cv2.CC_STAT_TOP])
+        bw = int(stats[pick, cv2.CC_STAT_WIDTH])
+        bh = int(stats[pick, cv2.CC_STAT_HEIGHT])
 
-        # Must fill a big chunk of the region (a real slab, not a bright patch in
-        # artwork) and densely fill its own bbox.
-        if bw < 10 or bh < 10 or bw * bh < roi_area * 0.35:
+        # The interior must be ENCLOSED: if the bright blob runs to the edge of
+        # the padded window it bled into surrounding artwork (no frame) — bail so
+        # the caller inpaints the text instead of pasting an oversized box.
+        if bx <= 1 or by <= 1 or bx + bw >= rw - 1 or by + bh >= rh - 1:
+            return None
+        if bw < 12 or bh < 12:
             return None
         dens = float(np.count_nonzero(field[by:by + bh, bx:bx + bw])) / float(bw * bh)
-        if dens < 0.55:
+        if dens < 0.6:
             return None
-        return (x0 + bx, y0 + by, bw, bh, dark)
+        return (X0 + bx, Y0 + by, bw, bh, False)
 
     def _fill_caption(self, result, cap):
         """Fill a detected caption interior with a solid clean color (white, or

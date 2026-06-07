@@ -85,9 +85,17 @@ Do NOT include:
 - Text already in {target_lang}
 - Tiny furigana readings above kanji
 
+Find EVERY such region — do not stop at the obvious ones. Include short,
+narrow, or vertical columns, faint text, and small boxes tucked next to other
+boxes. Each separate framed box (caption / narration panel) is its OWN region.
+
 For each text region, return its bounding box as PERCENTAGE coordinates:
 - x_pct, y_pct: top-left corner (0-100)
 - width_pct, height_pct: size as percentage of image dimensions
+
+Make each box TIGHT — wrap it snugly around just that text or its framed panel.
+Never let one box overlap, contain, or spill into a neighbouring box; if two
+texts sit in separate boxes, return two separate, non-overlapping regions.
 
 Return ONLY a JSON array — no markdown fences:
 [
