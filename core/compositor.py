@@ -73,7 +73,7 @@ class Compositor:
             if not text:
                 continue
             kind = (it.get("type") or "").lower().replace(" ", "_")
-            if kind in SFX_TYPES:
+            if kind in SFX_TYPES and it.get("in_bubble") is False:
                 continue
             bbox = it.get("bbox")
             if not bbox:

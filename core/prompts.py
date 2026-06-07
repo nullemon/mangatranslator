@@ -84,6 +84,8 @@ Do NOT include:
 - Sound effects / onomatopoeia (ドーン, バァン, etc.)
 - Text already in {target_lang}
 - Tiny furigana readings above kanji
+- Patterns on character faces, eyes, or bodies — those are drawn artwork,
+  not text. Only flag actual written characters on a background or in a box.
 
 Find EVERY such region — do not stop at the obvious ones. Include short,
 narrow, or vertical columns, faint text, and small boxes tucked next to other
@@ -128,8 +130,11 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 Rules:
 - Keep each translation matched to the SAME id — never move text between ids.
 - Use UPPERCASE (standard manga lettering). Keep it concise to fit the bubble.
-- "type" is one of: "dialogue", "narration", "sfx". Mark pure sound effects
-  (onomatopoeia) as "sfx".
+- "type" is one of: "dialogue", "narration", "sfx".
+- Small expression sounds in speech bubbles (にっ = *GRIN*, ハッ = *GASP*,
+  フッ = *SMIRK*, etc.) are "dialogue" — translate them into an expressive
+  English word wrapped in asterisks (e.g. *GRIN*). Only mark loud dramatic
+  sound effects (ドーン, バキ, ゴゴゴ) as "sfx".
 - If an entry's text is empty or unreadable, return an empty translation for it.
 - Return ONLY the JSON array."""
 
