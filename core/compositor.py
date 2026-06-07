@@ -230,7 +230,20 @@ class Compositor:
         return (255, 255, 255) if dark else (0, 0, 0)
 
     def _wipe(self, result, mask, dark):
-        inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+        """Fill the bubble interior, pulling the fill boundary well inside the
+        inked outline so the wipe never eats the bubble's own border line.
+
+        A segmentation mask usually reaches the outline (sometimes a touch past
+        it); eroding by only ~1px left the white fill sitting on the border and
+        nibbling it away. Erode by a size-aware margin that clears the line."""
+        _, _, bw, bh = cv2.boundingRect(mask)
+        r = int(np.clip(round(min(bw, bh) * 0.04), 3, 7))
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        inner = cv2.erode(mask, k)
+        # Tiny / thin bubble: a big erosion would swallow it — back off so we
+        # still cover the original text.
+        if cv2.countNonZero(inner) < max(1, int(0.25 * cv2.countNonZero(mask))):
+            inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
         result[inner > 0] = (0, 0, 0) if dark else (255, 255, 255)
 
     def _inpaint_text(self, result, x, y, w, h):
