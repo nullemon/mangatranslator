@@ -185,21 +185,34 @@ class Compositor:
         return result
 
     def _final_cleanup(self, image):
-        """Push the output toward a crisp manga look: stretch contrast so paper
-        becomes pure white and ink becomes deep black, then lightly sharpen."""
+        """Push the output toward a crisp, scan-like manga look: melt scanner
+        grain with an edge-preserving denoise, stretch contrast so paper goes
+        pure white and ink goes solid black, then sharpen the linework."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         bp = float(np.percentile(gray, 2))
         wp = float(np.percentile(gray, 98))
         if wp - bp < 40:
             return image
+
+        # Auto-levels: stretch so the darkest inks and brightest paper reach the
+        # ends of the range.
         out = image.astype(np.float32)
         out = (out - bp) * (255.0 / (wp - bp))
-        out = np.clip(out, 0, 255)
-        g2 = cv2.cvtColor(out.astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        out[g2 > 240] = 255
-        out = out.astype(np.uint8)
+        out = np.clip(out, 0, 255).astype(np.uint8)
+
+        # Edge-preserving denoise melts the film-grain of a rough scan while
+        # keeping linework sharp — grain is the main thing that reads as "dirty".
+        out = cv2.bilateralFilter(out, 7, 55, 7)
+
+        # Snap paper to pure white and solid inks to true black for that clean
+        # printed look; mid-tones / screentone shading are left untouched.
+        g2 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        out[g2 > 226] = 255
+        out[g2 < 24] = 0
+
+        # Unsharp mask to put the bite back into edges after denoising.
         blurred = cv2.GaussianBlur(out, (0, 0), 1.0)
-        out = cv2.addWeighted(out, 1.3, blurred, -0.3, 0)
+        out = cv2.addWeighted(out, 1.5, blurred, -0.5, 0)
         return out
 
     def _pick_color(self, dark, it):
@@ -289,49 +302,66 @@ class Compositor:
 
     # ── Free / manual text regions: caption-box fill vs. inpaint ──
     def _detect_caption_box(self, gray, x, y, w, h):
-        """Detect a bordered caption / narration box with a flat interior inside
-        the region. Manga caption boxes are a solid white (or solid black) field
-        framed by a thin border. Returns (ix, iy, iw, ih, dark) for the interior
-        to fill, or None when the region is textured artwork (where a painted
-        slab would look worse than placing text straight over the art)."""
+        """Detect a caption / narration / title slab with a flat interior.
+
+        A light box (dark text on white) returns just its framed interior, so
+        the border survives. A dark slab (light text on black — e.g. a full-bleed
+        vertical title bar) returns its whole extent, so big characters that
+        split the black field into chunks can't leave broken slivers behind.
+        Returns (ix, iy, iw, ih, dark), or None for textured artwork."""
         H, W = gray.shape[:2]
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 - x0 < 14 or y1 - y0 < 14:
             return None
         roi = gray[y0:y1, x0:x1]
+        rh, rw = roi.shape[:2]
+        roi_area = rh * rw
         dark = float(np.median(roi)) < 110
 
-        # Flat "paper" field: bright for a white box, dark for an inverted one.
+        # Flat "paper" field: bright for a white box, dark for an inverted slab.
         if dark:
-            _, field = cv2.threshold(roi, 75, 255, cv2.THRESH_BINARY_INV)
+            _, field = cv2.threshold(roi, 80, 255, cv2.THRESH_BINARY_INV)
         else:
             _, field = cv2.threshold(roi, 185, 255, cv2.THRESH_BINARY)
-
-        # Close over the text strokes so the interior becomes one solid blob.
-        ks = int(np.clip(min(roi.shape[:2]) // 12, 7, 21))
+        ks = int(np.clip(min(rh, rw) // 10, 7, 25))
         k = cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks))
         field = cv2.morphologyEx(field, cv2.MORPH_CLOSE, k)
 
-        num, _, stats, _ = cv2.connectedComponentsWithStats(field, 8)
-        if num <= 1:
+        if dark:
+            # The whole dark extent becomes one clean black panel — frame and
+            # interior are both dark, so there's nothing to preserve. Using the
+            # union bounding box (not the largest blob) keeps a full-height title
+            # bar from fragmenting around big characters.
+            ys, xs = np.where(field > 0)
+            if xs.size == 0:
+                return None
+            bx, by = int(xs.min()), int(ys.min())
+            bw, bh = int(xs.max()) - bx + 1, int(ys.max()) - by + 1
+        else:
+            # A framed light box: keep just the largest interior blob so the
+            # border around it stays intact.
+            num, _, stats, _ = cv2.connectedComponentsWithStats(field, 8)
+            if num <= 1:
+                return None
+            best, best_a = 0, 0
+            for i in range(1, num):
+                a = int(stats[i, cv2.CC_STAT_AREA])
+                if a > best_a:
+                    best, best_a = i, a
+            if best == 0:
+                return None
+            bx = int(stats[best, cv2.CC_STAT_LEFT])
+            by = int(stats[best, cv2.CC_STAT_TOP])
+            bw = int(stats[best, cv2.CC_STAT_WIDTH])
+            bh = int(stats[best, cv2.CC_STAT_HEIGHT])
+
+        # Must fill a big chunk of the region (a real slab, not a bright patch in
+        # artwork) and densely fill its own bbox.
+        if bw < 10 or bh < 10 or bw * bh < roi_area * 0.35:
             return None
-        best, best_a = 0, 0
-        for i in range(1, num):
-            a = int(stats[i, cv2.CC_STAT_AREA])
-            if a > best_a:
-                best, best_a = i, a
-        if best == 0:
-            return None
-        # Must fill a big chunk of the region (a real box, not a bright patch in
-        # artwork) and be roughly rectangular.
-        if best_a < roi.shape[0] * roi.shape[1] * 0.35:
-            return None
-        bx = int(stats[best, cv2.CC_STAT_LEFT])
-        by = int(stats[best, cv2.CC_STAT_TOP])
-        bw = int(stats[best, cv2.CC_STAT_WIDTH])
-        bh = int(stats[best, cv2.CC_STAT_HEIGHT])
-        if bw < 8 or bh < 8 or best_a / float(bw * bh) < 0.6:
+        dens = float(np.count_nonzero(field[by:by + bh, bx:bx + bw])) / float(bw * bh)
+        if dens < 0.55:
             return None
         return (x0 + bx, y0 + by, bw, bh, dark)
 
