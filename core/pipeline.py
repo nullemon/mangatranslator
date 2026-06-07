@@ -404,7 +404,89 @@ class TranslationPipeline:
         return out
 
     def _detect_free_text(self, image, bubble_regions, update) -> List[dict]:
-        """Second pass: find text not in any bubble (narration, labels, etc.)."""
+        """Second pass: find text not in any bubble (narration, titles, labels).
+
+        Primary path is the vision LLM, which reads vertical Japanese columns,
+        large stylized titles, and narration boxes that the CV morphology
+        detector can't. Falls back to the CV detector (+ local OCR) when the
+        LLM path returns nothing or is unavailable."""
+        items = self._free_text_llm(image, bubble_regions, update)
+        if items:
+            return items
+        return self._free_text_cv(image, bubble_regions, update)
+
+    def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
+        """Vision-LLM free-text detection: returns box + original + translation
+        in a single call. Reads the vertical / dramatic text the CV pass misses."""
+        update(2, "Scanning for free text (narration / titles)...", 52)
+        h, w = image.shape[:2]
+        bubble_ids = [r.id for r in bubble_regions]
+        try:
+            dets = self.translator.detect_free_text(image, self.target_lang, bubble_ids)
+        except Exception as e:
+            print(f"[pipeline] LLM free-text detection failed: {e}")
+            return []
+        if not dets:
+            return []
+
+        from .ocr import _has_japanese
+        bubble_boxes = [list(r.bbox) for r in bubble_regions]
+        next_id = max((r.id for r in bubble_regions), default=0) + 1
+        used: List[list] = []
+        items: List[dict] = []
+
+        for det in dets:
+            try:
+                bx = int(float(det["x_pct"]) / 100.0 * w)
+                by = int(float(det["y_pct"]) / 100.0 * h)
+                bw = int(float(det["width_pct"]) / 100.0 * w)
+                bh = int(float(det["height_pct"]) / 100.0 * h)
+            except (KeyError, ValueError, TypeError):
+                continue
+            bx = max(0, min(bx, w - 1))
+            by = max(0, min(by, h - 1))
+            bw = min(bw, w - bx)
+            bh = min(bh, h - by)
+            if bw < 8 or bh < 8:
+                continue
+
+            jp = (det.get("original") or "").strip()
+            tr = (det.get("translation") or "").strip()
+            typ = (det.get("type") or "narration").strip().lower()
+
+            # Only keep regions the model actually read as Japanese — guards
+            # against boxes dropped on already-English text or bare artwork.
+            if typ in ("sfx", "sound", "onomatopoeia"):
+                continue
+            if not jp or not _has_japanese(jp) or _is_sfx(jp):
+                continue
+            if not tr:
+                continue
+
+            box = [bx, by, bw, bh]
+            if any(_boxes_overlap(box, bb) for bb in bubble_boxes):
+                continue
+            if any(_boxes_overlap(box, u) for u in used):
+                continue
+            used.append(box)
+
+            items.append({
+                "id": next_id,
+                "bbox": box,
+                "original": jp,
+                "translation": tr,
+                "type": typ if typ in ("title", "credit", "narration", "caption") else "narration",
+                "in_bubble": False,
+                "dark": False,
+            })
+            next_id += 1
+
+        if items:
+            update(2, f"Found {len(items)} free text regions", 58)
+        return items
+
+    def _free_text_cv(self, image, bubble_regions, update) -> List[dict]:
+        """CV-morphology free-text detection + local OCR (fallback path)."""
         if self.text_detector is None or not self.text_detector.ok:
             return []
         if self.ocr is None or not self.ocr.ok:
