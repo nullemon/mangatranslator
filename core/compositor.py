@@ -49,7 +49,11 @@ class Compositor:
             except Exception:
                 continue
             if cw > 2 and ch > 2:
-                self._inpaint_text(result, cx, cy, cw, ch)
+                cap = self._detect_caption_box(gray, cx, cy, cw, ch)
+                if cap is not None:
+                    self._fill_caption(result, cap)
+                else:
+                    self._inpaint_text(result, cx, cy, cw, ch)
 
         placements = []     # (rect, text, color)
         used_boxes = []
@@ -86,10 +90,10 @@ class Compositor:
                 bh = min(bh, h - by)
                 if bw < 6 or bh < 6:
                     continue
-                self._inpaint_text(result, bx, by, bw, bh)
-                dark = self._is_dark_region(gray, bx, by, bw, bh)
-                pad = max(2, min(bw, bh) // 16)
-                rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
+                # A bordered caption box gets a clean solid fill; text drawn over
+                # bare artwork has just its strokes inpainted out (no slab).
+                cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
+                rect, dark = self._apply_free_region(result, gray, cap, bb)
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color))
                 it["placed"] = True
@@ -102,16 +106,14 @@ class Compositor:
                 bh = min(bh, h - by)
                 if bw < 10 or bh < 10:
                     continue
-                rx, ry, rw, rh = self._refine_free_bbox(gray, bx, by, bw, bh)
-                bb = (rx, ry, rw, rh)
+                # Plan the region first (caption interior or refined ink box) so
+                # overlaps are rejected before anything is painted.
+                cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=True)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
                 used_boxes.append(bb)
-                self._inpaint_text(result, rx, ry, rw, rh)
-                it["bbox"] = [rx, ry, rw, rh]
-                dark = self._is_dark_region(gray, rx, ry, rw, rh)
-                pad = max(2, min(rw, rh) // 16)
-                rect = (rx + pad, ry + pad, rw - 2 * pad, rh - 2 * pad)
+                rect, dark = self._apply_free_region(result, gray, cap, bb)
+                it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color))
                 it["placed"] = True
@@ -284,6 +286,90 @@ class Compositor:
         if x1 <= x0 or y1 <= y0:
             return False
         return float(np.median(gray[y0:y1, x0:x1])) < 128
+
+    # ── Free / manual text regions: caption-box fill vs. inpaint ──
+    def _detect_caption_box(self, gray, x, y, w, h):
+        """Detect a bordered caption / narration box with a flat interior inside
+        the region. Manga caption boxes are a solid white (or solid black) field
+        framed by a thin border. Returns (ix, iy, iw, ih, dark) for the interior
+        to fill, or None when the region is textured artwork (where a painted
+        slab would look worse than placing text straight over the art)."""
+        H, W = gray.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 - x0 < 14 or y1 - y0 < 14:
+            return None
+        roi = gray[y0:y1, x0:x1]
+        dark = float(np.median(roi)) < 110
+
+        # Flat "paper" field: bright for a white box, dark for an inverted one.
+        if dark:
+            _, field = cv2.threshold(roi, 75, 255, cv2.THRESH_BINARY_INV)
+        else:
+            _, field = cv2.threshold(roi, 185, 255, cv2.THRESH_BINARY)
+
+        # Close over the text strokes so the interior becomes one solid blob.
+        ks = int(np.clip(min(roi.shape[:2]) // 12, 7, 21))
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks))
+        field = cv2.morphologyEx(field, cv2.MORPH_CLOSE, k)
+
+        num, _, stats, _ = cv2.connectedComponentsWithStats(field, 8)
+        if num <= 1:
+            return None
+        best, best_a = 0, 0
+        for i in range(1, num):
+            a = int(stats[i, cv2.CC_STAT_AREA])
+            if a > best_a:
+                best, best_a = i, a
+        if best == 0:
+            return None
+        # Must fill a big chunk of the region (a real box, not a bright patch in
+        # artwork) and be roughly rectangular.
+        if best_a < roi.shape[0] * roi.shape[1] * 0.35:
+            return None
+        bx = int(stats[best, cv2.CC_STAT_LEFT])
+        by = int(stats[best, cv2.CC_STAT_TOP])
+        bw = int(stats[best, cv2.CC_STAT_WIDTH])
+        bh = int(stats[best, cv2.CC_STAT_HEIGHT])
+        if bw < 8 or bh < 8 or best_a / float(bw * bh) < 0.6:
+            return None
+        return (x0 + bx, y0 + by, bw, bh, dark)
+
+    def _fill_caption(self, result, cap):
+        """Fill a detected caption interior with a solid clean color (white, or
+        black for an inverted box), preserving its border frame. Returns the
+        filled rect (fx, fy, fw, fh) for text placement."""
+        ix, iy, iw, ih, dark = cap
+        m = max(2, min(iw, ih) // 22)
+        fx, fy = ix + m, iy + m
+        fw, fh = max(iw - 2 * m, 4), max(ih - 2 * m, 4)
+        result[fy:fy + fh, fx:fx + fw] = (0, 0, 0) if dark else (255, 255, 255)
+        return fx, fy, fw, fh
+
+    def _plan_free_region(self, gray, x, y, w, h, refine):
+        """Decide the bbox a free/manual region will occupy, without touching the
+        image, so overlaps can be rejected first. Returns (caption_or_None, bbox)."""
+        cap = self._detect_caption_box(gray, x, y, w, h)
+        if cap is not None:
+            return cap, (cap[0], cap[1], cap[2], cap[3])
+        if refine:
+            return None, self._refine_free_bbox(gray, x, y, w, h)
+        return None, (x, y, w, h)
+
+    def _apply_free_region(self, result, gray, cap, bbox):
+        """Clear a planned free region and return (text_rect, dark). A caption
+        box gets a solid clean fill; free text over art has its strokes inpainted."""
+        if cap is not None:
+            fx, fy, fw, fh = self._fill_caption(result, cap)
+            pad = max(3, min(fw, fh) // 12)
+            rect = (fx + pad, fy + pad, max(fw - 2 * pad, 8), max(fh - 2 * pad, 8))
+            return rect, cap[4]
+        rx, ry, rw, rh = [int(v) for v in bbox]
+        self._inpaint_text(result, rx, ry, rw, rh)
+        dark = self._is_dark_region(gray, rx, ry, rw, rh)
+        pad = max(2, min(rw, rh) // 16)
+        rect = (rx + pad, ry + pad, max(rw - 2 * pad, 8), max(rh - 2 * pad, 8))
+        return rect, dark
 
     # ── Recover a balloon mask from a bbox (used when no mask is supplied) ──
     def _resolve_bubble(self, gray, bbox, page_area):

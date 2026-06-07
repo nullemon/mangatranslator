@@ -269,7 +269,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .trans-stage{position:relative;display:block;line-height:0}
 .move-layer{position:absolute;inset:0;display:none}
 .move-layer.on{display:block}
-.move-layer[data-tool="cover"],.move-layer[data-tool="add"],.move-layer[data-tool="ocr"]{cursor:crosshair}
+.move-layer[data-tool="cover"],.move-layer[data-tool="add"]{cursor:crosshair}
 .move-box{position:absolute;border:2px dashed var(--accent);background:rgba(59,130,246,.10);
   border-radius:4px;touch-action:none;transition:background .12s,border-color .12s}
 .move-box.draggable{cursor:grab}
@@ -287,8 +287,6 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   background:var(--danger);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4}
 .add-box{position:absolute;border:2px dashed #16a34a;background:rgba(22,163,74,.14);border-radius:3px;touch-action:none}
 .add-box.drawing{pointer-events:none}
-.ocr-box{position:absolute;border:2px dashed #2563eb;background:rgba(37,99,235,.14);border-radius:3px;touch-action:none}
-.ocr-box.drawing{pointer-events:none}
 /* inline text editor popup */
 .edit-pop{position:absolute;z-index:20;width:min(260px,60vw);background:var(--surface);
   border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);

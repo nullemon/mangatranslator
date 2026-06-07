@@ -695,8 +695,7 @@ document.addEventListener("DOMContentLoaded", () => {
     move: "Drag any translation to move it, then Apply & Re-render.",
     edit: "Click any translation to fix its text.",
     cover: "Drag a box over leftover text to erase it, then Apply & Re-render.",
-    add: "Drag a box where text is missing, type it, then Apply & Re-render.",
-    ocr: "Draw a box over missed Japanese text — it will be OCR'd and translated automatically.",
+    add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
   };
 
   toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
@@ -879,14 +878,14 @@ document.addEventListener("DOMContentLoaded", () => {
   (function initDraw() {
     let drawing = false, sx, sy, rectEl = null;
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "cover" && tool !== "add" && tool !== "ocr") return;
+      if (tool !== "cover" && tool !== "add") return;
       if (e.target !== moveLayer) return;   // don't start when clicking a box
       const page = getActive(); if (!page || !curDims()) return;
       drawing = true;
       const r = moveLayer.getBoundingClientRect();
       sx = e.clientX - r.left; sy = e.clientY - r.top;
       rectEl = document.createElement("div");
-      rectEl.className = (tool === "cover" ? "cover-box" : tool === "ocr" ? "ocr-box" : "add-box") + " drawing";
+      rectEl.className = (tool === "cover" ? "cover-box" : "add-box") + " drawing";
       rectEl.style.left = (sx / r.width * 100) + "%";
       rectEl.style.top = (sy / r.height * 100) + "%";
       moveLayer.appendChild(rectEl);
@@ -920,15 +919,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (tool === "cover") {
         page.covers.push([x, y, w, h]);
         buildOverlay();
-      } else if (tool === "ocr") {
-        autoTranslate(page, [x, y, w, h]);
       } else {
-        const txt = prompt("Type the English text for this spot:", "");
-        if (txt && txt.trim()) {
-          page.addSeq = (page.addSeq || 0) + 1;
-          page.added.push({ id: "m" + page.addSeq, bbox: [x, y, w, h], translation: txt.trim(), placed: true });
-          buildOverlay();
-        }
+        autoTranslate(page, [x, y, w, h]);
       }
     };
     moveLayer.addEventListener("pointerup", finish);
@@ -936,7 +928,8 @@ document.addEventListener("DOMContentLoaded", () => {
   })();
 
   async function autoTranslate(page, bbox) {
-    editHint.textContent = "OCR in progress…";
+    editHint.textContent = "Reading & translating…";
+    let data = { original: "", translation: "" };
     try {
       const resp = await fetch(`/api/ocr-translate/${page.taskId}`, {
         method: "POST",
@@ -949,34 +942,30 @@ document.addEventListener("DOMContentLoaded", () => {
           target_lang: targetLang.value,
         }),
       });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        editHint.textContent = "OCR failed: " + (err.detail || resp.statusText);
-        return;
-      }
-      const data = await resp.json();
-      if (!data.translation) {
-        editHint.textContent = "No Japanese text detected in that area.";
-        return;
-      }
-      const txt = prompt("Edit translation (original: " + data.original + "):", data.translation);
-      if (txt && txt.trim()) {
-        page.added = page.added || [];
-        page.addSeq = (page.addSeq || 0) + 1;
-        page.added.push({
-          id: "m" + page.addSeq,
-          bbox,
-          original: data.original,
-          translation: txt.trim(),
-          placed: true,
-        });
-        buildOverlay();
-        editHint.textContent = "Added! Hit Apply & Re-render when ready.";
-      } else {
-        editHint.textContent = HINTS.ocr;
-      }
-    } catch (e) {
-      editHint.textContent = "OCR error: " + e.message;
+      if (resp.ok) data = await resp.json();
+    } catch (_) { /* fall through to manual entry */ }
+
+    // Auto-translated text pre-fills the prompt (editable); if no Japanese was
+    // read, fall back to manual entry so the tool still works anywhere.
+    const suggested = (data.translation || "").trim();
+    const label = suggested
+      ? "Edit translation (read: " + data.original + "):"
+      : "No Japanese detected here — type the English text:";
+    const txt = prompt(label, suggested);
+    if (txt && txt.trim()) {
+      page.added = page.added || [];
+      page.addSeq = (page.addSeq || 0) + 1;
+      page.added.push({
+        id: "m" + page.addSeq,
+        bbox,
+        original: data.original || "",
+        translation: txt.trim(),
+        placed: true,
+      });
+      buildOverlay();
+      editHint.textContent = "Added! Hit Apply & Re-render when ready.";
+    } else {
+      editHint.textContent = HINTS.add;
     }
   }
 
