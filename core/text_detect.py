@@ -124,17 +124,16 @@ class FreeTextDetector:
             _, binary = cv2.threshold(gray, 0, 255,
                                       cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # Connect nearby strokes into text-like clusters.
-        # Horizontal kernel for horizontal text lines.
-        kw = max(12, w // 50)
-        kh = max(3, h // 200)
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+        # Connect nearby strokes into text-like clusters — small kernels so
+        # text doesn't merge with nearby artwork.
+        # Horizontal kernel for horizontal text.
+        kw = max(8, w // 90)
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 3))
         h_closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, h_kernel)
 
         # Vertical kernel for vertical Japanese text columns.
-        vw = max(3, w // 200)
-        vh = max(12, h // 50)
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (vw, vh))
+        vh = max(8, h // 90)
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, vh))
         v_closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, v_kernel)
 
         combined = cv2.bitwise_or(h_closed, v_closed)
@@ -149,16 +148,23 @@ class FreeTextDetector:
         for cnt in contours:
             x, y, bw, bh = cv2.boundingRect(cnt)
             area = bw * bh
-            if area < page_area * 0.0015 or area > page_area * 0.18:
+            if area < page_area * 0.0015 or area > page_area * 0.12:
                 continue
             if bw < 15 or bh < 15:
+                continue
+            # Reject oversized blocks — a single text region shouldn't span
+            # more than ~30% of the page in either direction.
+            if bw > w * 0.45 or bh > h * 0.30:
+                continue
+            aspect = max(bw, bh) / max(min(bw, bh), 1)
+            if aspect > 10:
                 continue
 
             # Text has moderate stroke density — art is either very sparse
             # (lines) or very dense (screentone/fill).
             roi = binary[y:y + bh, x:x + bw]
             density = cv2.countNonZero(roi) / max(area, 1)
-            if density < 0.08 or density > 0.70:
+            if density < 0.10 or density > 0.65:
                 continue
 
             # Text regions have multiple separated blobs (characters).
@@ -166,7 +172,7 @@ class FreeTextDetector:
             n_labels, _, stats, _ = cv2.connectedComponentsWithStats(
                 roi_clean, 8)
             min_char = max(area * 0.001, 12)
-            max_char = area * 0.35
+            max_char = area * 0.30
             chars = sum(1 for i in range(1, n_labels)
                         if min_char <= stats[i, cv2.CC_STAT_AREA] <= max_char)
             if chars < 3:
@@ -231,11 +237,13 @@ def _filter_blocks(blocks, h, w, existing_boxes):
     out = []
     for bx, by, bw, bh in blocks:
         area = bw * bh
-        if area < page_area * 0.0008 or area > page_area * 0.20:
+        if area < page_area * 0.0008 or area > page_area * 0.12:
+            continue
+        if bw > w * 0.45 or bh > h * 0.30:
             continue
         if any(_overlaps((bx, by, bw, bh), eb, 0.25) for eb in existing_boxes):
             continue
-        pad = max(3, min(bw, bh) // 10)
+        pad = max(3, min(bw, bh) // 12)
         bx = max(0, bx - pad)
         by = max(0, by - pad)
         bw = min(w - bx, bw + 2 * pad)
