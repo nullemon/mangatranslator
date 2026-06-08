@@ -234,7 +234,9 @@ document.addEventListener("DOMContentLoaded", () => {
     enhanceModel.value = localStorage.getItem("manga_enh_model_" + p) || "";
     enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
     showSaved(enhanceKeyStatus, enhanceKey.value.trim());
-    enhanceKeyLabel.textContent = p === "openai" ? "OpenAI API Key" : "Gemini API Key";
+    enhanceKeyLabel.textContent =
+      p === "openai" ? "OpenAI API Key" :
+      p === "xai"    ? "xAI (Grok) API Key" : "Gemini API Key";
   }
   enhanceProvider.addEventListener("change", () => {
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);

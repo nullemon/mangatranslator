@@ -47,10 +47,12 @@ class ImageEnhancer:
     GEMINI_URL = (
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     )
+    XAI_URL = "https://api.x.ai/v1/images/edits"
 
     DEFAULT_MODELS = {
         "openai": "gpt-image-1",
         "gemini": "gemini-2.5-flash-image",
+        "xai": "grok-imagine-image-quality",
     }
 
     def __init__(self, timeout: float = 240.0):
@@ -69,12 +71,16 @@ class ImageEnhancer:
 
         prompt = (prompt or "").strip() or self.DEFAULT_PROMPT
         provider = (provider or "").lower().strip()
+        if provider == "grok":
+            provider = "xai"
         model = (model or "").strip() or self.DEFAULT_MODELS.get(provider, "")
 
         if provider == "openai":
             return self._openai(image, prompt, api_key, model)
         if provider == "gemini":
             return self._gemini(image, prompt, api_key, model)
+        if provider == "xai":
+            return self._xai(image, prompt, api_key, model)
         raise ValueError(f"Unknown enhancement provider: {provider!r}")
 
     # ── Encoding helpers ──
@@ -154,6 +160,46 @@ class ImageEnhancer:
                 if inline and inline.get("data"):
                     return self._decode(base64.b64decode(inline["data"]))
         raise RuntimeError(f"Gemini returned no image: {str(payload)[:300]}")
+
+    # ── xAI (Grok Imagine) image-to-image edit ──
+    def _xai(self, image, prompt, api_key, model) -> np.ndarray:
+        h, w = image.shape[:2]
+        max_dim = 2048
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            raise ValueError("Failed to encode image for xAI")
+        data_uri = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+        body = {
+            "model": model,
+            "prompt": prompt,
+            "image": {"url": data_uri, "type": "image_url"},
+            "response_format": "b64_json",
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        print(f"[enhance] xAI request: model={model}, image={len(data_uri) // 1024}KB")
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
+        print(f"[enhance] xAI response: {resp.status_code}")
+
+        if resp.status_code != 200:
+            raise RuntimeError(self._err("xAI", resp))
+
+        payload = resp.json()
+        items = payload.get("data") or []
+        if items:
+            first = items[0]
+            if first.get("b64_json"):
+                return self._decode(base64.b64decode(first["b64_json"]))
+            if first.get("url"):
+                with httpx.Client(timeout=self.timeout) as client:
+                    img_resp = client.get(first["url"])
+                if img_resp.status_code == 200:
+                    return self._decode(img_resp.content)
+        raise RuntimeError(f"xAI returned no image: {str(payload)[:300]}")
 
     def _err(self, name: str, resp: httpx.Response) -> str:
         try:
