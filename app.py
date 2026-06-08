@@ -179,7 +179,10 @@ async def _run(
             await loop.run_in_executor(None, do_enhance)
             tasks[task_id]["enhanced_path"] = enhanced_path
             tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
-            image_path = enhanced_path
+            # NOTE: translation stays on the ORIGINAL page, NOT the AI-enhanced
+            # one. Whole-page generative "enhancement" repaints/bleaches the art
+            # and background; we only ever edit the exact text regions. The
+            # enhanced image is kept available as a separate preview.
 
         pipeline = TranslationPipeline(
             api_key=api_key,

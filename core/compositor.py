@@ -51,6 +51,10 @@ class Compositor:
         page_area = h * w
         result = image.copy()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Every region we actually edit. At the end we restore ALL other pixels
+        # from the original, so the art / background is never touched — not a
+        # pixel more than the exact text areas we cover.
+        edited_rects = []
 
         # Manual cover/erase regions the user drew to wipe leftover or
         # untranslated text. Erase them before placing anything else.
@@ -65,6 +69,7 @@ class Compositor:
                     self._fill_caption(result, cap)
                 else:
                     self._inpaint_text(result, cx, cy, cw, ch)
+                edited_rects.append((cx, cy, cw, ch))
 
         placements = []     # (rect, text, color)
         used_boxes = []
@@ -106,6 +111,7 @@ class Compositor:
                 # bare artwork has just its strokes inpainted out (no slab).
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
                 rect, dark = self._apply_free_region(result, gray, cap, bb)
+                edited_rects.append(tuple(int(v) for v in bb))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital))
                 it["placed"] = True
@@ -125,6 +131,7 @@ class Compositor:
                     continue
                 used_boxes.append(bb)
                 rect, dark = self._apply_free_region(result, gray, cap, bb)
+                edited_rects.append(tuple(int(v) for v in bb))
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital))
@@ -183,6 +190,7 @@ class Compositor:
                 pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
 
+            edited_rects.append(tuple(int(v) for v in bb))
             color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color, ital))
             it["placed"] = True
@@ -193,7 +201,20 @@ class Compositor:
                 self.renderer.draw_in_rect(pil, rect, text, color, italic=ital)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
-        result = self._final_cleanup(result)
+        # Hard guarantee: only the exact regions we edited may differ from the
+        # original. Restore every other pixel byte-for-byte — no global cleanup,
+        # no "fixing" the art or background. Text placements are included so a
+        # dragged/offset line that sits outside its cover box is still kept.
+        edited = np.zeros((h, w), np.uint8)
+        for rx, ry, rw, rh in edited_rects + [p[0] for p in placements]:
+            x0, y0 = max(0, int(rx)), max(0, int(ry))
+            x1, y1 = min(w, int(rx) + int(rw)), min(h, int(ry) + int(rh))
+            if x1 > x0 and y1 > y0:
+                edited[y0:y1, x0:x1] = 255
+        # A little dilation so antialiased text/halo at a region's edge isn't clipped.
+        edited = cv2.dilate(edited, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7)))
+        keep = edited == 0
+        result[keep] = image[keep]
         return result
 
     def _final_cleanup(self, image):
