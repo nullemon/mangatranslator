@@ -197,38 +197,15 @@ class Compositor:
         return result
 
     def _final_cleanup(self, image):
-        """Gentle scan-clean: even out the page tone and melt scanner grain into
-        a smooth field, keeping paper clean and ink solid — WITHOUT crushing the
-        soft pencil shading or amplifying grain into crunchy speckle (which is
-        what a heavy unsharp + hard snap does)."""
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        bp = float(np.percentile(gray, 1))
-        wp = float(np.percentile(gray, 99))
-        if wp - bp < 40:
-            return image
+        """Light cleanup: melt scanner grain and tidy the very brightest / darkest
+        pixels, but leave every gray tone (shading, screentone, pencil work)
+        exactly where it is. No auto-levels — they stretch the histogram and
+        push the whole page toward black-and-white."""
+        out = cv2.fastNlMeansDenoisingColored(image, None, 5, 5, 7, 21)
 
-        # Gentle auto-levels: pull paper toward white and ink toward black
-        # without slamming the midtones — those are the soft grays we keep.
-        out = image.astype(np.float32)
-        out = (out - bp) * (255.0 / (wp - bp))
-        out = np.clip(out, 0, 255).astype(np.uint8)
-
-        # Melt the film-grain into a smooth field. Non-local-means is far better
-        # than a tiny bilateral at killing grain while preserving edges and the
-        # soft gradients on faces — grain is the main thing that reads "dirty".
-        out = cv2.fastNlMeansDenoisingColored(out, None, 6, 6, 7, 21)
-
-        # Snap only the *near*-pure tones: clean the paper to white and deepen
-        # the blackest inks, but leave every shade in between untouched so the
-        # pencil shading survives instead of posterizing.
-        g2 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        out[g2 > 244] = 255
-        out[g2 < 14] = 0
-
-        # A whisper of unsharp just to recover the edge crispness lost to
-        # denoising — small enough that it doesn't bring the grain back.
-        blurred = cv2.GaussianBlur(out, (0, 0), 1.0)
-        out = cv2.addWeighted(out, 1.18, blurred, -0.18, 0)
+        g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        out[g > 250] = 255
+        out[g < 6] = 0
         return out
 
     def _pick_color(self, dark, it):
