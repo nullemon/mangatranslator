@@ -9,10 +9,39 @@ from typing import Dict, List
 from . import prompts
 
 
-def _encode_png_b64(image: np.ndarray) -> str:
-    ok, buf = cv2.imencode(".png", image)
+# Vision APIs cap an inline image at ~10 MB of base64 and downsample anything
+# larger than ~1568 px on the long edge anyway. Shrink to that and send JPEG so
+# a big lossless scan can't blow the limit. Detections use PERCENTAGE coords, so
+# this never shifts where text lands back on the full-res page.
+MAX_IMAGE_EDGE = 1568
+API_IMAGE_MEDIA_TYPE = "image/jpeg"
+
+
+def _prep_for_api(image: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    long_edge = max(h, w)
+    if long_edge > MAX_IMAGE_EDGE:
+        s = MAX_IMAGE_EDGE / float(long_edge)
+        image = cv2.resize(
+            image, (max(1, round(w * s)), max(1, round(h * s))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return image
+
+
+def _encode_image_b64(image: np.ndarray, quality: int = 90) -> str:
+    """Downscale to the API's working size and encode as JPEG, stepping quality
+    down if the result would still exceed the inline limit."""
+    image = _prep_for_api(image)
+    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise ValueError("Failed to encode image")
+    q = quality
+    while len(buf) * 4 / 3 > 9_500_000 and q > 40:
+        q -= 15
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, q])
+        if not ok:
+            raise ValueError("Failed to encode image")
     return base64.b64encode(buf).decode("utf-8")
 
 
@@ -40,8 +69,8 @@ class ClaudeTranslator:
             "type": "image",
             "source": {
                 "type": "base64",
-                "media_type": "image/png",
-                "data": _encode_png_b64(image),
+                "media_type": API_IMAGE_MEDIA_TYPE,
+                "data": _encode_image_b64(image),
             },
         }
 
@@ -93,7 +122,7 @@ class GeminiTranslator:
         self.timeout = timeout
 
     def _image_part(self, image: np.ndarray) -> dict:
-        return {"inlineData": {"mimeType": "image/png", "data": _encode_png_b64(image)}}
+        return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
 
     def _ask(self, parts: list) -> str:
         body = {
