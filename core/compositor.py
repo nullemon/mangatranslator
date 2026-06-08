@@ -235,8 +235,26 @@ class Compositor:
             inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
         result[inner > 0] = (0, 0, 0) if dark else (255, 255, 255)
 
+    def _ink_mask(self, gray_roi):
+        """Mask of pixels that deviate from the smooth local background — i.e.
+        text / ink of EITHER polarity, including faint low-contrast narration.
+        Low-frequency shading lives in the background estimate and is ignored, so
+        only the high-frequency strokes light up."""
+        h, w = gray_roi.shape[:2]
+        if h < 3 or w < 3:
+            return np.zeros((max(h, 1), max(w, 1)), np.uint8)
+        sigma = max(3.0, min(h, w) / 6.0)
+        bg = cv2.GaussianBlur(cv2.medianBlur(gray_roi, 3), (0, 0), sigma)
+        diff = cv2.absdiff(gray_roi, bg)
+        _, mask = cv2.threshold(diff, 14, 255, cv2.THRESH_BINARY)
+        return cv2.morphologyEx(
+            mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        )
+
     def _inpaint_text(self, result, x, y, w, h):
-        """Remove text from a free-text region by inpainting dark strokes."""
+        """Remove text from a free-text region. Builds the stroke mask from where
+        the image deviates from its smooth background, so faint / low-contrast
+        narration of either polarity is caught and fully covered, then inpaints."""
         H, W = result.shape[:2]
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
@@ -244,24 +262,13 @@ class Compositor:
             return
         roi = result[y0:y1, x0:x1]
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        bg_med = float(np.median(gray_roi))
-        if bg_med > 160:
-            thresh = cv2.adaptiveThreshold(
-                gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY_INV, 21, 15,
-            )
-        else:
-            thresh = cv2.adaptiveThreshold(
-                gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 21, 15,
-            )
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        text_mask = cv2.dilate(thresh, kernel, iterations=1)
+        text_mask = cv2.dilate(self._ink_mask(gray_roi), kernel, iterations=2)
 
         # Prefer LaMa (clean over art/screentones); fall back to cv2.inpaint.
         if self.lama is not None and self.lama.ok:
             full_mask = np.zeros(result.shape[:2], np.uint8)
-            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=2)
+            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=1)
             out = self.lama.inpaint(result, full_mask)
             if out is not None:
                 result[:] = out
@@ -270,32 +277,34 @@ class Compositor:
         result[y0:y1, x0:x1] = inpainted
 
     def _refine_free_bbox(self, gray, x, y, w, h):
-        """Refine an AI-estimated free text bbox using CV to find actual text."""
+        """Lock an AI-estimated free-text box onto the ACTUAL ink. The model box
+        can sit a little off, so search a PADDED window, find the ink (faint or
+        bold, either polarity), and return its tight bbox — so the clean and the
+        placed translation land exactly on the words, not a little out."""
         H, W = gray.shape[:2]
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(W, x + w), min(H, y + h)
+        px = max(8, int(w * 0.12))
+        py = max(8, int(h * 0.20))
+        x0, y0 = max(0, x - px), max(0, y - py)
+        x1, y1 = min(W, x + w + px), min(H, y + h + py)
         if x1 <= x0 or y1 <= y0:
             return x, y, w, h
-        roi = gray[y0:y1, x0:x1]
-        bg_med = float(np.median(roi))
-        if bg_med > 160:
-            _, text_mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        else:
-            _, text_mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        text_mask = cv2.dilate(text_mask, kernel, iterations=2)
-        contours, _ = cv2.findContours(text_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
+        ink = self._ink_mask(gray[y0:y1, x0:x1])
+        ys, xs = np.where(ink > 0)
+        if xs.size < 10:
             return x, y, w, h
-        all_pts = np.vstack(contours)
-        rx, ry, rw, rh = cv2.boundingRect(all_pts)
+        rx, ry = int(xs.min()), int(ys.min())
+        rw, rh = int(xs.max()) - rx + 1, int(ys.max()) - ry + 1
         if rw < 5 or rh < 5:
             return x, y, w, h
+        # If the ink sprawls far past the AI box, the search leaked into nearby
+        # art — trust the original box rather than over-cover the drawing.
+        if rw * rh > 3.0 * max(w * h, 1):
+            return x, y, w, h
         pad = max(3, min(rw, rh) // 8)
-        fx = max(x0, x0 + rx - pad)
-        fy = max(y0, y0 + ry - pad)
-        fw = min(x1 - fx, rw + 2 * pad)
-        fh = min(y1 - fy, rh + 2 * pad)
+        fx = max(0, x0 + rx - pad)
+        fy = max(0, y0 + ry - pad)
+        fw = min(W - fx, rw + 2 * pad)
+        fh = min(H - fy, rh + 2 * pad)
         return fx, fy, fw, fh
 
     def _is_dark_region(self, gray, x, y, w, h):
