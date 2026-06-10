@@ -1,108 +1,171 @@
 #!/usr/bin/env bash
-# Installs the optional GPU stack and pre-downloads the speech-balloon model.
-# Safe to re-run. After it finishes, restart the app: python3 app.py
+# ═══════════════════════════════════════════════════════════════════════════
+# MangaTranslator — one-command setup (safe to re-run)
+#
+# Installs EVERYTHING needed:  base deps, GPU stack, all model weights,
+# CUDA library shims, CRAFT free-text detector, and verifies it all works.
+#
+# Usage:
+#     chmod +x setup_gpu.sh && ./setup_gpu.sh
+#
+# After it finishes the final check_setup.py tells you what's green.
+# Then start the app:   python3 app.py
+# ═══════════════════════════════════════════════════════════════════════════
 set -e
 
-# Load local secrets (HF_TOKEN etc.) so model downloads are authenticated —
-# copy .env.example to .env and fill it in.
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
+PIP="pip3 install --user --break-system-packages"
 
-echo "==> Installing GPU bubble-segmentation dependencies (torch, ultralytics)..."
-pip3 install --user --break-system-packages -r requirements-gpu.txt
+# ── .env (secrets / config) ──────────────────────────────────────────────
+if [ -f .env ]; then
+    set -a; . ./.env; set +a
+    echo "[✓] Loaded .env"
+else
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        echo "[!] Created .env from .env.example — edit it to add your HF_TOKEN"
+    fi
+fi
 
-echo "==> Installing hf_xet (high-performance HuggingFace downloads)..."
-pip3 install --user --break-system-packages "huggingface_hub[hf_xet]"
+# ── Base Python deps (FastAPI, OpenCV, Pillow, etc.) ─────────────────────
+echo ""
+echo "==> [1/8] Base dependencies..."
+$PIP -r requirements.txt
+
+# ── GPU stack (torch, YOLO, onnxruntime, spandrel) ───────────────────────
+echo ""
+echo "==> [2/8] GPU stack (torch, ultralytics, onnxruntime-gpu, spandrel)..."
+$PIP -r requirements-gpu.txt
+$PIP "huggingface_hub[hf_xet]"
 export HF_XET_HIGH_PERFORMANCE=1
 
-echo "==> Checking CUDA..."
-python3 - <<'PY'
-import torch
-print("torch:", torch.__version__, "| CUDA available:", torch.cuda.is_available(),
-      "|", (torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU only"))
-PY
+# ── CUDA 12 runtime libs for onnxruntime-gpu ─────────────────────────────
+# onnxruntime-gpu dlopens CUDA 12 libs by soname; torch CUDA 13 only ships
+# .so.13 — these pip wheels provide the .so.12 versions so the text-pixel
+# segmentation model actually runs on GPU instead of falling back to CPU.
+echo ""
+echo "==> [3/8] CUDA 12 runtime libs for onnxruntime..."
+$PIP nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+     nvidia-cufft-cu12 nvidia-curand-cu12 \
+  || echo "    (install failed — text-seg will fall back to CPU, still works)"
 
-echo "==> Pre-downloading the speech-balloon segmentation model..."
+# ── CRAFT free-text detector (narration, labels, dramatic text) ──────────
+# --no-deps: CRAFT pins a 2021 opencv (<4.5.4.62) that won't build on modern
+# Python and breaks everything. Its actual runtime deps (torch, cv2, scipy,
+# gdown) are already installed above.
+echo ""
+echo "==> [4/8] CRAFT free-text detector..."
+$PIP gdown scipy || true
+$PIP --no-deps craft-text-detector \
+  || echo "    (CRAFT install failed — built-in CV fallback will be used)"
+
+# ── Model weights ────────────────────────────────────────────────────────
+echo ""
+echo "==> [5/8] Downloading model weights..."
+
+mkdir -p models
+
+echo "  → Speech-balloon segmentation (YOLOv8)..."
 python3 - <<'PY'
 import os
 from huggingface_hub import hf_hub_download
 repo = os.environ.get("BUBBLE_MODEL_REPO", "kitsumed/yolov8m_seg-speech-bubble")
 fname = os.environ.get("BUBBLE_MODEL_FILE", "model.pt")
-print("Model cached at:", hf_hub_download(repo_id=repo, filename=fname))
+print("    cached at:", hf_hub_download(repo_id=repo, filename=fname))
 PY
 
-echo "==> Pre-downloading manga-ocr (reads each bubble locally)..."
+echo "  → manga-ocr..."
 python3 - <<'PY'
 try:
     from manga_ocr import MangaOcr
     MangaOcr()
-    print("manga-ocr ready")
+    print("    manga-ocr ready")
 except Exception as e:
-    print("manga-ocr skipped:", e)
+    print("    manga-ocr skipped:", e)
 PY
 
-echo "==> Pre-downloading LaMa inpainting (clean text removal)..."
+echo "  → LaMa inpainting..."
 python3 - <<'PY'
 try:
     from simple_lama_inpainting import SimpleLama
     SimpleLama()
-    print("LaMa ready")
+    print("    LaMa ready")
 except Exception as e:
-    print("LaMa skipped:", e)
+    print("    LaMa skipped:", e)
 PY
 
-echo "==> Installing text-pixel segmentation (comic-text-detector)..."
-pip3 install --user --break-system-packages onnxruntime-gpu \
-  || pip3 install --user --break-system-packages onnxruntime
-# onnxruntime-gpu dlopens CUDA *12* libs; torch cu13 only ships .so.13.
-# These wheels provide the .so.12 sonames so text-seg really runs on GPU.
-# (cudnn is the big one, ~700MB — skip is fine, text-seg then runs on CPU.)
-echo "==> Installing CUDA 12 runtime libs for onnxruntime-gpu..."
-pip3 install --user --break-system-packages \
-  nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
-  nvidia-cufft-cu12 nvidia-curand-cu12 \
-  || echo "    (install failed — text-seg will run on CPU, still works)"
-mkdir -p models
 if [ ! -f models/comictextdetector.pt.onnx ]; then
-  echo "==> Downloading comic-text-detector weights (~90MB)..."
-  curl -fL -o models/comictextdetector.pt.onnx \
-    https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt.onnx \
-  || curl -fL -o models/comictextdetector.pt.onnx \
-    https://github.com/dmMaze/comic-text-detector/releases/download/data/comictextdetector.pt.onnx \
-  || echo "    (download failed — the app will retry on first run)"
+    echo "  → comic-text-detector (~90MB)..."
+    curl -fL -o models/comictextdetector.pt.onnx \
+      https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt.onnx \
+    || curl -fL -o models/comictextdetector.pt.onnx \
+      https://github.com/dmMaze/comic-text-detector/releases/download/data/comictextdetector.pt.onnx \
+    || echo "    (download failed — will auto-retry on first run)"
+else
+    echo "  → comic-text-detector: already downloaded"
 fi
 
-echo "==> Installing super-resolution (Real-ESRGAN anime via spandrel)..."
-pip3 install --user --break-system-packages "spandrel>=0.3.0"
 if [ ! -f models/RealESRGAN_x4plus_anime_6B.pth ]; then
-  echo "==> Downloading Real-ESRGAN anime weights (~18MB)..."
-  curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
-    https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth \
-  || curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
-    https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4plus_anime_6B.pth \
-  || echo "    (download failed — the app will retry on first run)"
+    echo "  → Real-ESRGAN anime (~18MB)..."
+    curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
+      https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth \
+    || curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
+      https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4plus_anime_6B.pth \
+    || echo "    (download failed — will auto-retry on first run)"
+else
+    echo "  → Real-ESRGAN: already downloaded"
 fi
 
-echo "==> Installing CRAFT text detector (free text / narration)..."
-# --no-deps: craft's own dependency list pins a 2021 opencv that no longer
-# builds; everything it really needs (torch, cv2, scipy, gdown) is installed
-# above. Failures here are non-fatal — the CV fallback still works.
-pip3 install --user --break-system-packages gdown scipy || true
-pip3 install --user --break-system-packages --no-deps craft-text-detector \
-  || echo "    (CRAFT install failed — built-in CV free-text fallback will be used)"
-
-echo "==> Pre-downloading CRAFT model weights..."
+echo "  → CRAFT text detection..."
 python3 - <<'PY'
 try:
     from craft_text_detector import Craft
     import torch
     Craft(output_dir=None, cuda=torch.cuda.is_available(), crop_type="box")
-    print("CRAFT ready")
+    print("    CRAFT ready")
 except Exception as e:
-    print("CRAFT skipped:", e)
+    print("    CRAFT skipped:", e)
 PY
 
-echo "==> Done. Restart the app:  python3 app.py"
-echo "    Detect step shows 'segmentation model (GPU)'; bubbles are read by"
-echo "    manga-ocr and erased with LaMa when those models are installed."
-echo "    Free text (narration/labels) detected by CRAFT when installed."
-echo "    Text strokes masked pixel-precisely by comic-text-detector."
+# ── Quick GPU test ───────────────────────────────────────────────────────
+echo ""
+echo "==> [6/8] GPU check..."
+python3 - <<'PY'
+import torch
+cuda = torch.cuda.is_available()
+gpu = torch.cuda.get_device_name(0) if cuda else "CPU only"
+print(f"    torch {torch.__version__} | CUDA: {gpu}")
+if not cuda:
+    print("    ⚠  No GPU detected — models will run on CPU (slower but works)")
+PY
+
+python3 - <<'PY'
+try:
+    import onnxruntime as ort
+    provs = ort.get_available_providers()
+    has_cuda = "CUDAExecutionProvider" in provs
+    print(f"    onnxruntime {ort.__version__} | {'CUDA' if has_cuda else 'CPU only'}")
+except ImportError:
+    print("    onnxruntime: not installed")
+PY
+
+# ── Kill any old server ──────────────────────────────────────────────────
+echo ""
+echo "==> [7/8] Stopping old server (if any)..."
+pkill -f "python3 app.py" 2>/dev/null && echo "    killed old process" \
+  || echo "    no old server running"
+sleep 1
+
+# ── Full verification ────────────────────────────────────────────────────
+echo ""
+echo "==> [8/8] Running full verification..."
+echo ""
+python3 check_setup.py
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  Setup complete! Start the app:"
+echo ""
+echo "      python3 app.py"
+echo ""
+echo "  Then open http://localhost:8000 in your browser."
+echo "════════════════════════════════════════════════════════════════"
