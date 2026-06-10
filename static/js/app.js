@@ -90,6 +90,13 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("manga_case", textCase.value));
   }
 
+  const pageFinish = document.getElementById("pageFinish");
+  if (pageFinish) {
+    pageFinish.value = localStorage.getItem("manga_finish") || "clean";
+    pageFinish.addEventListener("change", () =>
+      localStorage.setItem("manga_finish", pageFinish.value));
+  }
+
   fontSelect.addEventListener("change", () =>
     localStorage.setItem("manga_font", fontSelect.value));
 
@@ -407,6 +414,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");
+      f.append("finish", pageFinish ? pageFinish.value : "clean");
       if (stylePrompt && stylePrompt.value.trim()) {
         f.append("style_prompt", stylePrompt.value.trim());
       }

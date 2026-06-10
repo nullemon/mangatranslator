@@ -157,6 +157,41 @@ def scan_cleanup(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
+def scan_finish(image: np.ndarray) -> np.ndarray:
+    """Final 'clean scan' pass (TCB-release look): melt scanner/photo grain,
+    snap the paper to pure white and the ink to solid black — while leaving
+    every midtone (screentones, gradients, pencil shading) untouched.
+
+    Unlike a global levels stretch, this uses knee curves anchored to the
+    page's own paper and ink histogram peaks, so only the tails move:
+    a grainy 200-gray paper becomes white, a 40-gray ink becomes black,
+    and a 120-gray screentone stays exactly 120."""
+    den = cv2.fastNlMeansDenoisingColored(image, None, 7, 7, 7, 21)
+    lab = cv2.cvtColor(den, cv2.COLOR_BGR2LAB)
+    L = lab[:, :, 0]
+
+    hist = cv2.calcHist([L], [0], None, [256], [0, 256]).ravel()
+    # Paper tone = brightest strong peak; ink tone = darkest strong peak.
+    paper = int(hist[140:].argmax()) + 140 if hist[140:].sum() > 0 else 235
+    ink = int(hist[:100].argmax()) if hist[:100].sum() > 0 else 12
+
+    wp = max(180, paper - 6)        # everything at/above paper -> pure white
+    kw = wp - 34                    # ramp starts just below the paper tone
+    bp = min(ink + 14, 64)          # everything at/below ink -> solid black
+    kb = bp + 30
+
+    lut = np.arange(256, dtype=np.float32)
+    lut[:bp + 1] = 0
+    if kb > bp:
+        lut[bp:kb + 1] = np.linspace(0, kb, kb - bp + 1)
+    if wp > kw:
+        lut[kw:wp + 1] = np.linspace(kw, 255, wp - kw + 1)
+    lut[wp:] = 255
+
+    lab[:, :, 0] = cv2.LUT(L, lut.astype(np.uint8))
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
 def compress_upload(data: bytes, max_dim: int = 2600, target_kb: int = 1024) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't
     choke on huge payloads. Caps the long side at `max_dim`, then re-encodes as
@@ -243,7 +278,9 @@ class TranslationPipeline:
         use_seg: bool = True,
         style_prompt: str = "",
         text_case: str = "upper",
+        finish: str = "clean",
     ):
+        self.finish = finish
         self.detector, self.detector_name = make_detector(use_seg)
         self.translator = make_translator(provider, api_key, model, style_prompt)
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"))
@@ -326,13 +363,17 @@ class TranslationPipeline:
         self.last_masks = masks
 
         if not items:
-            cv2.imwrite(output_path, image)
+            out = scan_finish(image) if self.finish == "clean" else image
+            cv2.imwrite(output_path, out)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
 
         update(3, "Erasing original text...", 60)
         update(4, "Fitting translations into balloons...", 80)
         result = self.compositor.compose(image, items, masks)
+        if self.finish == "clean":
+            update(4, "Applying clean-scan finish...", 92)
+            result = scan_finish(result)
         cv2.imwrite(output_path, result)
         update(5, "Complete!", 100)
 

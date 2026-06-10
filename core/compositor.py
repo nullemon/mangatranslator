@@ -85,11 +85,12 @@ class Compositor:
                 continue
             if cw > 2 and ch > 2:
                 cap = self._detect_caption_box(gray, cx, cy, cw, ch)
-                if cap is not None:
+                if cap is not None and not cap[4]:
                     self._fill_caption(result, cap)
+                    edited_rects.append((cap[0], cap[1], cap[2], cap[3]))
                 else:
-                    self._inpaint_text(result, cx, cy, cw, ch)
-                edited_rects.append((cx, cy, cw, ch))
+                    touched = self._inpaint_text(result, cx, cy, cw, ch)
+                    edited_rects.append(touched or (cx, cy, cw, ch))
 
         placements = []     # (rect, text, color)
         used_boxes = []
@@ -132,8 +133,8 @@ class Compositor:
                 # A bordered caption box gets a clean solid fill; text drawn over
                 # bare artwork has just its strokes inpainted out (no slab).
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
-                rect, dark = self._apply_free_region(result, gray, cap, bb)
-                edited_rects.append(tuple(int(v) for v in bb))
+                rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
+                edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation))
                 it["placed"] = True
@@ -152,8 +153,8 @@ class Compositor:
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
                 used_boxes.append(bb)
-                rect, dark = self._apply_free_region(result, gray, cap, bb)
-                edited_rects.append(tuple(int(v) for v in bb))
+                rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
+                edited_rects.append(tuple(int(v) for v in touched))
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation))
@@ -207,7 +208,9 @@ class Compositor:
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
                     continue
                 used_boxes.append(bb)
-                self._inpaint_text(result, bx, by, bw, bh)
+                touched = self._inpaint_text(result, bx, by, bw, bh)
+                if touched:
+                    bb = touched
                 dark = self._is_dark_region(gray, bx, by, bw, bh)
                 pad = max(2, min(bw, bh) // 16)
                 rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
@@ -314,13 +317,16 @@ class Compositor:
         narration of either polarity is caught and fully covered, then inpaints.
 
         The region is padded outward so characters that extend beyond the AI
-        bounding box are also cleaned."""
+        bounding box are also cleaned. Returns the rect actually touched
+        (x, y, w, h) so the surgical restore keeps every cleaned pixel, or
+        None when the region is empty."""
         H, W = result.shape[:2]
         pad = max(4, min(w, h) // 8)
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         if x1 <= x0 or y1 <= y0:
-            return
+            return None
+        touched = (x0, y0, x1 - x0, y1 - y0)
         roi = result[y0:y1, x0:x1]
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -337,9 +343,10 @@ class Compositor:
             out = self.lama.inpaint(result, full_mask)
             if out is not None:
                 result[:] = out
-                return
+                return touched
         inpainted = cv2.inpaint(roi, text_mask, 5, cv2.INPAINT_TELEA)
         result[y0:y1, x0:x1] = inpainted
+        return touched
 
     def _refine_free_bbox(self, gray, x, y, w, h):
         """Lock an AI-estimated free-text box onto the ACTUAL ink. The model box
@@ -510,19 +517,33 @@ class Compositor:
         return None, (x, y, w, h)
 
     def _apply_free_region(self, result, gray, cap, bbox):
-        """Clear a planned free region and return (text_rect, dark). A caption
-        box gets a solid clean fill; free text over art has its strokes inpainted."""
-        if cap is not None:
+        """Clear a planned free region and return (text_rect, dark, touched).
+
+        A LIGHT caption box (framed white interior) gets a solid clean white
+        fill — that's how official releases look and the paper really is flat.
+        A DARK slab does NOT get stamped solid black: the field around the
+        lettering is usually textured (grain, gradients, screentone), so a
+        flat black rectangle reads as an obvious patch. Instead only the
+        strokes are erased and inpainted, letting the texture continue, and
+        the translation is drawn straight onto it in white.
+        Free text over artwork has just its strokes inpainted."""
+        if cap is not None and not cap[4]:
             fx, fy, fw, fh = self._fill_caption(result, cap)
             pad = max(3, min(fw, fh) // 12)
             rect = (fx + pad, fy + pad, max(fw - 2 * pad, 8), max(fh - 2 * pad, 8))
-            return rect, cap[4]
+            return rect, False, (cap[0], cap[1], cap[2], cap[3])
+        if cap is not None:
+            ix, iy, iw, ih, _ = cap
+            touched = self._inpaint_text(result, ix, iy, iw, ih) or (ix, iy, iw, ih)
+            pad = max(3, min(iw, ih) // 12)
+            rect = (ix + pad, iy + pad, max(iw - 2 * pad, 8), max(ih - 2 * pad, 8))
+            return rect, True, touched
         rx, ry, rw, rh = [int(v) for v in bbox]
-        self._inpaint_text(result, rx, ry, rw, rh)
+        touched = self._inpaint_text(result, rx, ry, rw, rh) or (rx, ry, rw, rh)
         dark = self._is_dark_region(gray, rx, ry, rw, rh)
         pad = max(2, min(rw, rh) // 16)
         rect = (rx + pad, ry + pad, max(rw - 2 * pad, 8), max(rh - 2 * pad, 8))
-        return rect, dark
+        return rect, dark, touched
 
     # ── Recover a balloon mask from a bbox (used when no mask is supplied) ──
     def _resolve_bubble(self, gray, bbox, page_area):

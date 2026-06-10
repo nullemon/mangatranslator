@@ -88,6 +88,7 @@ async def translate(
     watermark: str = Form(""),
     style_prompt: str = Form(""),
     text_case: str = Form("upper"),
+    finish: str = Form("clean"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -113,6 +114,7 @@ async def translate(
         "font_path": font_path,
         "watermark": watermark.strip(),
         "text_case": text_case,
+        "finish": finish,
         "name": file.filename or "page.png",
         "mode": "translate",
     }
@@ -125,6 +127,7 @@ async def translate(
             watermark=watermark.strip(),
             style_prompt=style_prompt.strip(),
             text_case=text_case,
+            finish=finish,
         )
     )
 
@@ -149,6 +152,7 @@ async def _run(
     watermark: str = "",
     style_prompt: str = "",
     text_case: str = "upper",
+    finish: str = "clean",
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -200,6 +204,7 @@ async def _run(
             font_path=font_path,
             style_prompt=style_prompt,
             text_case=text_case,
+            finish=finish,
         )
 
         def on_progress(update):
@@ -427,12 +432,15 @@ async def rerender(task_id: str, request: Request):
     all_items = items + added
 
     def work():
+        from core.pipeline import scan_finish
         base_img = cv2.imread(base)
         if base_img is None:
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
+        if t.get("finish", "clean") == "clean":
+            out = scan_finish(out)
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:
