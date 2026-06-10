@@ -541,12 +541,52 @@ class Compositor:
     def _fill_caption(self, result, cap):
         """Fill a detected caption interior with a solid clean color (white, or
         black for an inverted box), preserving its border frame. Returns the
-        filled rect (fx, fy, fw, fh) for text placement."""
+        filled rect (fx, fy, fw, fh) for text placement.
+
+        The fill follows the ACTUAL interior shape: hand-drawn frames wander,
+        so a straight inset rectangle left a ring of original paper between
+        the fill and the line — a visible seam that read as a doubled border
+        (and the API page finish inked it into a real second line). Painting
+        the interior component itself, shrunk a few px off the line, reaches
+        the frame everywhere without ever touching it."""
         ix, iy, iw, ih, dark = cap
+        fill = (0, 0, 0) if dark else (255, 255, 255)
+        roi = result[iy:iy + ih, ix:ix + iw]
+        g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        if dark:
+            _, field = cv2.threshold(g, 80, 255, cv2.THRESH_BINARY_INV)
+        else:
+            _, field = cv2.threshold(g, 185, 255, cv2.THRESH_BINARY)
+        ks = int(np.clip(min(iw, ih) // 10, 7, 25))
+        field = cv2.morphologyEx(
+            field, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (ks, ks)))
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(field, 8)
+        pick, best = 0, 0
+        for i in range(1, num):
+            a = int(stats[i, cv2.CC_STAT_AREA])
+            if a > best:
+                pick, best = i, a
+        if pick:
+            comp = (labels == pick).astype(np.uint8) * 255
+            # Fill the component's holes (text strokes) via its outer contour
+            # so the original lettering can't peek through the fill.
+            cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                comp = np.zeros_like(comp)
+                cv2.drawContours(comp, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
+            inner = cv2.erode(comp, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (7, 7)))
+            if cv2.countNonZero(inner) >= 0.55 * iw * ih:
+                roi[inner > 0] = fill
+                bx, by, bw, bh = cv2.boundingRect(inner)
+                return ix + bx, iy + by, bw, bh
+        # Fallback (interior shape not recovered): inset rectangle as before.
         m = max(2, min(iw, ih) // 22)
         fx, fy = ix + m, iy + m
         fw, fh = max(iw - 2 * m, 4), max(ih - 2 * m, 4)
-        result[fy:fy + fh, fx:fx + fw] = (0, 0, 0) if dark else (255, 255, 255)
+        result[fy:fy + fh, fx:fx + fw] = fill
         return fx, fy, fw, fh
 
     def _plan_free_region(self, gray, x, y, w, h, refine):

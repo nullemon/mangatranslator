@@ -23,6 +23,54 @@ def _is_sfx(text: str) -> bool:
     return False
 
 
+def _texts_match(a: str, b: str) -> bool:
+    """Loose match: do two readings of the same region share most of their
+    Japanese characters? Robust to OCR quirks, furigana and ordering — used
+    to spot the SAME text found twice (dedupe) and a vision-LLM box that
+    doesn't contain the text it claims (misplacement)."""
+    def chars(s):
+        return {c for c in s
+                if "ぁ" <= c <= "ん" or "ァ" <= c <= "ヶ"
+                or "一" <= c <= "鿿" or c == "ー"}
+    aa, bb = chars(a), chars(b)
+    if not aa or not bb:
+        return False
+    inter = len(aa & bb)
+    return inter / max(min(len(aa), len(bb)), 1) >= 0.5
+
+
+def _merge_column_boxes(boxes):
+    """The block detector splits giant vertical lettering (one huge glyph per
+    box) — merge boxes that line up into a single column/run so OCR reads the
+    whole phrase instead of one syllable at a time."""
+    boxes = [list(map(int, b)) for b in boxes]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(boxes)):
+            if boxes[i] is None:
+                continue
+            for j in range(i + 1, len(boxes)):
+                if boxes[j] is None:
+                    continue
+                a, b = boxes[i], boxes[j]
+                ox = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+                oy = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+                # vertical column: strong horizontal overlap, small v-gap
+                col = ox > 0.5 * min(a[2], b[2]) and -oy < 0.8 * min(a[2], b[2])
+                # horizontal run: strong vertical overlap, small h-gap
+                run = oy > 0.5 * min(a[3], b[3]) and -ox < 0.8 * min(a[3], b[3])
+                if not (col or run):
+                    continue
+                x0, y0 = min(a[0], b[0]), min(a[1], b[1])
+                x1 = max(a[0] + a[2], b[0] + b[2])
+                y1 = max(a[1] + a[3], b[1] + b[3])
+                boxes[i] = [x0, y0, x1 - x0, y1 - y0]
+                boxes[j] = None
+                changed = True
+    return [tuple(b) for b in boxes if b is not None]
+
+
 def _order_corners(pts: np.ndarray) -> np.ndarray:
     """Order 4 points as top-left, top-right, bottom-right, bottom-left."""
     rect = np.zeros((4, 2), dtype=np.float32)
@@ -529,10 +577,14 @@ class TranslationPipeline:
 
             # Only keep regions the model actually read as Japanese — guards
             # against boxes dropped on already-English text or bare artwork.
-            if typ in ("sfx", "sound", "onomatopoeia"):
-                continue
+            # The "sfx" label alone isn't trusted: the LLM tags big dramatic
+            # display lines (ここから…, 一人でこの戦場を…) as sfx, but those
+            # carry meaning and official releases translate them. Skip only
+            # when the text itself reads like onomatopoeia.
             if not jp or not _has_japanese(jp) or _is_sfx(jp):
                 continue
+            if typ in ("sfx", "sound", "onomatopoeia"):
+                typ = "narration"
             if not tr:
                 continue
 
@@ -541,6 +593,18 @@ class TranslationPipeline:
                 continue
             if any(_boxes_overlap(box, u) for u in used):
                 continue
+
+            # Vision-LLM coordinates can be sloppy — a det can carry the RIGHT
+            # text with the WRONG box, which cleans and typesets a different
+            # spot entirely. When local OCR reads something substantial in the
+            # claimed box that shares nothing with the det's text, drop it:
+            # the GPU catch-all pass finds the real block at real coordinates.
+            if self.ocr is not None and self.ocr.ok:
+                seen = (self.ocr.read_region(image, box, None) or "").strip()
+                if len(seen) >= 2 and not _texts_match(seen, jp):
+                    print(f"[pipeline] LLM box mismatch (claims {jp[:12]!r}, "
+                          f"box reads {seen[:12]!r}) — dropped")
+                    continue
             used.append(box)
 
             rotation = 0.0
@@ -583,8 +647,12 @@ class TranslationPipeline:
             return []
 
         from .ocr import _has_japanese
+        # Giant display lettering arrives as one box per glyph — merge the
+        # aligned boxes into whole columns/runs so OCR reads full phrases.
+        boxes = _merge_column_boxes(boxes)
         taken = [list(r.bbox) for r in bubble_regions]
         taken += [list(it["bbox"]) for it in existing_items]
+        known_texts = [it.get("original", "") for it in existing_items]
         all_ids = [r.id for r in bubble_regions] + [it["id"] for it in existing_items]
         next_id = max(all_ids, default=0) + 1
 
@@ -596,7 +664,12 @@ class TranslationPipeline:
             jp = self.ocr.read_region(image, box, None)
             if not jp or not _has_japanese(jp) or _is_sfx(jp):
                 continue
+            # Same text already found by another pass (LLM box was off but
+            # close enough that both versions would be placed = doubled text).
+            if any(_texts_match(jp, t) for t in known_texts):
+                continue
             taken.append(list(box))
+            known_texts.append(jp)
             id_to_text[next_id] = jp
             box_map[next_id] = box
             next_id += 1
