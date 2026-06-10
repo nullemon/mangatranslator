@@ -156,11 +156,14 @@ document.addEventListener("DOMContentLoaded", () => {
   setWorkflow(localStorage.getItem("manga_workflow") || "scan-translate");
 
   /* ══ ENGINE SWITCHING ══ */
+  let engineInited = false;
   function setEngine(eng) {
     const cfg = ENGINE_CONFIG[eng];
     if (!cfg) return;
-    const prev = ENGINE_CONFIG[engineSelect.value];
-    if (prev) localStorage.setItem(prev.storageKey, apiKeyInput.value);
+    if (engineInited) {
+      const prev = ENGINE_CONFIG[engineSelect.value];
+      if (prev) localStorage.setItem(prev.storageKey, apiKeyInput.value);
+    }
     engineSelect.value = eng;
     apiKeyLabel.textContent = cfg.label;
     apiKeyInput.placeholder = cfg.placeholder;
@@ -173,6 +176,7 @@ document.addEventListener("DOMContentLoaded", () => {
       modelSelect.appendChild(opt);
     }
     localStorage.setItem("manga_engine", eng);
+    engineInited = true;
   }
   engineSelect.addEventListener("change", () => setEngine(engineSelect.value));
   apiKeyInput.addEventListener("input", () => {
@@ -239,6 +243,7 @@ document.addEventListener("DOMContentLoaded", () => {
       p === "xai"    ? "xAI (Grok) API Key" : "Gemini API Key";
   }
   enhanceProvider.addEventListener("change", () => {
+    localStorage.setItem(enhKeyName(), enhanceKey.value);
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);
     syncEnhanceFields();
   });
