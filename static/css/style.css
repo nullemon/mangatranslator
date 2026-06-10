@@ -390,3 +390,12 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 }
 
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Crop modal ── */
+.crop-modal{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.85);display:flex;flex-direction:column}
+.crop-toolbar{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
+.crop-hint{flex:1;font-size:.85rem;color:var(--text-dim)}
+.crop-stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:crosshair;user-select:none}
+.crop-stage img{max-width:95%;max-height:90vh;object-fit:contain;pointer-events:none}
+.crop-sel{position:absolute;border:2px dashed var(--accent);background:rgba(37,99,235,.12);pointer-events:none;z-index:2}
+.crop-stage::after{content:"";position:absolute;inset:0;pointer-events:none}

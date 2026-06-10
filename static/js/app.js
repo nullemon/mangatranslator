@@ -375,6 +375,103 @@ document.addEventListener("DOMContentLoaded", () => {
 
   clearBtn.addEventListener("click", resetAll);
 
+  /* ══ CROP ══ */
+  const cropModal  = document.getElementById("cropModal");
+  const cropStage  = document.getElementById("cropStage");
+  const cropImg    = document.getElementById("cropImg");
+  const cropSel    = document.getElementById("cropSel");
+  const cropApply  = document.getElementById("cropApply");
+  const cropCancel = document.getElementById("cropCancel");
+  const cropBtn    = document.getElementById("cropBtn");
+
+  let cropRect = null;  // {x,y,w,h} in natural image pixels
+
+  if (cropBtn) cropBtn.addEventListener("click", () => {
+    if (!pages.length) return;
+    cropImg.src = pages[0].thumb;
+    cropSel.style.display = "none";
+    cropApply.disabled = true;
+    cropRect = null;
+    cropModal.style.display = "flex";
+  });
+
+  if (cropCancel) cropCancel.addEventListener("click", () => {
+    cropModal.style.display = "none";
+  });
+
+  // drag-to-select on the crop image
+  (function initCropDraw() {
+    let drawing = false, sx, sy;
+    cropStage.addEventListener("pointerdown", e => {
+      if (e.target === cropApply || e.target === cropCancel) return;
+      drawing = true;
+      const r = cropImg.getBoundingClientRect();
+      sx = e.clientX; sy = e.clientY;
+      cropSel.style.display = "block";
+      cropSel.style.left = (sx - r.left) + "px";
+      cropSel.style.top = (sy - r.top) + "px";
+      cropSel.style.width = "0"; cropSel.style.height = "0";
+      // position relative to stage, but we need it relative to the image
+      try { cropStage.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    cropStage.addEventListener("pointermove", e => {
+      if (!drawing) return;
+      const r = cropImg.getBoundingClientRect();
+      const cx = e.clientX, cy = e.clientY;
+      const left = Math.max(0, Math.min(sx, cx) - r.left);
+      const top = Math.max(0, Math.min(sy, cy) - r.top);
+      const right = Math.min(r.width, Math.max(sx, cx) - r.left);
+      const bottom = Math.min(r.height, Math.max(sy, cy) - r.top);
+      cropSel.style.left = (r.left - cropStage.getBoundingClientRect().left + left) + "px";
+      cropSel.style.top = (r.top - cropStage.getBoundingClientRect().top + top) + "px";
+      cropSel.style.width = (right - left) + "px";
+      cropSel.style.height = (bottom - top) + "px";
+      // store in natural pixels
+      const scaleX = cropImg.naturalWidth / r.width;
+      const scaleY = cropImg.naturalHeight / r.height;
+      cropRect = {
+        x: Math.round(left * scaleX), y: Math.round(top * scaleY),
+        w: Math.round((right - left) * scaleX), h: Math.round((bottom - top) * scaleY),
+      };
+      cropApply.disabled = (cropRect.w < 20 || cropRect.h < 20);
+    });
+    const endCrop = e => {
+      if (!drawing) return;
+      drawing = false;
+      try { cropStage.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+    cropStage.addEventListener("pointerup", endCrop);
+    cropStage.addEventListener("pointercancel", endCrop);
+  })();
+
+  if (cropApply) cropApply.addEventListener("click", () => {
+    if (!cropRect || cropRect.w < 20 || cropRect.h < 20) return;
+    const img = new window.Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = cropRect.w; canvas.height = cropRect.h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, cropRect.x, cropRect.y, cropRect.w, cropRect.h,
+                    0, 0, cropRect.w, cropRect.h);
+      canvas.toBlob(blob => {
+        if (!blob) return;
+        const page = pages[0];
+        if (!page) return;
+        const ext = page.name.match(/\.[^.]+$/) || [".png"];
+        const cropped = new File([blob], "cropped_" + page.name, { type: blob.type || "image/png" });
+        try { URL.revokeObjectURL(page.thumb); } catch (_) {}
+        page.file = cropped;
+        page.size = blob.size;
+        page.thumb = URL.createObjectURL(blob);
+        previewImg.src = page.thumb;
+        fileName.textContent = page.name + " (cropped)";
+        fileSize.textContent = formatBytes(page.size);
+        cropModal.style.display = "none";
+      }, "image/png");
+    };
+    img.src = pages[0].thumb;
+  });
+
   /* ══ START / QUEUE ══ */
   goBtn.addEventListener("click", startBatch);
 

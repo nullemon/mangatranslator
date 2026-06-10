@@ -119,6 +119,10 @@ class Compositor:
             bx, by, bw, bh = [int(v) for v in bbox]
 
             rotation = float(it.get("rotation", 0))
+            # English text at steep angles (>45°) is unreadable sideways;
+            # render it horizontally in the (tall-narrow) rect instead.
+            if abs(rotation) > 45:
+                rotation = 0
 
             # Manually added text: the user drew this box over a missed or
             # leftover region. Erase whatever's there and place the typed text
@@ -156,11 +160,20 @@ class Compositor:
                 rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
                 edited_rects.append(tuple(int(v) for v in touched))
                 # When no caption frame was found the refined bbox may have
-                # ballooned (union with nearby ink). Text must stay inside the
-                # ORIGINAL detected bbox so it never spills over artwork.
+                # ballooned (union with nearby ink). Constrain text to where
+                # the original Japanese actually was (seg mask), falling back
+                # to the original AI bbox with inset padding.
                 if cap is None:
-                    pad = max(3, min(bw, bh) // 12)
-                    rect = (bx + pad, by + pad, max(bw - 2*pad, 8), max(bh - 2*pad, 8))
+                    seg_r = self._seg_text_rect(bx, by, bw, bh)
+                    if seg_r is not None:
+                        sx, sy, sw, sh = seg_r
+                        pad = max(3, min(sw, sh) // 10)
+                        rect = (sx - pad, sy - pad,
+                                max(sw + 2 * pad, 8), max(sh + 2 * pad, 8))
+                    else:
+                        pad = max(3, min(bw, bh) // 12)
+                        rect = (bx + pad, by + pad,
+                                max(bw - 2 * pad, 8), max(bh - 2 * pad, 8))
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation))
@@ -401,6 +414,28 @@ class Compositor:
         fw = min(W - fx, (ux2 - ux) + 2 * pad)
         fh = min(H - fy, (uy2 - uy) + 2 * pad)
         return fx, fy, fw, fh
+
+    def _seg_text_rect(self, x, y, w, h):
+        """Bounding box of actual text strokes within (x,y,w,h) from the
+        page-level seg mask.  Returns (sx, sy, sw, sh) in page coords, or
+        None when the mask is absent or the region is nearly empty."""
+        if self._seg_mask is None:
+            return None
+        H, W = self._seg_mask.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        roi = self._seg_mask[y0:y1, x0:x1]
+        if cv2.countNonZero(roi) < 10:
+            return None
+        ys, xs = np.where(roi > 0)
+        rx, ry = int(xs.min()), int(ys.min())
+        rw = int(xs.max()) - rx + 1
+        rh = int(ys.max()) - ry + 1
+        if rw < 8 or rh < 8:
+            return None
+        return (x0 + rx, y0 + ry, rw, rh)
 
     def _is_dark_region(self, gray, x, y, w, h):
         H, W = gray.shape[:2]
