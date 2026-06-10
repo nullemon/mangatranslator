@@ -69,8 +69,12 @@ if [ ! -f models/RealESRGAN_x4plus_anime_6B.pth ]; then
 fi
 
 echo "==> Installing CRAFT text detector (free text / narration)..."
-pip3 install --user --break-system-packages gdown
-pip3 install --user --break-system-packages --no-deps craft-text-detector
+# --no-deps: craft's own dependency list pins a 2021 opencv that no longer
+# builds; everything it really needs (torch, cv2, scipy, gdown) is installed
+# above. Failures here are non-fatal — the CV fallback still works.
+pip3 install --user --break-system-packages gdown scipy || true
+pip3 install --user --break-system-packages --no-deps craft-text-detector \
+  || echo "    (CRAFT install failed — built-in CV free-text fallback will be used)"
 
 echo "==> Pre-downloading CRAFT model weights..."
 python3 - <<'PY'

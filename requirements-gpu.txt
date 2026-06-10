@@ -21,9 +21,11 @@ simple-lama-inpainting>=0.1.0
 
 # ── Free text detection (narration, labels, dramatic text) ──
 # CRAFT finds text anywhere on the page, not just inside bubbles.
-# Without this the pipeline still works but only translates bubble text.
-# Install with --no-deps to avoid its strict old opencv pin (our opencv works fine).
-craft-text-detector>=0.4.3
+# NOTE: craft-text-detector itself is deliberately NOT listed here — its
+# setup pins an ancient opencv (<4.5.4.62) that no longer builds on modern
+# Python and would break this whole file's install. setup_gpu.sh installs it
+# with --no-deps instead. These are the deps it actually needs at runtime:
+scipy>=1.10.0
 gdown>=4.6.0
 
 # ── Text-pixel segmentation (comic-text-detector, ONNX) ──
