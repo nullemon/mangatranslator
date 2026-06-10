@@ -690,14 +690,30 @@ async def list_fonts():
 
 if __name__ == "__main__":
     import socket
+    import time
     import uvicorn
 
     port = int(os.environ.get("PORT", "8000"))
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", port)) == 0:
-            print(f"\nPort {port} is already in use — an old server is still running.")
-            print(f"  Stop it first:          pkill -f app.py")
-            print(f"  (or free the port):     fuser -k {port}/tcp")
+
+    def _port_busy() -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    # A just-killed server (pkill -f app.py) takes a moment to release the
+    # port while uvicorn shuts down — wait for it instead of failing the
+    # restart the user was told to do.
+    if _port_busy():
+        print(f"Port {port} is busy — waiting for the old server to exit", end="", flush=True)
+        for _ in range(20):
+            time.sleep(0.5)
+            print(".", end="", flush=True)
+            if not _port_busy():
+                print(" freed.")
+                break
+        else:
+            print(f"\n\nPort {port} is still in use after 10s — something else owns it.")
+            print(f"  See what it is:         ss -tlnp | grep {port}")
+            print(f"  Force-free the port:    fuser -k {port}/tcp")
             print(f"  Or use another port:    PORT={port + 1} python3 app.py\n")
             raise SystemExit(1)
 
