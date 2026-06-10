@@ -64,7 +64,9 @@ pip3 install --user --break-system-packages "spandrel>=0.3.0"
 if [ ! -f models/RealESRGAN_x4plus_anime_6B.pth ]; then
   echo "==> Downloading Real-ESRGAN anime weights (~18MB)..."
   curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
-    https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/RealESRGAN_x4plus_anime_6B.pth \
+    https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth \
+  || curl -fL -o models/RealESRGAN_x4plus_anime_6B.pth \
+    https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4plus_anime_6B.pth \
   || echo "    (download failed — the app will retry on first run)"
 fi
 

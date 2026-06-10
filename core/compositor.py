@@ -155,6 +155,12 @@ class Compositor:
                 used_boxes.append(bb)
                 rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
                 edited_rects.append(tuple(int(v) for v in touched))
+                # When no caption frame was found the refined bbox may have
+                # ballooned (union with nearby ink). Text must stay inside the
+                # ORIGINAL detected bbox so it never spills over artwork.
+                if cap is None:
+                    pad = max(3, min(bw, bh) // 12)
+                    rect = (bx + pad, by + pad, max(bw - 2*pad, 8), max(bh - 2*pad, 8))
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation))
@@ -377,7 +383,9 @@ class Compositor:
         rw, rh = int(xs.max()) - rx + 1, int(ys.max()) - ry + 1
         if rw < 5 or rh < 5:
             return x, y, w, h
-        if rw * rh > 3.5 * max(w * h, 1):
+        if rw * rh > 2.0 * max(w * h, 1):
+            return x, y, w, h
+        if rw > w * 1.5 or rh > h * 1.5:
             return x, y, w, h
         # Union of the AI box and the ink bbox: ensures we never shrink below
         # the AI's estimate (which covers the full text column).

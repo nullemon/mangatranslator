@@ -18,12 +18,26 @@ _CRAFT = None
 _TRIED = False
 
 
+def _patch_torchvision_vgg():
+    """Newer torchvision removed model_urls from vgg module. CRAFT still
+    imports it, so inject a stub before CRAFT loads."""
+    try:
+        from torchvision.models import vgg as _vgg
+        if not hasattr(_vgg, "model_urls"):
+            _vgg.model_urls = {
+                "vgg16_bn": "https://download.pytorch.org/models/vgg16_bn-6c64b313.pth",
+            }
+    except Exception:
+        pass
+
+
 def _load_craft():
     global _CRAFT, _TRIED
     if _CRAFT is not None or _TRIED:
         return _CRAFT
     _TRIED = True
     try:
+        _patch_torchvision_vgg()
         from craft_text_detector import Craft
         import torch
         _CRAFT = Craft(

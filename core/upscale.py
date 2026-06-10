@@ -22,10 +22,11 @@ _MODEL = None       # (descriptor, device)
 _TRIED = False
 
 DEFAULT_PATH = "models/RealESRGAN_x4plus_anime_6B.pth"
-WEIGHT_URL = (
-    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/"
-    "RealESRGAN_x4plus_anime_6B.pth"
-)
+WEIGHT_URLS = [
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth",
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/RealESRGAN_x4plus_anime_6B.pth",
+    "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4plus_anime_6B.pth",
+]
 
 
 def _weights_path() -> str:
@@ -35,21 +36,23 @@ def _weights_path() -> str:
 def _download_weights(dest: str) -> bool:
     import httpx
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-    try:
-        print(f"[upscale] downloading weights (~18MB): {WEIGHT_URL}")
-        with httpx.stream("GET", WEIGHT_URL, follow_redirects=True, timeout=300.0) as r:
-            if r.status_code != 200:
-                return False
-            tmp = dest + ".part"
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_bytes(1 << 20):
-                    f.write(chunk)
-        os.replace(tmp, dest)
-        print(f"[upscale] weights saved to {dest}")
-        return True
-    except Exception as e:
-        print(f"[upscale] download failed: {e}")
-        return False
+    for url in WEIGHT_URLS:
+        try:
+            print(f"[upscale] downloading weights (~18MB): {url}")
+            with httpx.stream("GET", url, follow_redirects=True, timeout=300.0) as r:
+                if r.status_code != 200:
+                    print(f"[upscale] {r.status_code} from {url}, trying next...")
+                    continue
+                tmp = dest + ".part"
+                with open(tmp, "wb") as f:
+                    for chunk in r.iter_bytes(1 << 20):
+                        f.write(chunk)
+            os.replace(tmp, dest)
+            print(f"[upscale] weights saved to {dest}")
+            return True
+        except Exception as e:
+            print(f"[upscale] download failed from {url}: {e}")
+    return False
 
 
 def _load():

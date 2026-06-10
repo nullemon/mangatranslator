@@ -115,6 +115,10 @@ async def translate(
         "watermark": watermark.strip(),
         "text_case": text_case,
         "finish": finish,
+        "enhance_provider": enhance_provider,
+        "enhance_key": enhance_key,
+        "enhance_model": enhance_model,
+        "enhance_prompt": enhance_prompt,
         "name": file.filename or "page.png",
         "mode": "translate",
     }
@@ -215,6 +219,23 @@ async def _run(
             lambda: pipeline.process(image_path, output_path, on_progress),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
+
+        if finish == "api" and enhance_key:
+            tasks[task_id].update({"progress": 95, "message": "Applying API page enhancement..."})
+            def do_api_finish():
+                img = cv2.imread(output_path)
+                if img is None:
+                    return
+                enhancer = ImageEnhancer()
+                out = enhancer.enhance(img, enhance_prompt or ImageEnhancer.DEFAULT_PROMPT,
+                                       enhance_provider, enhance_key, enhance_model)
+                cv2.imwrite(output_path, out)
+            try:
+                await loop.run_in_executor(None, do_api_finish)
+            except Exception as e:
+                print(f"[finish] API enhance failed: {e}")
+                tasks[task_id].update(
+                    {"message": f"API finish failed ({type(e).__name__}), keeping local result"})
 
         if watermark:
             _stamp_watermark(output_path, watermark)
@@ -439,8 +460,21 @@ async def rerender(task_id: str, request: Request):
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
-        if t.get("finish", "clean") == "clean":
+        task_finish = t.get("finish", "clean")
+        if task_finish == "clean":
             out = scan_finish(out)
+        elif task_finish == "api" and t.get("enhance_key"):
+            try:
+                enhancer = ImageEnhancer()
+                out = enhancer.enhance(
+                    out,
+                    t.get("enhance_prompt") or ImageEnhancer.DEFAULT_PROMPT,
+                    t.get("enhance_provider", "gemini"),
+                    t["enhance_key"],
+                    t.get("enhance_model", ""),
+                )
+            except Exception as e:
+                print(f"[rerender] API finish failed: {e}")
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:

@@ -92,9 +92,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const pageFinish = document.getElementById("pageFinish");
   if (pageFinish) {
-    pageFinish.value = localStorage.getItem("manga_finish") || "clean";
-    pageFinish.addEventListener("change", () =>
-      localStorage.setItem("manga_finish", pageFinish.value));
+    pageFinish.value = localStorage.getItem("manga_finish") || "api";
+    pageFinish.addEventListener("change", () => {
+      localStorage.setItem("manga_finish", pageFinish.value);
+      enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
+    });
   }
 
   fontSelect.addEventListener("change", () =>
@@ -191,10 +193,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ══ WORKFLOW PICKER ══ */
   const wfCards = document.querySelectorAll(".wf-card");
+  function needsEnhancePanel() {
+    return needsScan(workflow) || (pageFinish && pageFinish.value === "api");
+  }
   function setWorkflow(wf) {
     workflow = wf;
     wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
-    enhancePanel.style.display = needsScan(wf) ? "" : "none";
+    enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
     document.querySelector(".settings-bar").style.display = needsTranslate(wf) ? "" : "none";
     goBtn.textContent = {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
@@ -379,7 +384,7 @@ document.addEventListener("DOMContentLoaded", () => {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
     apiKeyInput.style.borderColor = "";
-    if (needsScan(workflow) && !enhanceKey.value.trim()) {
+    if ((needsScan(workflow) || (pageFinish && pageFinish.value === "api")) && !enhanceKey.value.trim()) {
       enhancePanel.scrollIntoView({ behavior: "smooth" });
       enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return;
     }
@@ -419,7 +424,8 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("style_prompt", stylePrompt.value.trim());
       }
       f.append("enhance", needsScan(workflow) ? "true" : "false");
-      if (needsScan(workflow)) {
+      const needsEnhKeys = needsScan(workflow) || (pageFinish && pageFinish.value === "api");
+      if (needsEnhKeys) {
         f.append("enhance_provider", enhanceProvider.value);
         f.append("enhance_key", enhanceKey.value.trim());
         f.append("enhance_prompt", enhancePrompt.value);
