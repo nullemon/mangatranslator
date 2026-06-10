@@ -238,22 +238,14 @@ async def _run(
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
 
-        if finish == "api" and enhance_key:
-            tasks[task_id].update({"progress": 95, "message": "Applying API page enhancement..."})
-            def do_api_finish():
-                img = cv2.imread(output_path)
-                if img is None:
-                    return
-                enhancer = ImageEnhancer()
-                out = enhancer.enhance(img, enhance_prompt or ImageEnhancer.DEFAULT_PROMPT,
-                                       enhance_provider, enhance_key, enhance_model)
-                cv2.imwrite(output_path, out)
-            try:
-                await loop.run_in_executor(None, do_api_finish)
-            except Exception as e:
-                print(f"[finish] API enhance failed: {e}")
-                tasks[task_id].update(
-                    {"message": f"API finish failed ({type(e).__name__}), keeping local result"})
+        # NOTE: the delivered translation is NEVER run through the generative
+        # enhancer. A whole-page generative pass repaints the art — it redraws
+        # hair, drops labels it doesn't understand, and bleaches screentone to
+        # hard B&W — which violates the one rule: only the text is touched, the
+        # art stays byte-for-byte as drawn. The "api" finish now just delivers
+        # the clean-scanned surgical page (scan_finish, applied in the
+        # pipeline). The generative model stays available as the explicit
+        # "Enhance & Translate" workflow, where it produces a SEPARATE image.
 
         if watermark:
             _stamp_watermark(output_path, watermark)
@@ -478,21 +470,11 @@ async def rerender(task_id: str, request: Request):
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
-        task_finish = t.get("finish", "clean")
-        if task_finish == "clean":
+        # Re-renders always keep the art surgical — same rule as the first
+        # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the
+        # original pixels untouched. No generative repaint, ever.
+        if t.get("finish", "clean") in ("clean", "api"):
             out = scan_finish(out)
-        elif task_finish == "api" and t.get("enhance_key"):
-            try:
-                enhancer = ImageEnhancer()
-                out = enhancer.enhance(
-                    out,
-                    t.get("enhance_prompt") or ImageEnhancer.DEFAULT_PROMPT,
-                    t.get("enhance_provider", "gemini"),
-                    t["enhance_key"],
-                    t.get("enhance_model", ""),
-                )
-            except Exception as e:
-                print(f"[rerender] API finish failed: {e}")
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:

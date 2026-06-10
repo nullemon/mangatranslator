@@ -411,7 +411,7 @@ class TranslationPipeline:
         self.last_masks = masks
 
         if not items:
-            out = scan_finish(image) if self.finish == "clean" else image
+            out = scan_finish(image) if self.finish in ("clean", "api") else image
             cv2.imwrite(output_path, out)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
@@ -419,7 +419,7 @@ class TranslationPipeline:
         update(3, "Erasing original text...", 60)
         update(4, "Fitting translations into balloons...", 80)
         result = self.compositor.compose(image, items, masks)
-        if self.finish == "clean":
+        if self.finish in ("clean", "api"):
             update(4, "Applying clean-scan finish...", 92)
             result = scan_finish(result)
         cv2.imwrite(output_path, result)

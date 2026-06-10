@@ -92,7 +92,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const pageFinish = document.getElementById("pageFinish");
   if (pageFinish) {
-    pageFinish.value = localStorage.getItem("manga_finish") || "api";
+    // Default to the local clean scan — it keeps the original art exactly as
+    // drawn. The old "api" finish repainted the whole page with a generative
+    // model (changed art); it's gone, so map any saved "api" back to "clean".
+    let savedFinish = localStorage.getItem("manga_finish") || "clean";
+    if (savedFinish === "api") savedFinish = "clean";
+    pageFinish.value = savedFinish;
     pageFinish.addEventListener("change", () => {
       localStorage.setItem("manga_finish", pageFinish.value);
       enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
@@ -194,7 +199,7 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ══ WORKFLOW PICKER ══ */
   const wfCards = document.querySelectorAll(".wf-card");
   function needsEnhancePanel() {
-    return needsScan(workflow) || (pageFinish && pageFinish.value === "api");
+    return needsScan(workflow);
   }
   function setWorkflow(wf) {
     workflow = wf;
@@ -481,7 +486,7 @@ document.addEventListener("DOMContentLoaded", () => {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
     apiKeyInput.style.borderColor = "";
-    if ((needsScan(workflow) || (pageFinish && pageFinish.value === "api")) && !enhanceKey.value.trim()) {
+    if (needsScan(workflow) && !enhanceKey.value.trim()) {
       enhancePanel.scrollIntoView({ behavior: "smooth" });
       enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return;
     }
@@ -521,8 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("style_prompt", stylePrompt.value.trim());
       }
       f.append("enhance", needsScan(workflow) ? "true" : "false");
-      const needsEnhKeys = needsScan(workflow) || (pageFinish && pageFinish.value === "api");
-      if (needsEnhKeys) {
+      if (needsScan(workflow)) {
         f.append("enhance_provider", enhanceProvider.value);
         f.append("enhance_key", enhanceKey.value.trim());
         f.append("enhance_prompt", enhancePrompt.value);
@@ -727,7 +731,7 @@ document.addEventListener("DOMContentLoaded", () => {
       div.className = "tl-item" + (isExcluded ? " excluded" : "") + (isBubble ? "" : " free-text");
       let badge;
       if (isExcluded) {
-        badge = '<span class="tl-badge skip">skipped</span>';
+        badge = '<span class="tl-badge skip">shows original</span>';
       } else if (isBubble) {
         badge = '<span class="tl-badge ok">bubble</span>';
       } else {

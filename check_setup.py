@@ -243,13 +243,18 @@ def _enhancer():
     return "providers: " + ", ".join(provs)
 check("app", "API page finish (enhancer)", _enhancer)
 
-def _api_option():
+def _clean_finish_option():
     with open("templates/index.html", encoding="utf-8") as f:
         html = f.read()
-    if 'value="api"' not in html:
-        raise RuntimeError("API finish option missing from UI — pull latest")
-    return "UI has API Enhanced option"
-check("app", "API finish wired in UI", _api_option)
+    # The translated page is delivered surgically (art untouched). The old
+    # generative "api" page finish repainted the art and was removed; the
+    # delivered finish is local-only ("clean" keeps art, "off" = original).
+    if 'value="clean"' not in html:
+        raise RuntimeError("Clean-scan finish option missing from UI — pull latest")
+    if 'value="api"' in html:
+        raise RuntimeError("Generative 'api' page finish still in UI — it repaints art; pull latest")
+    return "UI delivers art-safe finish (clean / off)"
+check("app", "Page finish keeps art (no generative repaint)", _clean_finish_option)
 
 def _fonts():
     if not os.path.isdir("fonts"):
