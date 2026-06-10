@@ -671,6 +671,16 @@ async def list_fonts():
 
 
 if __name__ == "__main__":
+    import socket
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", "8000"))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            print(f"\nPort {port} is already in use — an old server is still running.")
+            print(f"  Stop it first:          pkill -f app.py")
+            print(f"  (or free the port):     fuser -k {port}/tcp")
+            print(f"  Or use another port:    PORT={port + 1} python3 app.py\n")
+            raise SystemExit(1)
+
+    uvicorn.run(app, host="0.0.0.0", port=port)
