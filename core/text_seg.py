@@ -78,20 +78,20 @@ def _load():
 
 
 class TextSegmenter:
-    """Page-level text stroke mask. Lazy: nothing heavy happens until `ok`."""
+    """Page-level text stroke mask + text-block boxes.
+    Lazy: nothing heavy happens until `ok`."""
 
     @property
     def ok(self) -> bool:
         return _load() is not None
 
-    def mask(self, image: np.ndarray) -> np.ndarray:
-        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes."""
+    def _run(self, image: np.ndarray):
+        """Letterbox to the model's fixed square input, run, and return
+        (outputs, scale, valid_w, valid_h)."""
         sess = _load()
-        h, w = image.shape[:2]
         if sess is None:
-            return np.zeros((h, w), np.uint8)
-
-        # Letterbox to the model's fixed square input, keeping aspect ratio.
+            return None
+        h, w = image.shape[:2]
         scale = INPUT_SIZE / max(h, w)
         nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
         resized = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_AREA)
@@ -100,9 +100,16 @@ class TextSegmenter:
 
         blob = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         blob = blob.transpose(2, 0, 1)[None]
-
         name = sess.get_inputs()[0].name
-        outs = sess.run(None, {name: blob})
+        return sess.run(None, {name: blob}), scale, nw, nh
+
+    def mask(self, image: np.ndarray) -> np.ndarray:
+        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes."""
+        h, w = image.shape[:2]
+        ran = self._run(image)
+        if ran is None:
+            return np.zeros((h, w), np.uint8)
+        outs, scale, nw, nh = ran
 
         # The stroke mask is the 4-D single-channel output with the largest
         # spatial size (the other heads are detection boxes / line maps).
@@ -127,3 +134,60 @@ class TextSegmenter:
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
         _, binary = cv2.threshold(m, 60, 255, cv2.THRESH_BINARY)
         return binary
+
+    def detect_blocks(self, image: np.ndarray, conf_thresh: float = 0.45,
+                      nms_thresh: float = 0.35):
+        """Text-block boxes [(x, y, w, h), ...] from the model's detection
+        head. Finds EVERY block of lettering on the page (it's manga-trained),
+        including the vertical columns and tilted banners the LLM pass can
+        miss. Callers verify each box with OCR, so a stray detection is
+        harmless — it just reads as no Japanese and gets dropped."""
+        h, w = image.shape[:2]
+        ran = self._run(image)
+        if ran is None:
+            return []
+        outs, scale, nw, nh = ran
+
+        # Detection head: the 3-D output of (1, N, 5+nc) decoded predictions.
+        det = None
+        for o in outs:
+            a = np.asarray(o)
+            if a.ndim == 3 and a.shape[1] > 64 and 6 <= a.shape[2] <= 16:
+                det = a[0]
+                break
+        if det is None:
+            return []
+
+        obj = det[:, 4]
+        cls = det[:, 5:].max(axis=1) if det.shape[1] > 5 else np.ones_like(obj)
+        conf = obj * cls
+        keep = conf > conf_thresh
+        if not np.any(keep):
+            return []
+        det, conf = det[keep], conf[keep]
+
+        boxes = []
+        for cx, cy, bw, bh in det[:, :4]:
+            boxes.append([float(cx - bw / 2), float(cy - bh / 2),
+                          float(bw), float(bh)])
+        idx = cv2.dnn.NMSBoxes(boxes, conf.astype(float).tolist(),
+                               conf_thresh, nms_thresh)
+        if idx is None or len(idx) == 0:
+            return []
+
+        out = []
+        for i in np.array(idx).flatten():
+            bx, by, bw, bh = boxes[int(i)]
+            # Map back through the letterbox to page coordinates.
+            x = int(bx / scale)
+            y = int(by / scale)
+            ww = int(bw / scale)
+            hh = int(bh / scale)
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+            ww = min(ww, w - x)
+            hh = min(hh, h - y)
+            if ww < 12 or hh < 12 or ww * hh > 0.25 * w * h:
+                continue
+            out.append((x, y, ww, hh))
+        return out

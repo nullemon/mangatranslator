@@ -82,6 +82,13 @@
           </label>
         </div>
       </div>
+      <div class="setting-group">
+        <label for="textCase">Lettering Case</label>
+        <select id="textCase">
+          <option value="upper">UPPERCASE (classic)</option>
+          <option value="keep">Keep as written</option>
+        </select>
+      </div>
       <div class="setting-group toggle-group">
         <label for="smartMode">Smart Detection</label>
         <label class="toggle">
@@ -97,6 +104,10 @@
       <div class="setting-group prompt-group" style="grid-column:1/-1;flex-basis:100%;width:100%">
         <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
         <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
+      </div>
+      <div class="setting-group" style="grid-column:1/-1;flex-basis:100%;width:100%;flex-direction:row;align-items:center;gap:.6rem">
+        <span class="muted" style="font-size:.78rem">All settings save automatically and restore on reload.</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="resetSettings" title="Clear saved defaults (keeps API keys)">Reset defaults</button>
       </div>
     </div>
 

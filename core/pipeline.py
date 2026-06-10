@@ -242,10 +242,11 @@ class TranslationPipeline:
         provider: str = "claude",
         use_seg: bool = True,
         style_prompt: str = "",
+        text_case: str = "upper",
     ):
         self.detector, self.detector_name = make_detector(use_seg)
         self.translator = make_translator(provider, api_key, model, style_prompt)
-        self.compositor = Compositor(font_path)
+        self.compositor = Compositor(font_path, uppercase=(text_case != "keep"))
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}
@@ -253,6 +254,8 @@ class TranslationPipeline:
         # never be matched to the wrong bubble. Lazily loaded; no-op if absent.
         self.ocr = None
         self.text_detector = None
+        self.text_seg = None
+        self.upscaler = None
         if use_seg:
             try:
                 from .ocr import MangaOCR
@@ -264,6 +267,16 @@ class TranslationPipeline:
                 self.text_detector = FreeTextDetector()
             except Exception as e:
                 print(f"[pipeline] free-text detector unavailable: {e}")
+            try:
+                from .text_seg import TextSegmenter
+                self.text_seg = TextSegmenter()
+            except Exception as e:
+                print(f"[pipeline] text segmenter unavailable: {e}")
+            try:
+                from .upscale import Upscaler
+                self.upscaler = Upscaler()
+            except Exception as e:
+                print(f"[pipeline] upscaler unavailable: {e}")
 
     def process(
         self,
@@ -287,6 +300,20 @@ class TranslationPipeline:
 
         update(0, "Preprocessing image...", 2)
         image = auto_crop_page(image)
+
+        # Low-res raws cap everything downstream (OCR accuracy, cleanup edges,
+        # lettering crispness). Upscale them with the anime-trained model
+        # before any detection runs. Disable with MANGA_UPSCALE=0.
+        if (self.upscaler is not None
+                and os.environ.get("MANGA_UPSCALE", "1") != "0"
+                and max(image.shape[:2]) < 1600
+                and self.upscaler.ok):
+            update(0, "Upscaling low-res page (Real-ESRGAN)...", 4)
+            try:
+                image = self.upscaler.upscale(image)
+                print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
+            except Exception as e:
+                print(f"[pipeline] upscale failed, continuing as-is: {e}")
 
         base_path = self._base_path(output_path)
         cv2.imwrite(base_path, image)
@@ -410,11 +437,15 @@ class TranslationPipeline:
         Primary path is the vision LLM, which reads vertical Japanese columns,
         large stylized titles, and narration boxes that the CV morphology
         detector can't. Falls back to the CV detector (+ local OCR) when the
-        LLM path returns nothing or is unavailable."""
+        LLM path returns nothing or is unavailable. Finally the manga-trained
+        text-block detector supplements whatever was found with any block the
+        other passes missed — each candidate is verified by OCR so a stray
+        detection just reads as no Japanese and is dropped."""
         items = self._free_text_llm(image, bubble_regions, update)
-        if items:
-            return items
-        return self._free_text_cv(image, bubble_regions, update)
+        if not items:
+            items = self._free_text_cv(image, bubble_regions, update)
+        items += self._free_text_seg(image, bubble_regions, items, update)
+        return items
 
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
         """Vision-LLM free-text detection: returns box + original + translation
@@ -491,6 +522,71 @@ class TranslationPipeline:
 
         if items:
             update(2, f"Found {len(items)} free text regions", 58)
+        return items
+
+    def _free_text_seg(self, image, bubble_regions, existing_items, update) -> List[dict]:
+        """Catch-all pass: the manga-trained text-block detector finds every
+        block of lettering on the page. Any block not already covered by a
+        bubble or a found free-text region is OCR'd; blocks that actually read
+        as Japanese get translated and added."""
+        if self.text_seg is None or not self.text_seg.ok:
+            return []
+        if self.ocr is None or not self.ocr.ok:
+            return []
+        try:
+            boxes = self.text_seg.detect_blocks(image)
+        except Exception as e:
+            print(f"[pipeline] text-block detection failed: {e}")
+            return []
+        if not boxes:
+            return []
+
+        from .ocr import _has_japanese
+        taken = [list(r.bbox) for r in bubble_regions]
+        taken += [list(it["bbox"]) for it in existing_items]
+        all_ids = [r.id for r in bubble_regions] + [it["id"] for it in existing_items]
+        next_id = max(all_ids, default=0) + 1
+
+        id_to_text: Dict[int, str] = {}
+        box_map: Dict[int, tuple] = {}
+        for box in boxes:
+            if any(_boxes_overlap(list(box), tb) for tb in taken):
+                continue
+            jp = self.ocr.read_region(image, box, None)
+            if not jp or not _has_japanese(jp) or _is_sfx(jp):
+                continue
+            taken.append(list(box))
+            id_to_text[next_id] = jp
+            box_map[next_id] = box
+            next_id += 1
+
+        if not id_to_text:
+            return []
+
+        update(2, f"Translating {len(id_to_text)} extra text blocks...", 56)
+        try:
+            translations = self.translator.translate_texts(id_to_text, self.target_lang)
+        except Exception as e:
+            print(f"[pipeline] extra block translation failed: {e}")
+            return []
+
+        items = []
+        for fid, jp in id_to_text.items():
+            tr = translations.get(fid, {})
+            text = (tr.get("translation") or "").strip()
+            if not text:
+                continue
+            items.append({
+                "id": fid,
+                "bbox": [int(v) for v in box_map[fid]],
+                "original": jp,
+                "translation": text,
+                "type": tr.get("type", "narration"),
+                "in_bubble": False,
+                "dark": False,
+            })
+        if items:
+            update(2, f"Caught {len(items)} extra text blocks (GPU detector)", 58)
         return items
 
     def _free_text_cv(self, image, bubble_regions, update) -> List[dict]:

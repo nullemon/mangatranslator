@@ -28,8 +28,9 @@ class Compositor:
     ellipse — never a bare rectangle that would spill past the outline."""
 
     def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
-                 use_lama: bool = True):
-        self.renderer = TextRenderer(font_path, font_scale=font_scale)
+                 use_lama: bool = True, uppercase: bool = True):
+        self.renderer = TextRenderer(font_path, font_scale=font_scale,
+                                     uppercase=uppercase)
         self.lama = None
         if use_lama:
             try:

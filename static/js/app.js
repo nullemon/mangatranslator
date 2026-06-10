@@ -72,8 +72,43 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("manga_style_prompt", stylePrompt.value));
   }
 
+  /* ══ SETTINGS PERSISTENCE: every control restores on reload ══ */
+  const textCase = document.getElementById("textCase");
+  const resetSettings = document.getElementById("resetSettings");
+
+  targetLang.value = localStorage.getItem("manga_lang") || "English";
+  targetLang.addEventListener("change", () =>
+    localStorage.setItem("manga_lang", targetLang.value));
+
+  smartMode.checked = localStorage.getItem("manga_smart") === "1";
+  smartMode.addEventListener("change", () =>
+    localStorage.setItem("manga_smart", smartMode.checked ? "1" : "0"));
+
+  if (textCase) {
+    textCase.value = localStorage.getItem("manga_case") || "upper";
+    textCase.addEventListener("change", () =>
+      localStorage.setItem("manga_case", textCase.value));
+  }
+
+  fontSelect.addEventListener("change", () =>
+    localStorage.setItem("manga_font", fontSelect.value));
+
+  modelSelect.addEventListener("change", () =>
+    localStorage.setItem("manga_model_" + engineSelect.value, modelSelect.value));
+
+  if (resetSettings) resetSettings.addEventListener("click", () => {
+    Object.keys(localStorage)
+      .filter(k => k.startsWith("manga_")
+        && !k.startsWith("manga_key_") && !k.startsWith("manga_enh_key_"))
+      .forEach(k => localStorage.removeItem(k));
+    location.reload();
+  });
+
+  fontScale.value = localStorage.getItem("manga_font_scale") || fontScale.value;
+  fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
   fontScale.addEventListener("input", () => {
     fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
+    localStorage.setItem("manga_font_scale", fontScale.value);
   });
 
   const downloadBtn = document.getElementById("downloadBtn");
@@ -183,6 +218,10 @@ document.addEventListener("DOMContentLoaded", () => {
       opt.value = m.value; opt.textContent = m.text;
       modelSelect.appendChild(opt);
     }
+    const savedModel = localStorage.getItem("manga_model_" + eng);
+    if (savedModel && cfg.models.some(m => m.value === savedModel)) {
+      modelSelect.value = savedModel;
+    }
     localStorage.setItem("manga_engine", eng);
     engineInited = true;
   }
@@ -205,6 +244,10 @@ document.addEventListener("DOMContentLoaded", () => {
         opt.value = f; opt.textContent = f.replace(/\.(ttf|otf)$/i, "");
         fontSelect.appendChild(opt);
       }
+      const savedFont = localStorage.getItem("manga_font") || "";
+      if (savedFont && [...fontSelect.options].some(o => o.value === savedFont)) {
+        fontSelect.value = savedFont;
+      }
     } catch (_) {}
   }
   loadFonts();
@@ -220,7 +263,10 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (_) {}
     }
     await loadFonts();
-    if (last) fontSelect.value = last;
+    if (last) {
+      fontSelect.value = last;
+      localStorage.setItem("manga_font", last);
+    }
     fontUpload.value = "";
   });
 
@@ -360,6 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("model", modelSelect.value);
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("font", fontSelect.value);
+      f.append("text_case", textCase ? textCase.value : "upper");
       if (stylePrompt && stylePrompt.value.trim()) {
         f.append("style_prompt", stylePrompt.value.trim());
       }

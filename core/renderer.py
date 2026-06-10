@@ -23,9 +23,11 @@ class TextRenderer:
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
 
-    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0):
+    def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
+                 uppercase: bool = True):
         self.font_path = font_path or self._find_font()
         self.font_scale = max(0.5, min(font_scale, 3.0))
+        self.uppercase = uppercase
         self.min_font_size = 10
         self.padding_ratio = max(0.0, 0.04 / self.font_scale)
         self.line_spacing_ratio = max(0.04, 0.12 / self.font_scale)
@@ -92,7 +94,8 @@ class TextRenderer:
         layer, rotated to the specified clockwise angle, and composited onto
         *image* so it sits inside the target rect at the same tilt as the
         original Japanese."""
-        text = text.upper()
+        if self.uppercase:
+            text = text.upper()
         x, y, w, h = rect
 
         if abs(rotation) >= 2:
@@ -264,13 +267,37 @@ class TextRenderer:
         max_w: int,
         draw: ImageDraw.ImageDraw,
     ) -> List[str]:
+        """Wrap into lines of even length (professional manga lettering keeps
+        lines balanced, not greedy-ragged). Greedy first to find the natural
+        line count, then the narrowest width that still fits that count —
+        every line stays ≤ max_w, so fit checks remain valid."""
         words = text.split()
         if not words:
             return [text]
 
+        greedy = self._wrap_greedy(words, font, max_w, draw)
+        if len(greedy) <= 1:
+            return greedy
+
+        k = len(greedy)
+        longest = max(
+            draw.textbbox((0, 0), wd, font=font)[2] for wd in words
+        )
+        lo, hi = max(longest, 8), max_w
+        best = greedy
+        while lo < hi:
+            mid = (lo + hi) // 2
+            cand = self._wrap_greedy(words, font, mid, draw)
+            if len(cand) <= k:
+                best = cand
+                hi = mid
+            else:
+                lo = mid + 1
+        return best
+
+    def _wrap_greedy(self, words, font, max_w, draw) -> List[str]:
         lines: List[str] = []
         current = ""
-
         for word in words:
             test = f"{current} {word}".strip() if current else word
             bb = draw.textbbox((0, 0), test, font=font)
@@ -280,8 +307,6 @@ class TextRenderer:
                 if current:
                     lines.append(current)
                 current = word
-
         if current:
             lines.append(current)
-
-        return lines if lines else [text]
+        return lines if lines else [" ".join(words)]

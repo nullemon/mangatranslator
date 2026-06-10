@@ -31,3 +31,8 @@ gdown>=4.6.0
 # erasure is surgical: whole characters removed, art never touched.
 # Weights auto-download to models/comictextdetector.pt.onnx on first run.
 onnxruntime-gpu>=1.17.0
+
+# ── Super-resolution (Real-ESRGAN anime, via spandrel) ──
+# Upscales low-res raws before the pipeline runs: sharper OCR, cleaner
+# erasure edges, crisper lettering. Weights auto-download (~18MB).
+spandrel>=0.3.0
