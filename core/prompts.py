@@ -82,6 +82,10 @@ REMAINING Japanese text that is NOT inside a speech bubble and should be transla
 - Narration text outside bubbles
 - Editorial notes, page captions, magazine announcements
 - Location/time labels
+- Large dramatic vertical text columns overlaid on the artwork (common in
+  action scenes — e.g. a bold vertical column of kanji/kana like
+  生きようとしてるからだ!!!, 俺は俺の意志で, etc.)
+- Text on diagonal narration bars or banners crossing the page
 
 Do NOT include:
 - Sound effects / onomatopoeia (ドーン, バァン, etc.)
@@ -93,6 +97,8 @@ Do NOT include:
 Find EVERY such region — do not stop at the obvious ones. Include short,
 narrow, or vertical columns, faint text, and small boxes tucked next to other
 boxes. Each separate framed box (caption / narration panel) is its OWN region.
+Scan the ENTIRE page systematically from top-to-bottom, left-to-right — do
+not miss any region.
 
 For each text region, return its bounding box as PERCENTAGE coordinates:
 - x_pct, y_pct: top-left corner (0-100)
@@ -104,7 +110,10 @@ For each text region, return its bounding box as PERCENTAGE coordinates:
   The bounding box must be the AXIS-ALIGNED rectangle that fully contains
   all the text at the reported angle.
 
-Make each box TIGHT — wrap it snugly around just that text or its framed panel.
+Make each box cover the FULL extent of the text — every character from start to
+end, including any trailing punctuation (!!!, …, etc.). For vertical columns,
+the box must cover the entire column top to bottom. For diagonal bars, include
+the full bar extent. Do not clip the edges of characters.
 Never let one box overlap, contain, or spill into a neighbouring box; if two
 texts sit in separate boxes, return two separate, non-overlapping regions.
 

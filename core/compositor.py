@@ -283,21 +283,24 @@ class Compositor:
     def _inpaint_text(self, result, x, y, w, h):
         """Remove text from a free-text region. Builds the stroke mask from where
         the image deviates from its smooth background, so faint / low-contrast
-        narration of either polarity is caught and fully covered, then inpaints."""
+        narration of either polarity is caught and fully covered, then inpaints.
+
+        The region is padded outward so characters that extend beyond the AI
+        bounding box are also cleaned."""
         H, W = result.shape[:2]
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(W, x + w), min(H, y + h)
+        pad = max(4, min(w, h) // 8)
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         if x1 <= x0 or y1 <= y0:
             return
         roi = result[y0:y1, x0:x1]
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        text_mask = cv2.dilate(self._ink_mask(gray_roi), kernel, iterations=2)
+        text_mask = cv2.dilate(self._ink_mask(gray_roi), kernel, iterations=3)
 
-        # Prefer LaMa (clean over art/screentones); fall back to cv2.inpaint.
         if self.lama is not None and self.lama.ok:
             full_mask = np.zeros(result.shape[:2], np.uint8)
-            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=1)
+            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=2)
             out = self.lama.inpaint(result, full_mask)
             if out is not None:
                 result[:] = out
@@ -308,11 +311,11 @@ class Compositor:
     def _refine_free_bbox(self, gray, x, y, w, h):
         """Lock an AI-estimated free-text box onto the ACTUAL ink. The model box
         can sit a little off, so search a PADDED window, find the ink (faint or
-        bold, either polarity), and return its tight bbox — so the clean and the
-        placed translation land exactly on the words, not a little out."""
+        bold, either polarity), and return the UNION of the AI box and the ink
+        bbox — so the clean and the placed translation cover everything."""
         H, W = gray.shape[:2]
-        px = max(8, int(w * 0.12))
-        py = max(8, int(h * 0.20))
+        px = max(8, int(w * 0.15))
+        py = max(8, int(h * 0.25))
         x0, y0 = max(0, x - px), max(0, y - py)
         x1, y1 = min(W, x + w + px), min(H, y + h + py)
         if x1 <= x0 or y1 <= y0:
@@ -325,15 +328,21 @@ class Compositor:
         rw, rh = int(xs.max()) - rx + 1, int(ys.max()) - ry + 1
         if rw < 5 or rh < 5:
             return x, y, w, h
-        # If the ink sprawls far past the AI box, the search leaked into nearby
-        # art — trust the original box rather than over-cover the drawing.
-        if rw * rh > 3.0 * max(w * h, 1):
+        if rw * rh > 3.5 * max(w * h, 1):
             return x, y, w, h
-        pad = max(3, min(rw, rh) // 8)
-        fx = max(0, x0 + rx - pad)
-        fy = max(0, y0 + ry - pad)
-        fw = min(W - fx, rw + 2 * pad)
-        fh = min(H - fy, rh + 2 * pad)
+        # Union of the AI box and the ink bbox: ensures we never shrink below
+        # the AI's estimate (which covers the full text column).
+        ink_x = x0 + rx
+        ink_y = y0 + ry
+        ux = min(x, ink_x)
+        uy = min(y, ink_y)
+        ux2 = max(x + w, ink_x + rw)
+        uy2 = max(y + h, ink_y + rh)
+        pad = max(4, min(ux2 - ux, uy2 - uy) // 8)
+        fx = max(0, ux - pad)
+        fy = max(0, uy - pad)
+        fw = min(W - fx, (ux2 - ux) + 2 * pad)
+        fh = min(H - fy, (uy2 - uy) + 2 * pad)
         return fx, fy, fw, fh
 
     def _is_dark_region(self, gray, x, y, w, h):
