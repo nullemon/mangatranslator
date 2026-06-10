@@ -241,9 +241,10 @@ class TranslationPipeline:
         use_smart_detection: bool = False,
         provider: str = "claude",
         use_seg: bool = True,
+        style_prompt: str = "",
     ):
         self.detector, self.detector_name = make_detector(use_seg)
-        self.translator = make_translator(provider, api_key, model)
+        self.translator = make_translator(provider, api_key, model, style_prompt)
         self.compositor = Compositor(font_path)
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection

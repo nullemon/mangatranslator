@@ -25,3 +25,9 @@ simple-lama-inpainting>=0.1.0
 # Install with --no-deps to avoid its strict old opencv pin (our opencv works fine).
 craft-text-detector>=0.4.3
 gdown>=4.6.0
+
+# ── Text-pixel segmentation (comic-text-detector, ONNX) ──
+# Marks every text stroke on the page at pixel level — manga-trained, so
+# erasure is surgical: whole characters removed, art never touched.
+# Weights auto-download to models/comictextdetector.pt.onnx on first run.
+onnxruntime-gpu>=1.17.0

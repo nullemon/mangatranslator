@@ -86,6 +86,7 @@ async def translate(
     enhance_prompt: str = Form(""),
     enhance_model: str = Form(""),
     watermark: str = Form(""),
+    style_prompt: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -120,6 +121,7 @@ async def translate(
             smart_mode == "true", font_path,
             enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
             watermark=watermark.strip(),
+            style_prompt=style_prompt.strip(),
         )
     )
 
@@ -142,6 +144,7 @@ async def _run(
     enhance_prompt: str = "",
     enhance_model: str = "",
     watermark: str = "",
+    style_prompt: str = "",
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -191,6 +194,7 @@ async def _run(
             model=model,
             use_smart_detection=smart_mode,
             font_path=font_path,
+            style_prompt=style_prompt,
         )
 
         def on_progress(update):
@@ -493,6 +497,7 @@ async def ocr_translate(task_id: str, request: Request):
     provider = payload.get("provider", "claude")
     model = payload.get("model", "")
     target_lang = payload.get("target_lang", "English")
+    style_prompt = payload.get("style_prompt", "")
 
     if not bbox or len(bbox) != 4:
         raise HTTPException(400, "bbox must be [x, y, w, h]")
@@ -525,7 +530,7 @@ async def ocr_translate(task_id: str, request: Request):
         if not original:
             return {"original": "", "translation": ""}
 
-        translator = make_translator(provider, api_key, model)
+        translator = make_translator(provider, api_key, model, style_prompt)
         out = translator.translate_texts({"0": original}, target_lang)
         entry = out.get(0) or out.get("0") or {}
         translation = entry.get("translation", original)

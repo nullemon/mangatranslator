@@ -181,6 +181,8 @@ class TextRenderer:
         cy = y + h // 2
         px = int(cx - rotated.width / 2)
         py = int(cy - rotated.height / 2)
+        px = max(0, min(px, image.width - rotated.width))
+        py = max(0, min(py, image.height - rotated.height))
         image.paste(rotated, (px, py), rotated)
         return image
 

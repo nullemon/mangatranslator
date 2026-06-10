@@ -5,7 +5,19 @@ import json
 import re
 
 
-def region_translate_prompt(target_lang: str, num_regions: int) -> str:
+def _style_block(style: str) -> str:
+    """User-editable style instructions, appended to every translation prompt.
+    They override the defaults so the user can steer tone, honorifics, etc."""
+    style = (style or "").strip()
+    if not style:
+        return ""
+    return f"""
+
+USER STYLE INSTRUCTIONS (follow these — they override the defaults above):
+{style}"""
+
+
+def region_translate_prompt(target_lang: str, num_regions: int, style: str = "") -> str:
     return f"""You are an expert manga/comic translator. You are shown two images:
 1. An original manga page
 2. The SAME page with detected text regions marked by red numbered boxes
@@ -21,14 +33,16 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 
 Rules:
 - Translate every region containing non-{target_lang} text.
+- Write natural, idiomatic {target_lang} — translate meaning and emotion,
+  never word-for-word. Use contractions; match the scene's tone.
 - Use UPPERCASE for dialogue and narration (standard manga typesetting).
 - Keep translations concise — they must fit inside small speech bubbles.
 - "type" must be one of: "dialogue", "narration", "sfx", "title".
 - Skip regions with no readable text or already in {target_lang}.
-- Return ONLY the JSON array."""
+- Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def smart_detect_prompt(target_lang: str) -> str:
+def smart_detect_prompt(target_lang: str, style: str = "") -> str:
     return f"""You are an expert manga page analyzer and translator.
 
 Carefully examine this manga page. Find EVERY piece of Japanese text — speech
@@ -67,10 +81,10 @@ Rules:
 - Set type to "sfx" for sound effects / onomatopoeia (e.g. ドーン, バァン, わぁぁ).
   SFX will NOT be replaced — everything else WILL be translated and placed.
 - Do NOT include tiny furigana readings above kanji.
-- Return ONLY the JSON array."""
+- Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def free_text_detect_prompt(target_lang: str, bubble_ids: list) -> str:
+def free_text_detect_prompt(target_lang: str, bubble_ids: list, style: str = "") -> str:
     skip = f"Already-handled bubble IDs: {bubble_ids}. " if bubble_ids else ""
     return f"""You are an expert manga page analyzer and translator.
 
@@ -132,14 +146,16 @@ Return ONLY a JSON array — no markdown fences:
 ]
 
 type must be one of: "title", "credit", "narration", "caption".
+Translate naturally and idiomatically — meaning and emotion, not word-for-word.
 Keep translations concise. Return an empty array [] if no free text is found.
-Return ONLY the JSON array."""
+Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def text_translate_prompt(target_lang: str) -> str:
-    return f"""You are an expert manga translator. Below is a JSON object mapping
-each speech-bubble id to the Japanese text that was read from that bubble (by
-OCR). Translate every entry into natural, concise {target_lang}.
+def text_translate_prompt(target_lang: str, style: str = "") -> str:
+    return f"""You are an expert manga translator localizing for an official
+{target_lang} release. Below is a JSON object mapping each speech-bubble id to
+the Japanese text that was read from that bubble (by OCR). Translate every
+entry into natural, punchy {target_lang}.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
@@ -148,6 +164,14 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 
 Rules:
 - Keep each translation matched to the SAME id — never move text between ids.
+- Write like official {target_lang} manga lettering — natural and idiomatic,
+  never stiff or word-for-word literal. Translate the MEANING and the emotion.
+- Match the scene's tone: shouted lines are short and forceful; inner
+  monologue is reflective; casual speech uses contractions (I'M, DON'T, IT'S).
+- Preserve emphasis: keep !!, !?, trailing ellipses (...) and dashes (—) for
+  unfinished or trailing thoughts.
+- Keep character names romanized; keep honorifics (-SAN, -KUN, SENPAI) rather
+  than translating them away.
 - Use UPPERCASE (standard manga lettering). Keep it concise to fit the bubble.
 - "type" is one of: "dialogue", "narration", "sfx".
 - Small expression sounds in speech bubbles (にっ = *GRIN*, ハッ = *GASP*,
@@ -155,7 +179,7 @@ Rules:
   English word wrapped in asterisks (e.g. *GRIN*). Only mark loud dramatic
   sound effects (ドーン, バキ, ゴゴゴ) as "sfx".
 - If an entry's text is empty or unreadable, return an empty translation for it.
-- Return ONLY the JSON array."""
+- Return ONLY the JSON array.{_style_block(style)}"""
 
 
 def extract_json_array(text: str) -> list:

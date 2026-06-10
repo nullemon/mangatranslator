@@ -46,6 +46,19 @@ except Exception as e:
     print("LaMa skipped:", e)
 PY
 
+echo "==> Installing text-pixel segmentation (comic-text-detector)..."
+pip3 install --user --break-system-packages onnxruntime-gpu \
+  || pip3 install --user --break-system-packages onnxruntime
+mkdir -p models
+if [ ! -f models/comictextdetector.pt.onnx ]; then
+  echo "==> Downloading comic-text-detector weights (~90MB)..."
+  curl -fL -o models/comictextdetector.pt.onnx \
+    https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt.onnx \
+  || curl -fL -o models/comictextdetector.pt.onnx \
+    https://github.com/dmMaze/comic-text-detector/releases/download/data/comictextdetector.pt.onnx \
+  || echo "    (download failed — the app will retry on first run)"
+fi
+
 echo "==> Installing CRAFT text detector (free text / narration)..."
 pip3 install --user --break-system-packages gdown
 pip3 install --user --break-system-packages --no-deps craft-text-detector
@@ -65,3 +78,4 @@ echo "==> Done. Restart the app:  python3 app.py"
 echo "    Detect step shows 'segmentation model (GPU)'; bubbles are read by"
 echo "    manga-ocr and erased with LaMa when those models are installed."
 echo "    Free text (narration/labels) detected by CRAFT when installed."
+echo "    Text strokes masked pixel-precisely by comic-text-detector."

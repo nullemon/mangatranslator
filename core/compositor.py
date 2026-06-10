@@ -37,6 +37,15 @@ class Compositor:
                 self.lama = LamaInpaint()
             except Exception as e:
                 print(f"[compositor] LaMa unavailable: {e}")
+        # GPU text-pixel segmentation: precise stroke masks for clean removal.
+        # Optional — when absent, the ink-deviation heuristic is used alone.
+        self.text_seg = None
+        self._seg_mask = None
+        try:
+            from .text_seg import TextSegmenter
+            self.text_seg = TextSegmenter()
+        except Exception as e:
+            print(f"[compositor] text segmentation unavailable: {e}")
 
     def compose(
         self,
@@ -52,6 +61,15 @@ class Compositor:
         page_area = h * w
         result = image.copy()
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Page-level text stroke mask from the GPU segmentation model (when
+        # available): tells us exactly which pixels are lettering, so erasure
+        # covers whole characters and never guesses at art.
+        self._seg_mask = None
+        if self.text_seg is not None and self.text_seg.ok:
+            try:
+                self._seg_mask = self.text_seg.mask(image)
+            except Exception as e:
+                print(f"[compositor] text-seg mask failed: {e}")
         # Every region we actually edit. At the end we restore ALL other pixels
         # from the original, so the art / background is never touched — not a
         # pixel more than the exact text areas we cover.
@@ -198,6 +216,15 @@ class Compositor:
             placements.append((offset_rect(it, rect), text, color, ital, 0))
             it["placed"] = True
 
+        # Placement rects must stay on the page — a dragged offset or a loose
+        # AI box can push one past the edge, which is how text ended up out of
+        # bounds. Clamp every rect to the page before anything is drawn.
+        placements = [
+            (self._clamp_rect(r, w, h), t, c, i, ro)
+            for r, t, c, i, ro in placements
+        ]
+        placements = [p for p in placements if p[0] is not None]
+
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
             for rect, text, color, ital, rot in placements:
@@ -296,7 +323,12 @@ class Compositor:
         roi = result[y0:y1, x0:x1]
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        text_mask = cv2.dilate(self._ink_mask(gray_roi), kernel, iterations=3)
+        strokes = self._ink_mask(gray_roi)
+        # Union with the GPU stroke mask: the model marks whole characters
+        # (including thick fills the deviation heuristic under-covers).
+        if self._seg_mask is not None:
+            strokes = cv2.bitwise_or(strokes, self._seg_mask[y0:y1, x0:x1])
+        text_mask = cv2.dilate(strokes, kernel, iterations=3)
 
         if self.lama is not None and self.lama.ok:
             full_mask = np.zeros(result.shape[:2], np.uint8)
@@ -320,7 +352,16 @@ class Compositor:
         x1, y1 = min(W, x + w + px), min(H, y + h + py)
         if x1 <= x0 or y1 <= y0:
             return x, y, w, h
-        ink = self._ink_mask(gray[y0:y1, x0:x1])
+        # Prefer the GPU stroke mask (only marks real lettering, never art
+        # lines); fall back to the deviation heuristic when it's absent or
+        # finds nothing in the window.
+        ink = None
+        if self._seg_mask is not None:
+            seg_win = self._seg_mask[y0:y1, x0:x1]
+            if cv2.countNonZero(seg_win) >= 10:
+                ink = seg_win
+        if ink is None:
+            ink = self._ink_mask(gray[y0:y1, x0:x1])
         ys, xs = np.where(ink > 0)
         if xs.size < 10:
             return x, y, w, h
@@ -549,6 +590,16 @@ class Compositor:
         full = np.zeros((H, W), np.uint8)
         full[y0:y1, x0:x1] = filled
         return full, (x0 + rx, y0 + ry, rw2, rh2), dark
+
+    @staticmethod
+    def _clamp_rect(rect, w, h):
+        """Intersect a placement rect with the page; None if nothing remains."""
+        x, y, rw, rh = [int(v) for v in rect]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(w, x + rw), min(h, y + rh)
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            return None
+        return (x0, y0, x1 - x0, y1 - y0)
 
     @staticmethod
     def _rotated_aabb(rect, rotation):

@@ -65,6 +65,13 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("manga_watermark", watermarkInput.value));
   }
 
+  const stylePrompt = document.getElementById("stylePrompt");
+  if (stylePrompt) {
+    stylePrompt.value = localStorage.getItem("manga_style_prompt") || "";
+    stylePrompt.addEventListener("input", () =>
+      localStorage.setItem("manga_style_prompt", stylePrompt.value));
+  }
+
   fontScale.addEventListener("input", () => {
     fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
   });
@@ -353,6 +360,9 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("model", modelSelect.value);
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("font", fontSelect.value);
+      if (stylePrompt && stylePrompt.value.trim()) {
+        f.append("style_prompt", stylePrompt.value.trim());
+      }
       f.append("enhance", needsScan(workflow) ? "true" : "false");
       if (needsScan(workflow)) {
         f.append("enhance_provider", enhanceProvider.value);
@@ -949,6 +959,7 @@ document.addEventListener("DOMContentLoaded", () => {
           provider: engineSelect.value,
           model: modelSelect.value,
           target_lang: targetLang.value,
+          style_prompt: stylePrompt ? stylePrompt.value.trim() : "",
         }),
       });
       if (resp.ok) data = await resp.json();
