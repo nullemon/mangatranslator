@@ -6,6 +6,24 @@ import uuid
 import zipfile
 from pathlib import Path
 
+
+def _load_env(path: str = ".env"):
+    """Load KEY=VALUE lines from a local .env (gitignored) into the
+    environment — e.g. HF_TOKEN so HuggingFace model downloads are
+    authenticated. Variables already set in the environment win."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+    except OSError:
+        pass
+
+
+_load_env()
 os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 
 import cv2

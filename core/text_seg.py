@@ -53,6 +53,44 @@ def _download_weights(dest: str) -> bool:
     return False
 
 
+def _preload_cuda12_libs():
+    """onnxruntime-gpu dlopens CUDA 12 libraries by soname (libcublasLt.so.12,
+    libcudnn.so.9, ...). A torch built for CUDA 13 ships only .so.13, so the
+    CUDA provider fails and ORT silently falls back to CPU. Load the libs from
+    the nvidia-*-cu12 pip wheels (installed by setup_gpu.sh) into the process
+    so the provider can initialize. Harmless no-op when the wheels are absent."""
+    import ctypes
+    import glob
+    import site
+    paths = []
+    try:
+        paths += site.getsitepackages()
+    except Exception:
+        pass
+    try:
+        paths.append(site.getusersitepackages())
+    except Exception:
+        pass
+    sonames = (
+        "cuda_runtime/lib/libcudart.so.12*",
+        "cublas/lib/libcublasLt.so.12*",
+        "cublas/lib/libcublas.so.12*",
+        "cufft/lib/libcufft.so.11*",
+        "curand/lib/libcurand.so.10*",
+        "cudnn/lib/libcudnn.so.9*",
+    )
+    for sp in paths:
+        nv = os.path.join(sp, "nvidia")
+        if not os.path.isdir(nv):
+            continue
+        for pat in sonames:
+            for lib in sorted(glob.glob(os.path.join(nv, pat))):
+                try:
+                    ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
 def _load():
     """Load (and cache process-wide) the ONNX session."""
     global _SESSION, _TRIED
@@ -69,8 +107,13 @@ def _load():
             p for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
             if p in ort.get_available_providers()
         ] or ["CPUExecutionProvider"]
+        if providers[0] == "CUDAExecutionProvider":
+            _preload_cuda12_libs()
         _SESSION = ort.InferenceSession(path, providers=providers)
-        print(f"[text_seg] comic-text-detector ready ({providers[0]})")
+        # Report the provider the session ACTUALLY uses — ORT can list CUDA as
+        # available, fail to load its libs, and quietly run on CPU.
+        used = (_SESSION.get_providers() or ["CPUExecutionProvider"])[0]
+        print(f"[text_seg] comic-text-detector ready ({used})")
     except Exception as e:
         print(f"[text_seg] unavailable ({e}); using ink-deviation fallback")
         _SESSION = None

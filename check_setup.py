@@ -16,6 +16,23 @@ import sys
 
 QUICK = "--quick" in sys.argv
 
+
+def _load_env(path=".env"):
+    """Same .env loading the app does, so HF_TOKEN etc. apply here too."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+    except OSError:
+        pass
+
+
+_load_env()
+
 GREEN, RED, YELLOW, DIM, RESET = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[0m"
 results = []
 
@@ -71,6 +88,18 @@ check("core", "httpx", _httpx)
 def _anthropic():
     import anthropic; return anthropic.__version__
 check("core", "anthropic SDK", _anthropic)
+
+def _hf_token():
+    tok = (os.environ.get("HF_TOKEN") or
+           os.environ.get("HUGGING_FACE_HUB_TOKEN") or "")
+    if tok:
+        return f"set ({tok[:7]}…) — HF downloads authenticated"
+    cached = os.path.expanduser("~/.cache/huggingface/token")
+    if os.path.exists(cached):
+        return "logged in via huggingface-cli"
+    return ("SKIP:not set — copy .env.example to .env and add HF_TOKEN=... "
+            "(silences HF rate-limit warnings)")
+check("core", "HuggingFace token", _hf_token)
 
 # ── GPU stack ──
 def _torch():
@@ -137,11 +166,13 @@ else:
     check("model", "LaMa inpainting", _lama)
 
     def _seg():
-        from core.text_seg import TextSegmenter
+        from core.text_seg import TextSegmenter, _load
         t = TextSegmenter()
         if not t.ok:
             raise RuntimeError("comic-text-detector failed to load")
-        return "text-pixel segmentation ready"
+        sess = _load()
+        prov = (sess.get_providers() or ["?"])[0] if sess else "?"
+        return f"ready — running on {prov.replace('ExecutionProvider', '')}"
     check("model", "Text-pixel segmentation", _seg)
 
     def _upscale():

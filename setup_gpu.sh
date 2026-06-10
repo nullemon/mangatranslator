@@ -3,6 +3,10 @@
 # Safe to re-run. After it finishes, restart the app: python3 app.py
 set -e
 
+# Load local secrets (HF_TOKEN etc.) so model downloads are authenticated —
+# copy .env.example to .env and fill it in.
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 echo "==> Installing GPU bubble-segmentation dependencies (torch, ultralytics)..."
 pip3 install --user --break-system-packages -r requirements-gpu.txt
 
@@ -49,6 +53,14 @@ PY
 echo "==> Installing text-pixel segmentation (comic-text-detector)..."
 pip3 install --user --break-system-packages onnxruntime-gpu \
   || pip3 install --user --break-system-packages onnxruntime
+# onnxruntime-gpu dlopens CUDA *12* libs; torch cu13 only ships .so.13.
+# These wheels provide the .so.12 sonames so text-seg really runs on GPU.
+# (cudnn is the big one, ~700MB — skip is fine, text-seg then runs on CPU.)
+echo "==> Installing CUDA 12 runtime libs for onnxruntime-gpu..."
+pip3 install --user --break-system-packages \
+  nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+  nvidia-cufft-cu12 nvidia-curand-cu12 \
+  || echo "    (install failed — text-seg will run on CPU, still works)"
 mkdir -p models
 if [ ! -f models/comictextdetector.pt.onnx ]; then
   echo "==> Downloading comic-text-detector weights (~90MB)..."
