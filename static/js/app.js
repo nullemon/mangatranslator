@@ -70,6 +70,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const downloadBtn = document.getElementById("downloadBtn");
+  const translateScanBtn = document.getElementById("translateScanBtn");
   const newBtn      = document.getElementById("newBtn");
   const retryBtn    = document.getElementById("retryBtn");
   const errorMsg    = document.getElementById("errorMsg");
@@ -502,6 +503,7 @@ document.addEventListener("DOMContentLoaded", () => {
       compLabelRight.textContent = scanOnly ? "Manga Scan" : "Translated";
       tabTranslated.textContent  = scanOnly ? "Scan" : "Translated";
       detailsTab.style.display   = scanOnly ? "none" : "";
+      translateScanBtn.style.display = scanOnly ? "" : "none";
       buildTranslationsList(p);
       initComparison();
     } else if (p.status === "error") {
@@ -1051,6 +1053,34 @@ document.addEventListener("DOMContentLoaded", () => {
     } finally {
       zipBtn.disabled = false; zipBtn.textContent = "Download All (ZIP)";
       updateBatch();
+    }
+  });
+
+  translateScanBtn.addEventListener("click", async () => {
+    const p = getActive();
+    if (!p || p.status !== "done") return;
+    if (!apiKeyInput.value.trim()) {
+      apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
+    }
+    apiKeyInput.style.borderColor = "";
+    translateScanBtn.disabled = true; translateScanBtn.textContent = "Loading scan...";
+    try {
+      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}`);
+      const blob = await res.blob();
+      const file = new File([blob], "scan_" + (p.name || "page.png"), { type: "image/png" });
+      setWorkflow("raw-translate");
+      p.file = file;
+      try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+      p.thumb = URL.createObjectURL(blob);
+      p.status = "queued"; p.taskId = null; p.result = null;
+      p.items = []; p.excluded = new Set(); p.offsets = {}; p.colors = {};
+      p.error = ""; p.rev = 0;
+      renderStrip(); updateBatch(); renderActivePage();
+      pump();
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      translateScanBtn.disabled = false; translateScanBtn.textContent = "Translate This Scan";
     }
   });
 
