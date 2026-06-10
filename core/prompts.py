@@ -38,6 +38,8 @@ For each text region, return its bounding box as PERCENTAGE coordinates of the
 image (so they are resolution independent):
 - x_pct, y_pct: top-left corner as a percentage (0-100)
 - width_pct, height_pct: size as a percentage of the image dimensions
+- rotation_deg: clockwise rotation of the text from horizontal.
+  0 = horizontal. 90 = vertical top-to-bottom column. 10-30 for diagonal bars.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
@@ -46,6 +48,7 @@ Return ONLY a JSON array — no markdown fences, no commentary:
     "y_pct": 10.0,
     "width_pct": 20.0,
     "height_pct": 8.0,
+    "rotation_deg": 0,
     "original": "日本語テキスト",
     "translation": "{target_lang.upper()} TEXT",
     "type": "dialogue",
@@ -94,6 +97,12 @@ boxes. Each separate framed box (caption / narration panel) is its OWN region.
 For each text region, return its bounding box as PERCENTAGE coordinates:
 - x_pct, y_pct: top-left corner (0-100)
 - width_pct, height_pct: size as percentage of image dimensions
+- rotation_deg: clockwise rotation of the text from horizontal.
+  0 = normal horizontal left-to-right text.
+  90 = vertical top-to-bottom column (common for Japanese text on manga pages).
+  Use 10-30 for text running along a diagonal narration bar or tilted strip.
+  The bounding box must be the AXIS-ALIGNED rectangle that fully contains
+  all the text at the reported angle.
 
 Make each box TIGHT — wrap it snugly around just that text or its framed panel.
 Never let one box overlap, contain, or spill into a neighbouring box; if two
@@ -106,6 +115,7 @@ Return ONLY a JSON array — no markdown fences:
     "y_pct": 2.0,
     "width_pct": 40.0,
     "height_pct": 5.0,
+    "rotation_deg": 0,
     "original": "第1163話 \\"約束\\"",
     "translation": "CHAPTER 1163: \\"THE PROMISE\\"",
     "type": "title"

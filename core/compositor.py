@@ -1,3 +1,4 @@
+import math
 import cv2
 import numpy as np
 from PIL import Image
@@ -97,6 +98,8 @@ class Compositor:
                 continue
             bx, by, bw, bh = [int(v) for v in bbox]
 
+            rotation = float(it.get("rotation", 0))
+
             # Manually added text: the user drew this box over a missed or
             # leftover region. Erase whatever's there and place the typed text
             # using exactly the box they drew (no auto-refinement).
@@ -113,7 +116,7 @@ class Compositor:
                 rect, dark = self._apply_free_region(result, gray, cap, bb)
                 edited_rects.append(tuple(int(v) for v in bb))
                 color = self._pick_color(dark, it)
-                placements.append((offset_rect(it, rect), text, color, ital))
+                placements.append((offset_rect(it, rect), text, color, ital, rotation))
                 it["placed"] = True
                 continue
 
@@ -134,7 +137,7 @@ class Compositor:
                 edited_rects.append(tuple(int(v) for v in bb))
                 it["bbox"] = [int(v) for v in bb]
                 color = self._pick_color(dark, it)
-                placements.append((offset_rect(it, rect), text, color, ital))
+                placements.append((offset_rect(it, rect), text, color, ital, rotation))
                 it["placed"] = True
                 continue
 
@@ -192,21 +195,26 @@ class Compositor:
 
             edited_rects.append(tuple(int(v) for v in bb))
             color = self._pick_color(dark, it)
-            placements.append((offset_rect(it, rect), text, color, ital))
+            placements.append((offset_rect(it, rect), text, color, ital, 0))
             it["placed"] = True
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital in placements:
-                self.renderer.draw_in_rect(pil, rect, text, color, italic=ital)
+            for rect, text, color, ital, rot in placements:
+                self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
+                                           rotation=rot)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         # Hard guarantee: only the exact regions we edited may differ from the
         # original. Restore every other pixel byte-for-byte — no global cleanup,
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
+        placement_rects = []
+        for rect, text, color, ital, rot in placements:
+            placement_rects.append(self._rotated_aabb(rect, rot))
+
         edited = np.zeros((h, w), np.uint8)
-        for rx, ry, rw, rh in edited_rects + [p[0] for p in placements]:
+        for rx, ry, rw, rh in edited_rects + placement_rects:
             x0, y0 = max(0, int(rx)), max(0, int(ry))
             x1, y1 = min(w, int(rx) + int(rw)), min(h, int(ry) + int(rh))
             if x1 > x0 and y1 > y0:
@@ -532,6 +540,20 @@ class Compositor:
         full = np.zeros((H, W), np.uint8)
         full[y0:y1, x0:x1] = filled
         return full, (x0 + rx, y0 + ry, rw2, rh2), dark
+
+    @staticmethod
+    def _rotated_aabb(rect, rotation):
+        """Axis-aligned bounding box that covers *rect* after clockwise
+        rotation by *rotation* degrees."""
+        if abs(rotation) < 2:
+            return rect
+        x, y, w, h = rect
+        rad = math.radians(abs(rotation))
+        c, s = abs(math.cos(rad)), abs(math.sin(rad))
+        rw = int(w * c + h * s) + 4
+        rh = int(w * s + h * c) + 4
+        cx, cy = x + w // 2, y + h // 2
+        return (cx - rw // 2, cy - rh // 2, rw, rh)
 
     def _overlaps(self, a, b) -> bool:
         ax, ay, aw, ah = a

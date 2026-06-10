@@ -393,6 +393,7 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
             "color": colors.get(nid, "auto"),
+            "rotation": it.get("rotation", 0),
         })
 
     # Manually added text regions (drawn over missed / leftover spots).
@@ -436,6 +437,7 @@ async def rerender(task_id: str, request: Request):
             "translation": it["translation"], "type": it["type"],
             "in_bubble": it["in_bubble"], "dark": it.get("dark", False),
             "placed": it.get("placed", False),
+            "rotation": it.get("rotation", 0),
         }
         for it in items
     ]

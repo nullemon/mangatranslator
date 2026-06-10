@@ -1,3 +1,4 @@
+import math
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -81,13 +82,21 @@ class TextRenderer:
         text: str,
         color: Tuple[int, int, int] = (0, 0, 0),
         italic: bool = False,
+        rotation: float = 0,
     ) -> Image.Image:
         """Fit `text` (wrapped, auto-sized, centered) inside `rect`.
 
         When `italic` is set the text is sheared into a slanted style — used to
-        set sound effects / expression beats apart from ordinary dialogue."""
+        set sound effects / expression beats apart from ordinary dialogue.
+        When `rotation` is nonzero the text is rendered upright into a temporary
+        layer, rotated to the specified clockwise angle, and composited onto
+        *image* so it sits inside the target rect at the same tilt as the
+        original Japanese."""
         text = text.upper()
         x, y, w, h = rect
+
+        if abs(rotation) >= 2:
+            return self._draw_rotated(image, x, y, w, h, text, color, italic, rotation)
 
         pad_x = max(int(w * self.padding_ratio), 1)
         pad_y = max(int(h * self.padding_ratio), 1)
@@ -133,6 +142,46 @@ class TextRenderer:
                           stroke_width=stroke_w, stroke_fill=stroke_c)
             cur_y += heights[i] + spacing
 
+        return image
+
+    def _draw_rotated(self, image, x, y, w, h, text, color, italic, angle_deg):
+        """Render *text* at *angle_deg* clockwise, composited onto *image*
+        centered on the (x, y, w, h) rect.  The text is first drawn upright
+        into an RGBA layer whose dimensions are chosen so that, after rotation,
+        the result fits within the target rect."""
+        rad = math.radians(abs(angle_deg))
+        c, s = abs(math.cos(rad)), abs(math.sin(rad))
+
+        det = c * c - s * s
+        if abs(det) > 0.05:
+            rw = (w * c - h * s) / det
+            rh = (h * c - w * s) / det
+        else:
+            rw = rh = min(w, h) * 0.71
+
+        if rw <= 0 or rh <= 0:
+            rw = max(w, h)
+            rh = max(16, min(w, h))
+
+        rw = max(16, int(rw))
+        rh = max(12, int(rh))
+
+        tmp = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
+        self.draw_in_rect(tmp, (0, 0, rw, rh), text, color, italic=italic, rotation=0)
+
+        rotated = tmp.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
+
+        if rotated.width > w or rotated.height > h:
+            scale = min(w / max(rotated.width, 1), h / max(rotated.height, 1))
+            nw = max(1, int(rotated.width * scale))
+            nh = max(1, int(rotated.height * scale))
+            rotated = rotated.resize((nw, nh), Image.BICUBIC)
+
+        cx = x + w // 2
+        cy = y + h // 2
+        px = int(cx - rotated.width / 2)
+        py = int(cy - rotated.height / 2)
+        image.paste(rotated, (px, py), rotated)
         return image
 
     def _draw_italic_line(self, image, ax, ay, line, font, color, stroke_w, stroke_c):

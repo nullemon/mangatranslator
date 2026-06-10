@@ -470,6 +470,12 @@ class TranslationPipeline:
                 continue
             used.append(box)
 
+            rotation = 0.0
+            try:
+                rotation = float(det.get("rotation_deg", 0))
+            except (ValueError, TypeError):
+                pass
+
             items.append({
                 "id": next_id,
                 "bbox": box,
@@ -478,6 +484,7 @@ class TranslationPipeline:
                 "type": typ if typ in ("title", "credit", "narration", "caption") else "narration",
                 "in_bubble": False,
                 "dark": False,
+                "rotation": rotation,
             })
             next_id += 1
 
@@ -553,6 +560,11 @@ class TranslationPipeline:
             y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
             bw = max(10, min(int(det.get("width_pct", 0) / 100 * w), w - x))
             bh = max(10, min(int(det.get("height_pct", 0) / 100 * h), h - y))
+            rotation = 0.0
+            try:
+                rotation = float(det.get("rotation_deg", 0))
+            except (ValueError, TypeError):
+                pass
             items.append({
                 "id": i + 1,
                 "bbox": [x, y, bw, bh],
@@ -561,6 +573,7 @@ class TranslationPipeline:
                 "type": det.get("type", "dialogue"),
                 "in_bubble": det.get("in_bubble", True),
                 "dark": False,
+                "rotation": rotation,
             })
         return items, "", {}
 
@@ -598,6 +611,7 @@ class TranslationPipeline:
                     "in_bubble": it.get("in_bubble", True),
                     "dark": it.get("dark", False),
                     "placed": it.get("placed", False),
+                    "rotation": it.get("rotation", 0),
                 }
                 for it in items
             ],
