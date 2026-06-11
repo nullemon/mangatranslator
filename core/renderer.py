@@ -41,6 +41,7 @@ class TextRenderer:
         self._has_raqm = bool(features.check("raqm"))
         self._draw_dir: Optional[str] = None   # "rtl" when raqm handles a RTL line
         self._reshape_text = False             # True when we pre-shape (no raqm)
+        self._mix = False                      # True = per-glyph font fallback (LTR)
 
     def _find_font(self) -> Optional[str]:
         for p in self.FONT_CANDIDATES:
@@ -170,6 +171,61 @@ class TextRenderer:
         return draw.textbbox((0, 0), self._shape(s), font=font,
                              stroke_width=stroke_width, **self._dir_kw())
 
+    # ── Per-glyph font fallback (LTR): keep the comic font, borrow only the
+    #    missing glyphs (♪ ♫ …) from a fallback so lettering stays in style ──
+    def _glyph_font_path(self, ch: str) -> Optional[str]:
+        if ch.isspace() or self._covers(self.font_path, {ch}):
+            return self.font_path
+        for fb in self._fallback_font_paths():
+            if self._covers(fb, {ch}):
+                return fb
+        return self.font_path
+
+    def _needs_mix(self, line: str) -> bool:
+        return self._mix and any(
+            not (c.isspace() or self._covers(self.font_path, {c})) for c in line
+        )
+
+    def _runs(self, line: str) -> List[Tuple[str, Optional[str]]]:
+        """Split `line` into maximal runs that share a font (the comic font
+        where it has the glyph, a fallback where it doesn't)."""
+        runs: List[list] = []
+        for ch in line:
+            p = self._glyph_font_path(ch)
+            if runs and runs[-1][1] == p:
+                runs[-1][0] += ch
+            else:
+                runs.append([ch, p])
+        return [(s, p) for s, p in runs]
+
+    def _line_w(self, draw, line, font) -> int:
+        """Ink width of a line, accounting for per-glyph fallback so wrapping
+        and auto-sizing stay accurate."""
+        if self._needs_mix(line):
+            return int(sum(
+                draw.textlength(s, font=self._get_font(font.size, p))
+                for s, p in self._runs(line)
+            ))
+        bb = self._bbox(draw, line, font)
+        return bb[2] - bb[0]
+
+    def _draw_mixed_line(self, draw, top, inner_x, inner_w, line, font,
+                         color, stroke_w, stroke_c):
+        """Draw one LTR line whose glyphs span more than one font, laying the
+        runs out left-to-right by advance width and centering the whole line."""
+        runs = self._runs(line)
+        fonts = [self._get_font(font.size, p) for _, p in runs]
+        widths = [draw.textlength(s, font=f) for (s, _), f in zip(runs, fonts)]
+        total = int(sum(widths))
+        # Vertical placement mirrors the single-font path (ink top at `top`).
+        bb = draw.textbbox((0, 0), line, font=font)
+        ty = top - bb[1]
+        cx = inner_x + max(0, (inner_w - total) // 2)
+        for (s, _), f, wdt in zip(runs, fonts, widths):
+            draw.text((cx, ty), s, fill=color, font=f,
+                      stroke_width=stroke_w, stroke_fill=stroke_c)
+            cx += wdt
+
     def render(
         self,
         image: np.ndarray,
@@ -217,18 +273,29 @@ class TextRenderer:
         # Use a font that can actually render every glyph in this text (so ♪, ―
         # etc. don't come out as boxes), for the whole call — wrap, measure, draw.
         prev_font = self._active_font_path
-        prev_dir, prev_reshape = self._draw_dir, self._reshape_text
-        self._active_font_path = self._effective_font_path(text)
-        # Right-to-left text: let raqm shape+reorder via direction="rtl"; if raqm
-        # is absent, fall back to pre-shaping each line into visual order.
+        prev_dir, prev_reshape, prev_mix = self._draw_dir, self._reshape_text, self._mix
         rtl = self._is_rtl(text)
-        self._draw_dir = "rtl" if (rtl and self._has_raqm) else None
-        self._reshape_text = rtl and not self._has_raqm
+        if rtl:
+            # Right-to-left text must be shaped + reordered as one run, so pick a
+            # single font that covers it. raqm does it via direction="rtl";
+            # without raqm we pre-shape each line into visual order.
+            self._active_font_path = self._effective_font_path(text)
+            self._draw_dir = "rtl" if self._has_raqm else None
+            self._reshape_text = not self._has_raqm
+            self._mix = False
+        else:
+            # Left-to-right: keep the comic font and fill ONLY the glyphs it
+            # lacks (♪ ♫ …) from a fallback, per glyph-run — so lettering stays
+            # in-style instead of the whole line switching to a plain font.
+            self._active_font_path = self.font_path or self._effective_font_path(text)
+            self._draw_dir = None
+            self._reshape_text = False
+            self._mix = True
         try:
             return self._draw_in_rect_inner(image, rect, text, color, italic, rotation)
         finally:
             self._active_font_path = prev_font
-            self._draw_dir, self._reshape_text = prev_dir, prev_reshape
+            self._draw_dir, self._reshape_text, self._mix = prev_dir, prev_reshape, prev_mix
 
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
@@ -269,6 +336,12 @@ class TextRenderer:
         stroke_w = max(1, font_size // 18)
 
         for i, line in enumerate(lines):
+            if self._needs_mix(line) and not italic:
+                # Line mixes the comic font with a fallback for glyphs it lacks.
+                self._draw_mixed_line(draw, cur_y, inner_x, inner_w, line, font,
+                                      color, stroke_w, stroke_c)
+                cur_y += heights[i] + spacing
+                continue
             bb = self._bbox(draw, line, font)
             lw = bb[2] - bb[0]
             lx = inner_x + max(0, (inner_w - lw) // 2)
@@ -386,7 +459,7 @@ class TextRenderer:
         spacing = max(int(size * self.line_spacing_ratio), 1)
         for i, line in enumerate(lines):
             bb = self._bbox(draw, line, font)
-            lw = bb[2] - bb[0]
+            lw = self._line_w(draw, line, font)
             lh = bb[3] - bb[1]
             if lw > eff_w:
                 return False
@@ -417,7 +490,7 @@ class TextRenderer:
 
         k = len(greedy)
         longest = max(
-            self._bbox(draw, wd, font)[2] for wd in words
+            self._line_w(draw, wd, font) for wd in words
         )
         lo, hi = max(longest, 8), max_w
         best = greedy
@@ -436,8 +509,7 @@ class TextRenderer:
         current = ""
         for word in words:
             test = f"{current} {word}".strip() if current else word
-            bb = self._bbox(draw, test, font)
-            if bb[2] - bb[0] <= max_w:
+            if self._line_w(draw, test, font) <= max_w:
                 current = test
             else:
                 if current:
