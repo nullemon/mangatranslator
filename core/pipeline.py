@@ -703,15 +703,26 @@ class TranslationPipeline:
         return items, ann_path, masks
 
     def _translate_regions(self, image, regions, annotated, update) -> Dict[int, dict]:
-        """Translate each detected bubble. Prefers local OCR (reads each
-        bubble's OWN text → no cross-bubble mismatch); falls back to the
-        vision-LLM number-matching path when OCR isn't available."""
-        if self.ocr is not None and self.ocr.ok:
+        """Translate each detected bubble. For Japanese, prefer local OCR (reads
+        each bubble's OWN text → no cross-bubble mismatch). For any OTHER source
+        language the local manga-ocr can't read it (it's Japanese-only), so go
+        straight to the vision model, which reads Arabic/Korean/etc. directly."""
+        src = (self.source_lang or "Japanese").strip().lower()
+        ocr_usable = (self.ocr is not None and self.ocr.ok
+                      and src in ("japanese", "ja", "jp"))
+        if not ocr_usable and self.ocr is not None and self.ocr.ok:
+            print(f"[pipeline] source={self.source_lang}: skipping Japanese "
+                  f"manga-ocr, reading bubbles with the vision model")
+        if ocr_usable:
+            from .ocr import _has_japanese
             update(2, "Reading bubbles with manga-ocr...", 30)
             id_to_text = {}
             for r in regions:
                 jp = self.ocr.read_region(image, r.bbox, getattr(r, "mask", None))
-                if jp:
+                # Keep only genuinely Japanese reads. If the page is actually
+                # another language, manga-ocr returns latin/garbage — drop it so
+                # the whole page falls through to the vision model below.
+                if jp and _has_japanese(jp):
                     id_to_text[r.id] = jp
             update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
             if id_to_text:
