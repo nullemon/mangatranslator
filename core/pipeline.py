@@ -364,6 +364,71 @@ def make_detector(use_seg: bool = True):
     return BubbleDetector(), "CV detector"
 
 
+def probe_components() -> Dict[str, Any]:
+    """Fast availability snapshot for /api/health — checks imports, GPU and
+    weights WITHOUT loading heavy models, so it's cheap to call. Tells you at a
+    glance whether the full 'AI finds all + GPU fixes all' stack is in place."""
+    out: Dict[str, Any] = {}
+
+    def _imp(mod):
+        import importlib
+        try:
+            importlib.import_module(mod)
+            return True
+        except Exception:
+            return False
+
+    # GPU / CUDA
+    try:
+        import torch
+        out["torch"] = torch.__version__
+        out["cuda"] = torch.cuda.is_available()
+        out["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    except Exception:
+        out["torch"] = None
+        out["cuda"] = False
+        out["gpu"] = None
+    try:
+        import onnxruntime as ort
+        out["onnxruntime_cuda"] = "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:
+        out["onnxruntime_cuda"] = False
+
+    out["balloon_seg_yolo"] = _imp("ultralytics")
+    out["manga_ocr"] = _imp("manga_ocr")
+    out["lama_inpaint"] = _imp("simple_lama_inpainting")
+    out["free_text_craft"] = _imp("craft_text_detector")
+    out["upscale_spandrel"] = _imp("spandrel")
+
+    # Weights on disk
+    out["weights"] = {
+        "comic_text_detector": os.path.exists("models/comictextdetector.pt.onnx"),
+        "real_esrgan": os.path.exists("models/RealESRGAN_x4plus_anime_6B.pth"),
+        "mangajanai": bool(__import__("glob").glob("models/mangajanai/*.pth")),
+    }
+
+    # RTL Arabic typesetting readiness
+    try:
+        from PIL import features as _pf
+        out["raqm_rtl_shaping"] = bool(_pf.check("raqm"))
+    except Exception:
+        out["raqm_rtl_shaping"] = False
+    out["arabic_reshaper_fallback"] = _imp("arabic_reshaper") and _imp("bidi")
+    try:
+        from .renderer import TextRenderer
+        r = TextRenderer()
+        out["arabic_font"] = bool(
+            r.font_path and r._effective_font_path("العربية") is not None)
+    except Exception:
+        out["arabic_font"] = False
+
+    out["ready_full_stack"] = all([
+        out["cuda"], out["balloon_seg_yolo"], out["manga_ocr"],
+        out["lama_inpaint"], out["free_text_craft"],
+    ])
+    return out
+
+
 class TranslationPipeline:
     def __init__(
         self,
@@ -380,10 +445,14 @@ class TranslationPipeline:
         upscale: Optional[bool] = None,
         source_lang: str = "Japanese",
         translate_sfx: bool = False,
+        max_quality: bool = False,
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Maximum quality: process at full resolution (no working-size downscale)
+        # and lean on the whole GPU stack. OFF by default — opt-in per run.
+        self.max_quality = bool(max_quality)
         # HD upscale: explicit per-run choice wins; otherwise fall back to the
         # MANGA_UPSCALE env default. OFF unless asked for.
         self.upscale_on = (upscale if upscale is not None
@@ -425,6 +494,53 @@ class TranslationPipeline:
             except Exception as e:
                 print(f"[pipeline] upscaler unavailable: {e}")
 
+        self.components = self._component_status()
+        self._log_component_banner()
+
+    def _component_status(self) -> Dict[str, Any]:
+        """A snapshot of which detection / cleanup / upscale stages actually
+        loaded, so the logs (and /api/health) show exactly what will run."""
+        def ok(obj):
+            return bool(obj is not None and getattr(obj, "ok", True))
+        try:
+            from PIL import features as _pf
+            raqm = bool(_pf.check("raqm"))
+        except Exception:
+            raqm = False
+        return {
+            "detector": self.detector_name,
+            "gpu_balloon_seg": "GPU" in self.detector_name,
+            "manga_ocr": ok(self.ocr),
+            "free_text_detector_craft": ok(self.text_detector),
+            "text_pixel_seg": ok(self.text_seg),
+            "upscaler": ok(self.upscaler),
+            "lama_inpaint": getattr(self.compositor, "lama", None) is not None,
+            "translator": type(self.translator).__name__,
+            "raqm_rtl_shaping": raqm,
+        }
+
+    def _log_component_banner(self):
+        c = self.components
+        def mark(v):
+            return "GPU/ON " if v else "off    "
+        print("[pipeline] ===== component stack =====")
+        print(f"[pipeline]   balloon detect : {c['detector']}")
+        print(f"[pipeline]   manga-ocr      : {mark(c['manga_ocr'])}")
+        print(f"[pipeline]   free-text CRAFT: {mark(c['free_text_detector_craft'])}")
+        print(f"[pipeline]   text-pixel seg : {mark(c['text_pixel_seg'])}")
+        print(f"[pipeline]   LaMa inpaint   : {mark(c['lama_inpaint'])}")
+        print(f"[pipeline]   upscaler       : {mark(c['upscaler'])}")
+        print(f"[pipeline]   RTL shaping    : {mark(c['raqm_rtl_shaping'])} (raqm)")
+        print(f"[pipeline]   translator     : {c['translator']} | "
+              f"src={self.source_lang} -> {self.target_lang} | "
+              f"max_quality={self.max_quality} | sfx={self.translate_sfx}")
+        missing = [k for k in ("manga_ocr", "free_text_detector_craft",
+                               "text_pixel_seg", "lama_inpaint")
+                   if not c[k]]
+        if missing:
+            print(f"[pipeline]   ⚠ inactive (run ./setup_gpu.sh): {', '.join(missing)}")
+        print("[pipeline] ============================")
+
     def process(
         self,
         image_path: str,
@@ -440,10 +556,15 @@ class TranslationPipeline:
             raise ValueError(f"Cannot load image: {image_path}")
 
         h, w = image.shape[:2]
-        max_dim = 4000
+        # Max-quality: keep the page at full resolution so detection, OCR and
+        # erasure work on every pixel (cleaner masks, sharper lettering). The
+        # default caps the working size to keep CPU-only runs responsive.
+        max_dim = 10000 if self.max_quality else 4000
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if self.max_quality:
+            print(f"[pipeline] MAX QUALITY run — full-resolution {image.shape[1]}x{image.shape[0]}")
 
         update(0, "Preprocessing image...", 2)
         image = auto_crop_page(image)

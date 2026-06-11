@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const modelSelect    = document.getElementById("model");
   const smartMode      = document.getElementById("smartMode");
   const translateSfx   = document.getElementById("translateSfx");
+  const maxQuality     = document.getElementById("maxQuality");
   const hdUpscale      = document.getElementById("hdUpscale");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
@@ -97,6 +98,33 @@ document.addEventListener("DOMContentLoaded", () => {
     translateSfx.checked = localStorage.getItem("manga_translate_sfx") === "1";
     translateSfx.addEventListener("change", () =>
       localStorage.setItem("manga_translate_sfx", translateSfx.checked ? "1" : "0"));
+  }
+
+  if (maxQuality) {
+    maxQuality.checked = localStorage.getItem("manga_max_quality") === "1";
+    maxQuality.addEventListener("change", () =>
+      localStorage.setItem("manga_max_quality", maxQuality.checked ? "1" : "0"));
+  }
+
+  const checkSystem = document.getElementById("checkSystem");
+  const systemStatus = document.getElementById("systemStatus");
+  if (checkSystem && systemStatus) {
+    checkSystem.addEventListener("click", async () => {
+      systemStatus.textContent = "checking…";
+      try {
+        const h = await fetch("/api/health?refresh=true").then(r => r.json());
+        const on = v => v ? "✓" : "✗";
+        systemStatus.innerHTML =
+          `GPU:${on(h.cuda)}${h.gpu ? " (" + h.gpu + ")" : ""} · ` +
+          `seg:${on(h.balloon_seg_yolo)} · ocr:${on(h.manga_ocr)} · ` +
+          `lama:${on(h.lama_inpaint)} · text-seg:${on(h.weights && h.weights.comic_text_detector)} · ` +
+          `RTL:${on(h.raqm_rtl_shaping || h.arabic_reshaper_fallback)} · ` +
+          `arabicFont:${on(h.arabic_font)} · ` +
+          `<b>full stack:${on(h.ready_full_stack)}</b>`;
+      } catch (e) {
+        systemStatus.textContent = "status check failed: " + e;
+      }
+    });
   }
 
   if (hdUpscale) {
@@ -544,6 +572,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("model", modelSelect.value);
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
+      f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");

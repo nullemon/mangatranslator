@@ -122,6 +122,14 @@
         <span class="toggle-hint">Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.</span>
       </div>
       <div class="setting-group toggle-group">
+        <label for="maxQuality">Maximum Quality</label>
+        <label class="toggle">
+          <input type="checkbox" id="maxQuality">
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="toggle-hint">Process at full resolution and use the whole GPU stack (AI finds all text, GPU cleans it). Slower; best with the GPU setup installed.</span>
+      </div>
+      <div class="setting-group toggle-group">
         <label for="hdUpscale">HD Upscale</label>
         <label class="toggle">
           <input type="checkbox" id="hdUpscale">
@@ -140,6 +148,8 @@
       <div class="setting-group" style="grid-column:1/-1;flex-basis:100%;width:100%;flex-direction:row;align-items:center;gap:.6rem">
         <span class="muted" style="font-size:.78rem">All settings save automatically and restore on reload.</span>
         <button type="button" class="btn btn-ghost btn-sm" id="resetSettings" title="Clear saved defaults (keeps API keys)">Reset defaults</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="checkSystem" title="Show which detection / GPU / Arabic components are active">System status</button>
+        <span id="systemStatus" class="muted" style="font-size:.74rem"></span>
       </div>
     </div>
 

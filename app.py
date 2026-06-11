@@ -37,7 +37,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from core.pipeline import (TranslationPipeline, scan_cleanup, compress_upload,
-                           preserve_dark_regions)
+                           preserve_dark_regions, probe_components)
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
@@ -90,6 +90,20 @@ async def index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
 
 
+_HEALTH_CACHE = {}
+
+
+@app.get("/api/health")
+async def health(refresh: bool = False):
+    """Which detection / cleanup / GPU / RTL components are available. Cheap
+    (no heavy model loads) and cached. curl it and share to debug a setup:
+        curl -s localhost:8000/api/health | python3 -m json.tool"""
+    if refresh or not _HEALTH_CACHE:
+        loop = asyncio.get_event_loop()
+        _HEALTH_CACHE.update(await loop.run_in_executor(None, probe_components))
+    return _HEALTH_CACHE
+
+
 @app.post("/api/translate")
 async def translate(
     file: UploadFile = File(...),
@@ -111,6 +125,7 @@ async def translate(
     upscale: str = Form("false"),
     source_lang: str = Form("Japanese"),
     translate_sfx: str = Form("false"),
+    max_quality: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -145,6 +160,7 @@ async def translate(
         "mode": "translate",
         "source_lang": source_lang,
         "translate_sfx": translate_sfx == "true",
+        "max_quality": max_quality == "true",
     }
 
     asyncio.create_task(
@@ -159,6 +175,7 @@ async def translate(
             upscale=(upscale == "true"),
             source_lang=source_lang,
             translate_sfx=(translate_sfx == "true"),
+            max_quality=(max_quality == "true"),
         )
     )
 
@@ -187,6 +204,7 @@ async def _run(
     upscale: bool = False,
     source_lang: str = "Japanese",
     translate_sfx: bool = False,
+    max_quality: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -275,6 +293,7 @@ async def _run(
             upscale=upscale,
             source_lang=source_lang,
             translate_sfx=translate_sfx,
+            max_quality=max_quality,
         )
 
         def on_progress(update):
