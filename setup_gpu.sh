@@ -153,6 +153,17 @@ else
     echo "  → MangaJaNai: skipped (run ./setup_gpu.sh --mangajanai to add the manga upscaler)"
 fi
 
+# Arabic font for right-to-left output — bundled in the repo; re-fetch only if
+# missing so Arabic renders in a proper Naskh face, not a generic fallback.
+if [ ! -f fonts/NotoNaskhArabic-Bold.ttf ]; then
+    echo "  → Noto Naskh Arabic (RTL output font)..."
+    curl -fsSL -o fonts/NotoNaskhArabic-Bold.ttf \
+      https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoNaskhArabic/hinted/ttf/NotoNaskhArabic-Bold.ttf \
+    || echo "    (download failed — Arabic falls back to DejaVu, still works)"
+else
+    echo "  → Noto Naskh Arabic: already present"
+fi
+
 echo "  → CRAFT text detection..."
 python3 - <<'PY'
 try:

@@ -220,6 +220,31 @@ def _balanced():
     return f"balanced wrap -> {len(lines)} lines"
 check("app", "Balanced line wrapping", _balanced)
 
+def _arabic():
+    import numpy as np
+    from PIL import Image, features
+    from core.renderer import TextRenderer
+    r = TextRenderer()
+    eff = r._effective_font_path("الفصل 1185 : دعيهم وشأنهم")
+    if not eff or r._coverage(eff) is None or ord("ا") not in r._coverage(eff):
+        raise RuntimeError("no Arabic-capable font found — bundle one in fonts/")
+    img = Image.new("RGB", (760, 90), (255, 255, 255))
+    r.draw_in_rect(img, (20, 10, 720, 70), "الفصل 1185 : دعيهم وشأنهم", (0, 0, 0))
+    if int((np.array(img) < 200).any(axis=2).sum()) < 500:
+        raise RuntimeError("Arabic rendered no ink")
+    raqm = features.check("raqm")
+    try:
+        import arabic_reshaper, bidi  # noqa: F401
+        reshaper = True
+    except Exception:
+        reshaper = False
+    if not raqm and not reshaper:
+        return (f"SKIP:renders via {os.path.basename(eff)} but neither libraqm "
+                "nor arabic-reshaper present — shaping may be imperfect")
+    how = "raqm (native)" if raqm else "arabic-reshaper fallback"
+    return f"{os.path.basename(eff)} + {how}"
+check("app", "Arabic / RTL typesetting", _arabic)
+
 def _clamp():
     from core.compositor import Compositor
     r = Compositor._clamp_rect((-20, -20, 100, 100), 200, 200)
