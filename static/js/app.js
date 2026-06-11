@@ -417,7 +417,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, fontScales: {}, error: "", rev: 0,
+        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
       });
     }
 
@@ -658,6 +658,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.excluded = new Set();
             page.erased = new Set();
             page.fontScales = {};
+            page.boxes = {};
             page.rev++;
             renderStrip(); updateBatch();
             if (page.uid === activeUid) renderActivePage();
@@ -978,6 +979,7 @@ document.addEventListener("DOMContentLoaded", () => {
           excluded: [...page.excluded], erased: [...(page.erased || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
+          boxes: page.boxes || {},
           offsets: page.offsets || {},
           covers: page.covers || [],
           colors: page.colors || {},
@@ -1007,6 +1009,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let tool = null;
   const HINTS = {
     move: "Drag any translation to move it, then Apply & Re-render.",
+    resize: "Drag a box's handles to resize/reshape it (or drag its middle to move it) so the text fits, then Apply & Re-render.",
     edit: "Click any translation to fix its text.",
     cover: "Drag a box over a watermark or leftover text to erase it, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
@@ -1076,6 +1079,75 @@ document.addEventListener("DOMContentLoaded", () => {
         addItemBox(it, page, W, H, true);
       }
     }
+
+    if (tool === "resize") {
+      page.boxes = page.boxes || {};
+      for (const it of (page.items || [])) {
+        if (!it.bbox || page.excluded.has(String(it.id))) continue;
+        addResizeBox(it, page, W, H, false);
+      }
+      for (const it of (page.added || [])) {
+        if (it.bbox) addResizeBox(it, page, W, H, true);
+      }
+    }
+  }
+
+  // A box with 8 Photoshop-style handles: drag the body to move it, drag a
+  // handle to reshape it. The new rect is stored as an absolute-pixel override
+  // in page.boxes[id] and applied on Apply & Re-render.
+  function addResizeBox(it, page, W, H, isAdded) {
+    const base = (page.boxes[it.id] || it.bbox).slice();
+    const box = makeBox(base[0], base[1], base[2], base[3], W, H,
+                        "resize-box" + (isAdded ? " added-box" : ""));
+    box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>` +
+      ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
+        .map(d => `<span class="rsz-h rsz-${d}" data-d="${d}"></span>`).join("");
+    bindResize(box, it, page, W, H);
+    moveLayer.appendChild(box);
+  }
+
+  function bindResize(box, it, page, W, H) {
+    const cur = () => (page.boxes[it.id] || it.bbox).slice();
+    function apply(b) {
+      page.boxes[it.id] = b;
+      box.style.left = (b[0] / W * 100) + "%";
+      box.style.top = (b[1] / H * 100) + "%";
+      box.style.width = (b[2] / W * 100) + "%";
+      box.style.height = (b[3] / H * 100) + "%";
+    }
+    let mode = null, sx, sy, base;
+    function down(e, m) {
+      e.preventDefault(); e.stopPropagation();
+      mode = m; sx = e.clientX; sy = e.clientY; base = cur();
+      box.classList.add("dragging");
+      try { box.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+    box.addEventListener("pointerdown", e => {
+      if (e.target.classList.contains("rsz-h")) down(e, e.target.dataset.d);
+      else down(e, "move");
+    });
+    box.addEventListener("pointermove", e => {
+      if (!mode) return;
+      const rect = transFull.getBoundingClientRect();
+      const dx = (e.clientX - sx) * (W / rect.width);
+      const dy = (e.clientY - sy) * (H / rect.height);
+      let [x, y, w, h] = base;
+      if (mode === "move") { x += dx; y += dy; }
+      else {
+        if (mode.includes("w")) { x += dx; w -= dx; }
+        if (mode.includes("e")) { w += dx; }
+        if (mode.includes("n")) { y += dy; h -= dy; }
+        if (mode.includes("s")) { h += dy; }
+      }
+      w = Math.max(10, w); h = Math.max(10, h);
+      apply([Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
+    });
+    const end = e => {
+      mode = null; box.classList.remove("dragging");
+      try { box.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+    box.addEventListener("pointerup", end);
+    box.addEventListener("pointercancel", end);
   }
 
   function addItemBox(it, page, W, H, isAdded) {
@@ -1379,7 +1451,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
-      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {};
+      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

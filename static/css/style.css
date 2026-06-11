@@ -287,6 +287,25 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   background:var(--danger);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4}
 .add-box{position:absolute;border:2px dashed #16a34a;background:rgba(22,163,74,.14);border-radius:3px;touch-action:none}
 .add-box.drawing{pointer-events:none}
+/* resize tool: a box with 8 drag handles */
+.resize-box{position:absolute;border:2px solid var(--accent);background:rgba(59,130,246,.10);
+  border-radius:3px;cursor:move;touch-action:none}
+.resize-box.dragging{background:rgba(59,130,246,.22)}
+.resize-box.added-box{border-color:#16a34a;background:rgba(22,163,74,.12)}
+.resize-box .move-tag{position:absolute;top:-9px;left:-2px;font-size:.6rem;font-weight:700;
+  background:var(--accent);color:#fff;padding:0 .3rem;border-radius:4px;line-height:1.4;pointer-events:none}
+.resize-box.added-box .move-tag{background:#16a34a}
+.rsz-h{position:absolute;width:12px;height:12px;background:#fff;border:2px solid var(--accent);
+  border-radius:50%;touch-action:none;z-index:2}
+.resize-box.added-box .rsz-h{border-color:#16a34a}
+.rsz-nw{left:-7px;top:-7px;cursor:nwse-resize}
+.rsz-n {left:calc(50% - 6px);top:-7px;cursor:ns-resize}
+.rsz-ne{right:-7px;top:-7px;cursor:nesw-resize}
+.rsz-e {right:-7px;top:calc(50% - 6px);cursor:ew-resize}
+.rsz-se{right:-7px;bottom:-7px;cursor:nwse-resize}
+.rsz-s {left:calc(50% - 6px);bottom:-7px;cursor:ns-resize}
+.rsz-sw{left:-7px;bottom:-7px;cursor:nesw-resize}
+.rsz-w {left:-7px;top:calc(50% - 6px);cursor:ew-resize}
 /* inline text editor popup */
 .edit-pop{position:absolute;z-index:20;width:min(260px,60vw);background:var(--surface);
   border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);

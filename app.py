@@ -598,12 +598,24 @@ async def rerender(task_id: str, request: Request):
     covers = payload.get("covers") or []
     colors = {str(k): v for k, v in (payload.get("colors") or {}).items()}
     font_scales = {str(k): v for k, v in (payload.get("font_scales") or {}).items()}
+    boxes = {str(k): v for k, v in (payload.get("boxes") or {}).items()}
 
     def _scale(nid):
         try:
             return max(0.4, min(float(font_scales.get(nid, 1.0)), 3.0))
         except (TypeError, ValueError):
             return 1.0
+
+    def _bbox(nid, default):
+        b = boxes.get(nid)
+        if b and len(b) == 4:
+            try:
+                x, y, bw, bh = (int(v) for v in b)
+                if bw >= 6 and bh >= 6:
+                    return [x, y, bw, bh]
+            except (TypeError, ValueError):
+                pass
+        return default
 
     items = []
     for it in r.get("items", []):
@@ -615,7 +627,7 @@ async def rerender(task_id: str, request: Request):
         # no text (for a watermark/garbage region the AI typeset by mistake).
         if nid in erased:
             items.append({
-                "id": it["id"], "bbox": it["bbox"], "original": it.get("original", ""),
+                "id": it["id"], "bbox": _bbox(nid, it["bbox"]), "original": it.get("original", ""),
                 "translation": "", "type": "watermark", "erase": True,
                 "in_bubble": it.get("in_bubble", True), "dark": it.get("dark", False),
                 "rotation": it.get("rotation", 0),
@@ -623,7 +635,7 @@ async def rerender(task_id: str, request: Request):
             continue
         items.append({
             "id": it["id"],
-            "bbox": it["bbox"],
+            "bbox": _bbox(nid, it["bbox"]),
             "original": it.get("original", ""),
             "translation": text,
             "type": it.get("type", ""),
@@ -644,7 +656,7 @@ async def rerender(task_id: str, request: Request):
         aid = str(a.get("id", f"m{len(added) + 1}"))
         added.append({
             "id": aid,
-            "bbox": [int(v) for v in bbox],
+            "bbox": _bbox(aid, [int(v) for v in bbox]),
             "original": a.get("original", ""),
             "translation": text,
             "type": "manual",
