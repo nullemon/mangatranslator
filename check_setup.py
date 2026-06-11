@@ -176,12 +176,17 @@ else:
     check("model", "Text-pixel segmentation", _seg)
 
     def _upscale():
-        from core.upscale import Upscaler
+        from core.upscale import Upscaler, _mangajanai_for
+        mj = _mangajanai_for(1500)
         u = Upscaler()
         if not u.ok:
-            raise RuntimeError("Real-ESRGAN failed to load (check download URLs)")
-        return "Real-ESRGAN anime ready"
-    check("model", "Real-ESRGAN upscaler", _upscale)
+            raise RuntimeError("upscaler failed to load")
+        if mj:
+            d = os.path.dirname(mj)
+            n = len([f for f in os.listdir(d) if f.lower().endswith(".pth")])
+            return f"MangaJaNai ({n} manga models) — faithful, preferred"
+        return "Real-ESRGAN anime (add MangaJaNai: ./setup_gpu.sh --mangajanai)"
+    check("model", "Upscaler", _upscale)
 
     def _craft():
         from core.text_detect import _load_craft

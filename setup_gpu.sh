@@ -7,6 +7,7 @@
 #
 # Usage:
 #     chmod +x setup_gpu.sh && ./setup_gpu.sh
+#     ./setup_gpu.sh --mangajanai     # also fetch the MangaJaNai manga upscaler
 #
 # After it finishes the final check_setup.py tells you what's green.
 # Then start the app:   python3 app.py
@@ -14,6 +15,11 @@
 set -e
 
 PIP="pip3 install --user --break-system-packages"
+
+WANT_MANGAJANAI=0
+for arg in "$@"; do
+    [ "$arg" = "--mangajanai" ] && WANT_MANGAJANAI=1
+done
 
 # ── .env (secrets / config) ──────────────────────────────────────────────
 if [ -f .env ]; then
@@ -113,6 +119,38 @@ if [ ! -f models/RealESRGAN_x4plus_anime_6B.pth ]; then
     || echo "    (download failed — will auto-retry on first run)"
 else
     echo "  → Real-ESRGAN: already downloaded"
+fi
+
+# MangaJaNai — manga-trained upscaler (faithful: sharpens & de-artifacts without
+# redrawing). Opt-in (the V1 set is ~hundreds of MB). Run with --mangajanai.
+if [ "$WANT_MANGAJANAI" = "1" ]; then
+    if ls models/mangajanai/*.pth >/dev/null 2>&1; then
+        echo "  → MangaJaNai: already installed ($(ls models/mangajanai/*.pth | wc -l) models)"
+    else
+        echo "  → MangaJaNai V1 manga upscaler (B&W model set)..."
+        mkdir -p models/mangajanai
+        if curl -fL -o models/mangajanai/_mj.zip \
+            https://github.com/the-database/MangaJaNai/releases/download/1.0.0/MangaJaNai_V1_ModelsOnly.zip; then
+            python3 - <<'PY'
+import zipfile, os, glob
+z = "models/mangajanai/_mj.zip"
+with zipfile.ZipFile(z) as f:
+    for m in f.namelist():
+        if m.lower().endswith(".pth"):
+            data = f.read(m)
+            with open(os.path.join("models/mangajanai", os.path.basename(m)), "wb") as o:
+                o.write(data)
+os.remove(z)
+print("    extracted:", len(glob.glob("models/mangajanai/*.pth")), "MangaJaNai models")
+PY
+        else
+            echo "    (download failed — get MangaJaNai_V1_ModelsOnly.zip from"
+            echo "     https://github.com/the-database/MangaJaNai/releases and unzip"
+            echo "     the .pth files into models/mangajanai/ )"
+        fi
+    fi
+else
+    echo "  → MangaJaNai: skipped (run ./setup_gpu.sh --mangajanai to add the manga upscaler)"
 fi
 
 echo "  → CRAFT text detection..."
