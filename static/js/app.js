@@ -180,7 +180,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan";
-  const needsTranslate = wf => wf !== "raw-scan";
+  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only";
+  const isUpscaleOnly = wf => wf === "upscale-only";
 
   /* ══ THEME ══ */
   function applyTheme(t) {
@@ -216,6 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
     goBtn.textContent = {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
+      "upscale-only": "Upscale to HD",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
   }
@@ -544,6 +546,10 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("watermark", watermarkInput.value.trim());
       }
       return { url: "/api/translate", form: f };
+    }
+    if (isUpscaleOnly(workflow)) {
+      // Faithful HD upscale, no translation and no API keys needed.
+      return { url: "/api/upscale", form: f };
     }
     f.append("provider", enhanceProvider.value);
     f.append("api_key", enhanceKey.value.trim());

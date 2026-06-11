@@ -399,6 +399,75 @@ async def _run_enhance(
             )
 
 
+@app.post("/api/upscale")
+async def upscale_only(file: UploadFile = File(...)):
+    """Faithful HD upscale only — no translation, no generative redraw. Runs
+    the MangaJaNai (or Real-ESRGAN fallback) model and returns the bigger,
+    sharper page with the art preserved exactly."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_hd.png"
+
+    content = compress_upload(await file.read())
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    tasks[task_id] = {
+        "status": "processing",
+        "step": 1,
+        "message": "Queued",
+        "progress": 0,
+        "upload_path": upload_path,
+        "name": file.filename or "page.png",
+        "mode": "upscale",
+    }
+
+    asyncio.create_task(_run_upscale(task_id, upload_path, output_path))
+    return {"task_id": task_id}
+
+
+async def _run_upscale(task_id: str, image_path: str, output_path: str):
+    try:
+        from core.upscale import Upscaler
+        tasks[task_id].update({"step": 1, "progress": 10,
+                               "message": "Loading manga upscaler..."})
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            up = Upscaler()
+            if not up.ok:
+                raise RuntimeError("No upscale model installed — run "
+                                   "./setup_gpu.sh --mangajanai")
+            tasks[task_id].update({"progress": 35,
+                                   "message": "Upscaling to HD (faithful, keeps art)..."})
+            out = up.upscale(img, target_long=3600)
+            cv2.imwrite(output_path, out)
+            return out.shape
+
+        loop = asyncio.get_event_loop()
+        shape = await loop.run_in_executor(None, do_work)
+        tasks[task_id].update({
+            "status": "done",
+            "step": 2,
+            "progress": 100,
+            "message": f"HD upscale ready! ({shape[1]}×{shape[0]})",
+            "result": {"output_path": output_path, "translations": {}},
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        })
+    except Exception as e:
+        if task_id in tasks:
+            tasks[task_id].update(
+                {"status": "error", "message": str(e), "progress": 0}
+            )
+
+
 @app.get("/api/status/{task_id}")
 async def status(task_id: str):
     if task_id not in tasks:
