@@ -11,3 +11,6 @@ opencv-python-headless>=4.10.0,<4.12.0
 Pillow>=10.0.0
 numpy>=1.26.0,<2.0.0
 aiofiles>=24.0.0
+# Used to read a font's glyph table so special characters (♪ ♫ ― …) fall back
+# to a font that has them instead of rendering as boxes.
+fonttools>=4.22.0

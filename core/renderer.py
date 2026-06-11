@@ -31,7 +31,9 @@ class TextRenderer:
         self.min_font_size = 10
         self.padding_ratio = max(0.0, 0.04 / self.font_scale)
         self.line_spacing_ratio = max(0.04, 0.12 / self.font_scale)
-        self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
+        self._font_cache: Dict[tuple, ImageFont.FreeTypeFont] = {}
+        self._cov_cache: Dict[str, Optional[set]] = {}
+        self._active_font_path: Optional[str] = None
 
     def _find_font(self) -> Optional[str]:
         for p in self.FONT_CANDIDATES:
@@ -39,19 +41,84 @@ class TextRenderer:
                 return p
         return None
 
-    def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
-        if size in self._font_cache:
-            return self._font_cache[size]
+    def _get_font(self, size: int, font_path: Optional[str] = None) -> ImageFont.FreeTypeFont:
+        path = font_path or self._active_font_path or self.font_path
+        key = (path, size)
+        if key in self._font_cache:
+            return self._font_cache[key]
         font = None
-        if self.font_path:
+        if path:
             try:
-                font = ImageFont.truetype(self.font_path, size)
+                font = ImageFont.truetype(path, size)
             except (IOError, OSError):
                 pass
         if font is None:
             font = ImageFont.load_default()
-        self._font_cache[size] = font
+        self._font_cache[key] = font
         return font
+
+    # ── Glyph coverage / fallback so ♪ ♫ ― … never render as boxes (□) ──
+    _NORMALIZE = {
+        "―": "—",   # ― horizontal bar → — em dash (comic fonts have —)
+        "─": "—",   # ─ box-drawing dash → —
+        "〜": "~",        # 〜 wave dash → ~
+        "～": "~",        # ～ fullwidth tilde → ~
+    }
+    _FALLBACK_CANDIDATES = [
+        "fonts/NotoSansSymbols2-Regular.ttf",
+        "fonts/Symbola.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+
+    def _normalize_text(self, text: str) -> str:
+        return "".join(self._NORMALIZE.get(c, c) for c in text)
+
+    def _coverage(self, path: Optional[str]):
+        """Codepoints a font file can render (None if it can't be introspected)."""
+        if not path:
+            return None
+        if path in self._cov_cache:
+            return self._cov_cache[path]
+        cov = None
+        try:
+            from fontTools.ttLib import TTFont
+            f = TTFont(path, fontNumber=0, lazy=True)
+            cov = set()
+            for tbl in f["cmap"].tables:
+                cov.update(tbl.cmap.keys())
+            f.close()
+        except Exception:
+            cov = None
+        self._cov_cache[path] = cov
+        return cov
+
+    def _covers(self, path: Optional[str], chars: set) -> bool:
+        cov = self._coverage(path)
+        if cov is None:
+            return True  # can't introspect — assume fine, don't switch fonts
+        return all(ord(c) in cov for c in chars)
+
+    def _fallback_font_paths(self):
+        return [p for p in self._FALLBACK_CANDIDATES if os.path.exists(p)]
+
+    def _effective_font_path(self, text: str) -> Optional[str]:
+        """Pick a font that can actually render `text`. The comic font wins when
+        it covers every character; otherwise fall back to a Unicode font that
+        has the missing glyphs (♪ ♫ ― …) so they never show as □."""
+        chars = {c for c in text if not c.isspace()}
+        if not chars or self._covers(self.font_path, chars):
+            return self.font_path
+        for fb in self._fallback_font_paths():
+            if self._covers(fb, chars):
+                return fb
+        # Nothing covers everything — use whichever renders the most characters.
+        def score(p):
+            cov = self._coverage(p)
+            return sum(1 for c in chars if cov and ord(c) in cov)
+        return max([self.font_path] + self._fallback_font_paths(), key=score)
 
     def render(
         self,
@@ -96,6 +163,17 @@ class TextRenderer:
         original Japanese."""
         if self.uppercase:
             text = text.upper()
+        text = self._normalize_text(text)
+        # Use a font that can actually render every glyph in this text (so ♪, ―
+        # etc. don't come out as boxes), for the whole call — wrap, measure, draw.
+        prev_font = self._active_font_path
+        self._active_font_path = self._effective_font_path(text)
+        try:
+            return self._draw_in_rect_inner(image, rect, text, color, italic, rotation)
+        finally:
+            self._active_font_path = prev_font
+
+    def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
 
         if abs(rotation) >= 2:
