@@ -1018,6 +1018,42 @@ document.addEventListener("DOMContentLoaded", () => {
   toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
   editApply.addEventListener("click", () => applyChanges(editApply));
 
+  const rescanBtn = document.getElementById("rescanBtn");
+  if (rescanBtn) rescanBtn.addEventListener("click", async () => {
+    const page = getActive();
+    if (!page || !page.taskId) return;
+    const key = apiKeyInput.value.trim();
+    if (!key) { editHint.textContent = "Enter your API key first."; return; }
+    collectEdits(page);
+    const label = rescanBtn.textContent;
+    rescanBtn.disabled = true; rescanBtn.textContent = "Scanning…";
+    editHint.textContent = "Re-scanning this page for missed text…";
+    try {
+      const res = await fetch(`/api/rescan/${page.taskId}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: key, target_lang: targetLang.value,
+          provider: engineSelect.value, model: modelSelect.value,
+          style_prompt: stylePrompt ? stylePrompt.value.trim() : "",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "re-scan failed");
+      if (data.items) page.items = data.items;
+      buildTranslationsList(page);
+      if (data.added_count > 0) {
+        editHint.textContent = `Found ${data.added_count} missed region(s) — re-rendering…`;
+        await applyChanges(rescanBtn);
+      } else {
+        editHint.textContent = "No missed text found on this page.";
+      }
+    } catch (e) {
+      editHint.textContent = "Re-scan failed: " + (e.message || e);
+    } finally {
+      rescanBtn.disabled = false; rescanBtn.textContent = label;
+    }
+  });
+
   function setTool(t) {
     tool = (tool === t) ? null : t;
     toolBtns.forEach(b => {

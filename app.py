@@ -735,6 +735,94 @@ async def rerender(task_id: str, request: Request):
     return {"items": r["items"], "added": r["added"], "ts": time.time()}
 
 
+@app.post("/api/rescan/{task_id}")
+async def rescan(task_id: str, request: Request):
+    """One-click 'find missed text': re-run AI detection on the page and merge in
+    any region that isn't already covered, keeping all existing translations and
+    edits. Returns the newly found regions."""
+    if task_id not in tasks:
+        raise HTTPException(404, "Task not found")
+    t = tasks[task_id]
+    r = t.get("result") or {}
+    base = r.get("base_path", "")
+    if not base or not os.path.exists(base):
+        raise HTTPException(400, "This page can't be re-scanned")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    api_key = (payload.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(400, "api_key is required")
+    target_lang = payload.get("target_lang", "English")
+    provider = payload.get("provider", "claude")
+    model = payload.get("model", "")
+    style_prompt = payload.get("style_prompt", "")
+
+    def work():
+        from core.pipeline import TranslationPipeline
+        img = cv2.imread(base)
+        if img is None:
+            raise ValueError("Base image missing")
+        pipe = TranslationPipeline(
+            api_key=api_key, target_lang=target_lang, provider=provider, model=model,
+            use_smart_detection=True,  # smart pass is the most thorough finder
+            font_path=t.get("font_path"), style_prompt=style_prompt,
+            text_case=t.get("text_case", "upper"), finish=t.get("finish", "clean"),
+            source_lang=t.get("source_lang", "Japanese"),
+            translate_sfx=bool(t.get("translate_sfx", False)),
+            remove_watermark=bool(t.get("remove_watermark", True)),
+            replace_watermark=bool(t.get("replace_watermark", False)),
+            watermark_text=t.get("watermark", ""),
+        )
+        out_tmp = r.get("output_path") or base
+        items, _ann, masks = pipe._smart_detect(img, out_tmp, lambda *a, **k: None)
+        return items, masks
+
+    try:
+        items, masks = await asyncio.get_event_loop().run_in_executor(None, work)
+    except Exception as e:
+        raise HTTPException(500, f"Re-scan failed: {e}")
+
+    from core.pipeline import _boxes_overlap
+    existing = r.get("items", [])
+    existing_boxes = [it["bbox"] for it in existing if it.get("bbox")]
+    next_id = max([it["id"] for it in existing if isinstance(it.get("id"), int)] + [0]) + 1
+    task_masks = MASKS.setdefault(task_id, {})
+
+    fresh = []
+    for it in items:
+        b = it.get("bbox")
+        tr = (it.get("translation") or "").strip()
+        if not b or (not tr and not it.get("erase")):
+            continue
+        if any(_boxes_overlap(list(b), list(eb)) for eb in existing_boxes):
+            continue  # already have a region here
+        nid, orig_id = next_id, it.get("id")
+        next_id += 1
+        new_it = {
+            "id": nid, "bbox": [int(v) for v in b],
+            "original": it.get("original", ""), "translation": tr,
+            "type": it.get("type", "dialogue"), "in_bubble": it.get("in_bubble", True),
+            "dark": it.get("dark", False), "rotation": it.get("rotation", 0),
+            "placed": False, "erase": bool(it.get("erase", False)),
+        }
+        existing.append(new_it)
+        existing_boxes.append(b)
+        if masks.get(orig_id) is not None:
+            task_masks[nid] = masks[orig_id]
+        fresh.append(new_it)
+
+    r["items"] = existing
+    r["translations"] = {
+        str(it["id"]): {"original": it.get("original", ""),
+                        "translation": it.get("translation", ""), "type": it.get("type", "")}
+        for it in existing
+    }
+    r["num_regions"] = len(existing)
+    return {"added_count": len(fresh), "added": fresh, "items": r["items"]}
+
+
 _OCR_INSTANCE = None
 
 def _get_ocr():

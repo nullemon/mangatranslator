@@ -390,13 +390,20 @@ class Compositor:
         strokes = self._ink_mask(gray_roi)
         # Union with the GPU stroke mask: the model marks whole characters
         # (including thick fills the deviation heuristic under-covers).
-        if self._seg_mask is not None:
+        has_seg = self._seg_mask is not None
+        if has_seg:
             strokes = cv2.bitwise_or(strokes, self._seg_mask[y0:y1, x0:x1])
-        text_mask = cv2.dilate(strokes, kernel, iterations=3)
+        # When we have the precise GPU stroke mask, keep the dilation tight so a
+        # content-aware fill touches ONLY the lettering — the surrounding art and
+        # screentone are preserved (matters for big text over detailed panels).
+        # The looser ink-deviation fallback needs a bit more to cover halos.
+        base_it = 2 if has_seg else 3
+        text_mask = cv2.dilate(strokes, kernel, iterations=base_it)
 
         if self.lama is not None and self.lama.ok:
             full_mask = np.zeros(result.shape[:2], np.uint8)
-            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel, iterations=2)
+            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel,
+                                                 iterations=1 if has_seg else 2)
             out = self.lama.inpaint(result, full_mask)
             if out is not None:
                 result[:] = out
