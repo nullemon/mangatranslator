@@ -658,6 +658,9 @@ async def rerender(task_id: str, request: Request):
             "color": colors.get(nid, "auto"),
             "rotation": it.get("rotation", 0),
             "font_scale": _scale(nid),
+            # A box the user resized by hand is authoritative — the compositor
+            # must use it as-is (erase + fit text to it), not re-shrink it.
+            "manual_box": nid in boxes,
         })
 
     # Manually added text regions (drawn over missed / leftover spots).

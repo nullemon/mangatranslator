@@ -145,7 +145,8 @@ class Compositor:
             text = (it.get("translation") or "").strip()
             if not text:
                 continue
-            if kind in SFX_TYPES and it.get("in_bubble") is False and not self.translate_sfx:
+            if (kind in SFX_TYPES and it.get("in_bubble") is False
+                    and not self.translate_sfx and not it.get("manual_box")):
                 continue
             ital = _is_expressive(text, it)
             bbox = it.get("bbox")
@@ -159,10 +160,11 @@ class Compositor:
             if abs(rotation) > 45:
                 rotation = 0
 
-            # Manually added text: the user drew this box over a missed or
-            # leftover region. Erase whatever's there and place the typed text
-            # using exactly the box they drew (no auto-refinement).
-            if it.get("manual"):
+            # Manually added text, OR a free-text box the user resized by hand:
+            # erase whatever's inside and fit the translation to EXACTLY the box
+            # they drew (no auto-refine that would shrink it back). This is what
+            # lets a too-small box on giant vertical title text be fixed by hand.
+            if it.get("manual") or (it.get("manual_box") and it.get("in_bubble") is False):
                 bx = max(0, min(bx, w - 1))
                 by = max(0, min(by, h - 1))
                 bw = min(bw, w - bx)
