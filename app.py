@@ -206,9 +206,16 @@ async def _run(
                     tasks[task_id].update({"progress": 35, "message": "AI enhancement complete!"})
                 except Exception as e:
                     print(f"[enhance] AI step failed, using local scan cleanup: {e}")
+                    # Surface the REAL reason (bad key, quota, wrong model) so the
+                    # user sees why the page wasn't AI-scanned — not a vague
+                    # "failed" that looks like the local result is the AI one.
+                    reason = str(e).strip() or type(e).__name__
                     tasks[task_id].update(
                         {"progress": 35,
-                         "message": f"AI failed ({type(e).__name__}), using local clean scan"}
+                         "enhance_error": reason[:300],
+                         "message": f"⚠ {enhance_provider.title()} scan FAILED — "
+                                    f"{reason[:160]} — fell back to local cleanup "
+                                    f"(not the AI scan you asked for)."}
                     )
                     out = cleaned
                 # Keep the enhanced page geometrically identical to the source —
