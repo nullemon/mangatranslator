@@ -417,7 +417,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), offsets: {}, colors: {}, error: "", rev: 0,
+        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, error: "", rev: 0,
       });
     }
 
@@ -656,6 +656,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.status = "done"; page.result = d;
             page.items = (d.result && d.result.items) ? d.result.items : [];
             page.excluded = new Set();
+            page.erased = new Set();
             page.rev++;
             renderStrip(); updateBatch();
             if (page.uid === activeUid) renderActivePage();
@@ -816,12 +817,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     for (const it of items) {
+      const isErased = page.erased.has(String(it.id));
       const isExcluded = page.excluded.has(String(it.id));
       const isBubble = it.in_bubble !== false;
       const div = document.createElement("div");
-      div.className = "tl-item" + (isExcluded ? " excluded" : "") + (isBubble ? "" : " free-text");
+      div.className = "tl-item" + (isErased ? " erased" : "")
+        + (isExcluded ? " excluded" : "") + (isBubble ? "" : " free-text");
       let badge;
-      if (isExcluded) {
+      if (isErased) {
+        badge = '<span class="tl-badge skip">erased from art</span>';
+      } else if (isExcluded) {
         badge = '<span class="tl-badge skip">shows original</span>';
       } else if (isBubble) {
         badge = '<span class="tl-badge ok">bubble</span>';
@@ -841,10 +846,11 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="tl-clr${c === "black" ? " on" : ""}" data-c="black" title="Black text">B</button>
             <button class="tl-clr${c === "white" ? " on" : ""}" data-c="white" title="White text">W</button>
           </span>
+          <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
         </div>
         <div class="tl-original">${esc(it.original || "")}</div>
-        <textarea class="tl-edit" data-id="${it.id}" rows="2" ${isExcluded ? "disabled" : ""}>${esc(it.translation || "")}</textarea>`;
+        <textarea class="tl-edit" data-id="${it.id}" rows="2" ${isExcluded || isErased ? "disabled" : ""}>${esc(it.translation || "")}</textarea>`;
       el.appendChild(div);
     }
 
@@ -887,6 +893,16 @@ document.addEventListener("DOMContentLoaded", () => {
         collectEdits(page);
         const id = btn.dataset.id;
         if (page.excluded.has(id)) page.excluded.delete(id); else page.excluded.add(id);
+        buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-erase").forEach(btn => {
+      btn.addEventListener("click", () => {
+        collectEdits(page);
+        const id = btn.dataset.id;
+        page.erased = page.erased || new Set();
+        if (page.erased.has(id)) page.erased.delete(id);
+        else { page.erased.add(id); page.excluded.delete(id); }
         buildTranslationsList(page);
       });
     });
@@ -934,7 +950,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/rerender/${page.taskId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          excluded: [...page.excluded], edits,
+          excluded: [...page.excluded], erased: [...(page.erased || [])], edits,
           font_scale: parseFloat(fontScale.value),
           offsets: page.offsets || {},
           covers: page.covers || [],
@@ -966,7 +982,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const HINTS = {
     move: "Drag any translation to move it, then Apply & Re-render.",
     edit: "Click any translation to fix its text.",
-    cover: "Drag a box over leftover text to erase it, then Apply & Re-render.",
+    cover: "Drag a box over a watermark or leftover text to erase it, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
   };
 
@@ -1337,7 +1353,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
-      p.items = []; p.excluded = new Set(); p.offsets = {}; p.colors = {};
+      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

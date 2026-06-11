@@ -343,6 +343,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-del:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-x{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.75rem;line-height:1;transition:.15s}
 .tl-x:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+.tl-erase{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
+.tl-erase:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+.tl-erase.on{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+.tl-item.erased{opacity:.6}
+.tl-item.erased .tl-original{text-decoration:line-through}
 .tl-original{font-size:.85rem;color:var(--text-dim);margin-bottom:.45rem;word-break:break-word}
 .tl-edit{width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--r-sm);padding:.5rem .6rem;font-size:.875rem;font-family:inherit;resize:vertical;outline:none;transition:.15s}
 .tl-edit:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}

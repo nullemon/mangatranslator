@@ -591,6 +591,7 @@ async def rerender(task_id: str, request: Request):
     except Exception:
         raise HTTPException(400, "Invalid JSON body")
     excluded = {str(i) for i in payload.get("excluded", [])}
+    erased = {str(i) for i in payload.get("erased", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
@@ -603,6 +604,16 @@ async def rerender(task_id: str, request: Request):
         text = edits.get(nid, it.get("translation", ""))
         if nid in excluded:
             text = ""
+        # Marked "erase" in the editor: wipe the region from the art and place
+        # no text (for a watermark/garbage region the AI typeset by mistake).
+        if nid in erased:
+            items.append({
+                "id": it["id"], "bbox": it["bbox"], "original": it.get("original", ""),
+                "translation": "", "type": "watermark", "erase": True,
+                "in_bubble": it.get("in_bubble", True), "dark": it.get("dark", False),
+                "rotation": it.get("rotation", 0),
+            })
+            continue
         items.append({
             "id": it["id"],
             "bbox": it["bbox"],
