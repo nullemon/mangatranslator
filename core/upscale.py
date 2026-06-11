@@ -123,6 +123,18 @@ def _get(path: str):
         return None
 
 
+def _get_best(height: int):
+    """Load the best model for this height, falling back to Real-ESRGAN if the
+    preferred one (e.g. a MangaJaNai file spandrel can't parse) won't load — so
+    a bad/missing MangaJaNai install never silently disables upscaling."""
+    path = _pick_path(height)
+    loaded = _get(path)
+    if loaded is None and os.path.abspath(path) != os.path.abspath(REALESRGAN_PATH):
+        print(f"[upscale] {os.path.basename(path)} unavailable — falling back to Real-ESRGAN")
+        loaded = _get(REALESRGAN_PATH)
+    return loaded
+
+
 class Upscaler:
     """Lazy SR wrapper. Tiled inference so a full page fits in VRAM. Picks the
     best installed backend per page; grayscale-aware for MangaJaNai."""
@@ -130,14 +142,14 @@ class Upscaler:
     @property
     def ok(self) -> bool:
         # Available if we can load *some* model (probe at a typical page height).
-        return _get(_pick_path(1500)) is not None
+        return _get_best(1500) is not None
 
     def upscale(self, image: np.ndarray, target_long: int = 2400,
                 tile: int = 384, overlap: int = 16) -> np.ndarray:
         """Upscale `image` (BGR) and return it with its long edge at
         `target_long` (never more than the model's native scale allows)."""
         h, w = image.shape[:2]
-        loaded = _get(_pick_path(max(h, w)))
+        loaded = _get_best(max(h, w))
         if loaded is None:
             return image
         desc, device = loaded

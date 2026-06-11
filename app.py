@@ -234,7 +234,10 @@ async def _run(
                 # Claw back solid-black art the generative scan bleached to white
                 # (black panels, gutters, white-on-black titles stay as drawn).
                 if ai_ok:
-                    out = preserve_dark_regions(out, img)
+                    try:
+                        out = preserve_dark_regions(out, img)
+                    except Exception as e:
+                        print(f"[enhance] dark-region preserve skipped: {e}")
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
@@ -383,7 +386,10 @@ async def _run_enhance(
                 out = cleaned
             # Keep solid blacks the generative scan would otherwise bleach.
             if ai_ok:
-                out = preserve_dark_regions(out, cleaned)
+                try:
+                    out = preserve_dark_regions(out, cleaned)
+                except Exception as e:
+                    print(f"[enhance] dark-region preserve skipped: {e}")
             # Optional second stage: faithful HD upscale on top of the AI scan.
             if upscale:
                 from core.upscale import Upscaler

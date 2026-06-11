@@ -680,7 +680,17 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderActivePage() {
     const p = getActive();
     if (!p) return;
-    const scanOnly = workflow === "raw-scan";
+    // Result is image-only (no translation) for the scan / upscale workflows —
+    // label the panes accordingly so it never says "Translated" when it didn't.
+    const noTranslate = !needsTranslate(workflow);
+    const leftLabel = (workflow === "raw-scan" || workflow === "scan-upscale") ? "Rough" : "Original";
+    const rightLabel = workflow === "upscale-only" ? "Upscaled HD"
+                     : workflow === "scan-upscale" ? "Scan + HD"
+                     : workflow === "raw-scan" ? "Manga Scan"
+                     : "Translated";
+    const tabLabel = workflow === "raw-scan" ? "Scan"
+                   : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"
+                   : "Translated";
 
     if (p.status === "done") {
       pageProcessing.style.display = "none";
@@ -690,11 +700,11 @@ document.addEventListener("DOMContentLoaded", () => {
       transImg.src = `/api/result/${p.taskId}${bust}`;
       origFull.src = origImg.src;
       transFull.src = transImg.src;
-      compLabelLeft.textContent  = scanOnly ? "Rough" : "Original";
-      compLabelRight.textContent = scanOnly ? "Manga Scan" : "Translated";
-      tabTranslated.textContent  = scanOnly ? "Scan" : "Translated";
-      detailsTab.style.display   = scanOnly ? "none" : "";
-      translateScanBtn.style.display = scanOnly ? "" : "none";
+      compLabelLeft.textContent  = leftLabel;
+      compLabelRight.textContent = rightLabel;
+      tabTranslated.textContent  = tabLabel;
+      detailsTab.style.display   = noTranslate ? "none" : "";
+      translateScanBtn.style.display = noTranslate ? "" : "none";
       buildTranslationsList(p);
       initComparison();
     } else if (p.status === "error") {
