@@ -29,12 +29,17 @@ class Compositor:
 
     def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
                  use_lama: bool = True, uppercase: bool = True,
-                 translate_sfx: bool = False):
+                 translate_sfx: bool = False, replace_watermark: bool = False,
+                 watermark_text: str = ""):
         self.renderer = TextRenderer(font_path, font_scale=font_scale,
                                      uppercase=uppercase)
         # Background SFX (out-of-bubble onomatopoeia) are left in the artwork
         # unless the user opts in to translating + typesetting them.
         self.translate_sfx = bool(translate_sfx)
+        # Watermark items (type "watermark" / erase flag) are wiped from the art;
+        # optionally the user's own watermark is dropped in their place.
+        self.replace_watermark = bool(replace_watermark)
+        self.watermark_text = (watermark_text or "").strip()
         self.lama = None
         if use_lama:
             try:
@@ -110,10 +115,27 @@ class Compositor:
 
         for it in items:
             it["placed"] = False
+            kind = (it.get("type") or "").lower().replace(" ", "_")
+
+            # Site watermark / URL: erase it from the art (no translation). If the
+            # user opted to replace it, drop their own watermark in the same spot.
+            if it.get("erase") or kind == "watermark":
+                wbox = it.get("bbox")
+                if wbox:
+                    wx, wy, ww, wh = self._clamp_rect([int(v) for v in wbox], w, h)
+                    if ww >= 6 and wh >= 6:
+                        cap, bb = self._plan_free_region(gray, wx, wy, ww, wh, refine=True)
+                        rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
+                        edited_rects.append(tuple(int(v) for v in touched))
+                        if self.replace_watermark and self.watermark_text:
+                            placements.append((rect, self.watermark_text,
+                                               self._pick_color(dark, it), False, 0))
+                        it["placed"] = True
+                continue
+
             text = (it.get("translation") or "").strip()
             if not text:
                 continue
-            kind = (it.get("type") or "").lower().replace(" ", "_")
             if kind in SFX_TYPES and it.get("in_bubble") is False and not self.translate_sfx:
                 continue
             ital = _is_expressive(text, it)

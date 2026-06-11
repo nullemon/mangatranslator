@@ -1,11 +1,31 @@
 import cv2
 import numpy as np
 import os
+import re
 from typing import Callable, Optional, Dict, Any, List
 
 from .detector import BubbleDetector, TextRegion
 from .translator import make_translator
 from .compositor import Compositor
+
+
+_WATERMARK_RE = re.compile(
+    r"(?:https?://|www\.)\S+"                       # an explicit URL
+    r"|\b[a-z0-9][a-z0-9\-]{1,30}\."                # a domain label + dot +
+    r"(?:net|com|org|io|co|info|me|tv|xyz|biz|online|site|fan|fans|sh|to|cc|"
+    r"ru|in|us|uk|live|app|art|gg|club|world|space|web|moe|scan|scans)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_watermark(text: str) -> bool:
+    """Looks like a scanlation-site stamp / URL (eshadow.net, www.x.com, …)
+    rather than story text — those get erased, not translated. Kept short so a
+    line of dialogue that merely mentions a word isn't mistaken for one."""
+    t = (text or "").strip()
+    if not t or len(t) > 60:
+        return False
+    return bool(_WATERMARK_RE.search(t))
 
 
 def _is_sfx(text: str) -> bool:
@@ -446,6 +466,9 @@ class TranslationPipeline:
         source_lang: str = "Japanese",
         translate_sfx: bool = False,
         max_quality: bool = False,
+        remove_watermark: bool = True,
+        replace_watermark: bool = False,
+        watermark_text: str = "",
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
@@ -453,6 +476,11 @@ class TranslationPipeline:
         # Maximum quality: process at full resolution (no working-size downscale)
         # and lean on the whole GPU stack. OFF by default — opt-in per run.
         self.max_quality = bool(max_quality)
+        # Site watermarks (eshadow.net, …): erase by default; optionally drop the
+        # user's own watermark in their place.
+        self.remove_watermark = bool(remove_watermark)
+        self.replace_watermark = bool(replace_watermark)
+        self.watermark_text = (watermark_text or "").strip()
         # HD upscale: explicit per-run choice wins; otherwise fall back to the
         # MANGA_UPSCALE env default. OFF unless asked for.
         self.upscale_on = (upscale if upscale is not None
@@ -462,7 +490,9 @@ class TranslationPipeline:
             provider, api_key, model, style_prompt,
             source_lang=self.source_lang, translate_sfx=self.translate_sfx)
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
-                                     translate_sfx=self.translate_sfx)
+                                     translate_sfx=self.translate_sfx,
+                                     replace_watermark=self.replace_watermark,
+                                     watermark_text=self.watermark_text)
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}
@@ -773,6 +803,23 @@ class TranslationPipeline:
             tr = (det.get("translation") or "").strip()
             typ = (det.get("type") or "narration").strip().lower()
 
+            # Site watermark / URL stamped on the art (eshadow.net, www.x.com):
+            # erase it instead of translating. Checked BEFORE the source-script
+            # filter, since a watermark is latin and would otherwise be dropped.
+            if self.remove_watermark and (typ in ("watermark", "url", "logo", "credit_url")
+                                          or _is_watermark(jp) or _is_watermark(tr)):
+                box = [bx, by, bw, bh]
+                if (not any(_boxes_overlap(box, bb) for bb in bubble_boxes)
+                        and not any(_boxes_overlap(box, u) for u in used)):
+                    used.append(box)
+                    items.append({
+                        "id": next_id, "bbox": box, "original": (jp or tr),
+                        "translation": "", "type": "watermark", "erase": True,
+                        "in_bubble": False, "dark": False, "rotation": 0.0,
+                    })
+                    next_id += 1
+                continue
+
             # Only keep regions the model actually read as Japanese — guards
             # against boxes dropped on already-English text or bare artwork.
             # The "sfx" label alone isn't trusted: the LLM tags big dramatic
@@ -995,10 +1042,22 @@ class TranslationPipeline:
                 rotation = float(det.get("rotation_deg", 0))
             except (ValueError, TypeError):
                 pass
+            d_orig = det.get("original", "")
+            d_type = (det.get("type") or "dialogue").strip().lower()
+            # Site watermark / URL → erase (no translation), not a bubble.
+            if self.remove_watermark and (d_type in ("watermark", "url", "logo")
+                                          or _is_watermark(d_orig)
+                                          or _is_watermark(det.get("translation", ""))):
+                llm_items.append({
+                    "id": i + 1, "bbox": [x, y, bw, bh], "original": d_orig,
+                    "translation": "", "type": "watermark", "erase": True,
+                    "in_bubble": False, "dark": False, "rotation": 0.0,
+                })
+                continue
             llm_items.append({
                 "id": i + 1,
                 "bbox": [x, y, bw, bh],
-                "original": det.get("original", ""),
+                "original": d_orig,
                 "translation": det.get("translation", ""),
                 "type": det.get("type", "dialogue"),
                 "in_bubble": det.get("in_bubble", True),

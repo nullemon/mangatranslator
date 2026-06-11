@@ -56,7 +56,11 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 ]
 
 Rules:
-- Translate every region containing non-{target_lang} text.
+- Translate EVERY region that contains non-{target_lang} text — including
+  short, repeated, faint, or partly-covered lines (e.g. a bubble that just
+  says a name twice). Never skip a bubble or leave source text untranslated.
+- Return one entry for EVERY numbered region; if a region is genuinely empty
+  or already {target_lang}, give it an empty translation rather than omitting it.
 - Write natural, idiomatic {target_lang} — translate meaning and emotion,
   never word-for-word. Use contractions; match the scene's tone.
 - Use UPPERCASE for dialogue and narration (standard manga typesetting).
@@ -99,12 +103,22 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 
 Rules:
 - Find ALL text, including chapter titles, author credits, narration, and captions.
+- Translate EVERY region — including short, repeated, or faint lines (even a
+  bubble that just repeats a name). Never skip a region or leave {src} text in.
+- Also catch small hand-written text drawn ON characters or artwork — tiny
+  lines on a face, cheek, or body, scribbled asides next to a character, little
+  notes over the art. These ARE text: translate them (type "caption"). Only
+  ignore actual drawn features (eyes, mouths, blush, screentone, patterns).
 - Be precise with bounding box coordinates — they are used for text replacement.
 - Use UPPERCASE for dialogue and narration.
 - Keep translations concise so they fit inside their regions.
-- type must be one of: "dialogue", "narration", "sfx", "title", "credit", "caption".
+- type must be one of: "dialogue", "narration", "sfx", "title", "credit",
+  "caption", "watermark".
+- Set type to "watermark" for a scanlation-site stamp or URL added on top of the
+  art (e.g. SOMESITE.NET, www.x.com, a site name/logo text). Leave its
+  "translation" empty — these are ERASED, not translated.
 - "in_bubble": true if the text is enclosed in a speech bubble or drawn box.
-  Set to false for titles, credits, captions, and any text NOT enclosed.
+  Set to false for titles, credits, captions, watermarks, and any loose text.
 {_sfx_rule(translate_sfx)}
 - Do NOT include tiny furigana readings above kanji.
 - Return ONLY the JSON array.{_style_block(style)}"""
@@ -135,12 +149,19 @@ REMAINING {src} text that is NOT inside a speech bubble and should be translated
   action scenes — e.g. a bold vertical column of kanji/kana like
   生きようとしてるからだ!!!, 俺は俺の意志で, etc.)
 - Text on diagonal narration bars or banners crossing the page
+- Small hand-written text drawn ON a character or the artwork — a tiny line on
+  a face/cheek/body, a scribbled aside next to someone, a little note over the
+  art. These ARE text — translate them (type "caption").
+- A scanlation-site watermark or URL stamped on the art (e.g. SOMESITE.NET,
+  www.x.com, a site name/logo text) — report it with type "watermark" and an
+  EMPTY translation; it will be ERASED, not translated.
 {sfx_find}
 Do NOT include:
 {sfx_skip}- Text already in {target_lang}
 - Tiny furigana readings above kanji
-- Patterns on character faces, eyes, or bodies — those are drawn artwork,
-  not text. Only flag actual written characters on a background or in a box.
+- Drawn FEATURES, not text: eyes, mouths, blush marks, screentone and pattern
+  fills. Flag a region only when it is actual written characters — but DO flag
+  real written text even when it sits on a face or body.
 
 Find EVERY such region — do not stop at the obvious ones. Include short,
 narrow, or vertical columns, faint text, and small boxes tucked next to other
@@ -179,7 +200,7 @@ Return ONLY a JSON array — no markdown fences:
   }}
 ]
 
-type must be one of: "title", "credit", "narration", "caption"{sfx_types}.
+type must be one of: "title", "credit", "narration", "caption", "watermark"{sfx_types}.
 Translate naturally and idiomatically — meaning and emotion, not word-for-word.
 Keep translations concise. Return an empty array [] if no free text is found.
 Return ONLY the JSON array.{_style_block(style)}"""

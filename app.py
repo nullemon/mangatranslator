@@ -126,6 +126,8 @@ async def translate(
     source_lang: str = Form("Japanese"),
     translate_sfx: str = Form("false"),
     max_quality: str = Form("false"),
+    remove_watermark: str = Form("true"),
+    replace_watermark: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -161,6 +163,8 @@ async def translate(
         "source_lang": source_lang,
         "translate_sfx": translate_sfx == "true",
         "max_quality": max_quality == "true",
+        "remove_watermark": remove_watermark == "true",
+        "replace_watermark": replace_watermark == "true",
     }
 
     asyncio.create_task(
@@ -176,6 +180,8 @@ async def translate(
             source_lang=source_lang,
             translate_sfx=(translate_sfx == "true"),
             max_quality=(max_quality == "true"),
+            remove_watermark=(remove_watermark == "true"),
+            replace_watermark=(replace_watermark == "true"),
         )
     )
 
@@ -205,6 +211,8 @@ async def _run(
     source_lang: str = "Japanese",
     translate_sfx: bool = False,
     max_quality: bool = False,
+    remove_watermark: bool = True,
+    replace_watermark: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -294,6 +302,9 @@ async def _run(
             source_lang=source_lang,
             translate_sfx=translate_sfx,
             max_quality=max_quality,
+            remove_watermark=remove_watermark,
+            replace_watermark=replace_watermark,
+            watermark_text=watermark,
         )
 
         def on_progress(update):
@@ -314,7 +325,10 @@ async def _run(
         # pipeline). The generative model stays available as the explicit
         # "Enhance & Translate" workflow, where it produces a SEPARATE image.
 
-        if watermark:
+        # Global diagonal stamp. Skipped when "replace watermark" is on — there
+        # the user's mark is dropped in place of the erased site watermark
+        # instead of tiled across the whole page.
+        if watermark and not replace_watermark:
             _stamp_watermark(output_path, watermark)
 
         update = {
@@ -629,7 +643,9 @@ async def rerender(task_id: str, request: Request):
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"),
-                          translate_sfx=bool(t.get("translate_sfx", False)))
+                          translate_sfx=bool(t.get("translate_sfx", False)),
+                          replace_watermark=bool(t.get("replace_watermark", False)),
+                          watermark_text=t.get("watermark", ""))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the

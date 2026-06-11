@@ -18,6 +18,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const translateSfx   = document.getElementById("translateSfx");
   const maxQuality     = document.getElementById("maxQuality");
+  const removeWatermark= document.getElementById("removeWatermark");
+  const replaceWatermark=document.getElementById("replaceWatermark");
   const hdUpscale      = document.getElementById("hdUpscale");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
@@ -104,6 +106,19 @@ document.addEventListener("DOMContentLoaded", () => {
     maxQuality.checked = localStorage.getItem("manga_max_quality") === "1";
     maxQuality.addEventListener("change", () =>
       localStorage.setItem("manga_max_quality", maxQuality.checked ? "1" : "0"));
+  }
+
+  if (removeWatermark) {
+    const saved = localStorage.getItem("manga_remove_watermark");
+    removeWatermark.checked = saved === null ? true : saved === "1";  // default ON
+    removeWatermark.addEventListener("change", () =>
+      localStorage.setItem("manga_remove_watermark", removeWatermark.checked ? "1" : "0"));
+  }
+
+  if (replaceWatermark) {
+    replaceWatermark.checked = localStorage.getItem("manga_replace_watermark") === "1";
+    replaceWatermark.addEventListener("change", () =>
+      localStorage.setItem("manga_replace_watermark", replaceWatermark.checked ? "1" : "0"));
   }
 
   const checkSystem = document.getElementById("checkSystem");
@@ -573,6 +588,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
+      f.append("remove_watermark", removeWatermark && removeWatermark.checked ? "true" : "false");
+      f.append("replace_watermark", replaceWatermark && replaceWatermark.checked ? "true" : "false");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");
