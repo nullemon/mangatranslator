@@ -42,6 +42,25 @@ def _device() -> str:
     return "cpu"
 
 
+def _vram_imgsz_cap() -> int:
+    """Largest detection size the GPU can run without OOM-ing (which would drop
+    us to crude CV detection). Scaled to total VRAM; CPU gets a modest size."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            if gb >= 14:
+                return 2048
+            if gb >= 10:
+                return 1792
+            if gb >= 7:          # 8GB laptop 4060 etc.
+                return 1536
+            return 1280
+    except Exception:
+        pass
+    return 1024
+
+
 def _load():
     """Load (and cache) the YOLO model, downloading weights on first use."""
     global _MODEL, _TRIED
@@ -90,15 +109,16 @@ class BubbleSegDetector:
 
         # Run detection at high resolution. The model's default 640px downscale
         # loses small / distant / dense balloons on a full manga page — the
-        # single biggest cause of "it missed bubbles". A 4080 handles 1536–2048
-        # easily. Default scales with the page (≤2048), override with
-        # BUBBLE_IMGSZ. This changes nothing about the output pixels — it's only
-        # the internal detection resolution.
+        # single biggest cause of "it missed bubbles". This is internal-only; it
+        # never changes the output pixels. The cap is sized to available VRAM so
+        # detection can't OOM and silently fall back to crude CV detection (an
+        # 8GB laptop GPU is also feeding manga-ocr, LaMa, text-seg and CRAFT).
+        # Override either dial with BUBBLE_IMGSZ.
         env_imgsz = os.environ.get("BUBBLE_IMGSZ", "").strip()
         if env_imgsz:
             imgsz = int(env_imgsz)
         else:
-            imgsz = min(2048, max(1024, (max(h, w) + 31) // 32 * 32))
+            imgsz = min(_vram_imgsz_cap(), max(1024, (max(h, w) + 31) // 32 * 32))
         try:
             results = self.model.predict(
                 image, conf=self.conf, device=_device(),
