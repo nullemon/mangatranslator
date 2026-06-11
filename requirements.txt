@@ -14,3 +14,9 @@ aiofiles>=24.0.0
 # Used to read a font's glyph table so special characters (♪ ♫ ― …) fall back
 # to a font that has them instead of rendering as boxes.
 fonttools>=4.22.0
+# Right-to-left output (Arabic, etc.): when Pillow is built WITH libraqm it
+# shapes + reorders natively and these go unused. They are the portable
+# fallback for Pillow builds WITHOUT raqm — pre-shape Arabic into joined,
+# visually-ordered glyphs so it isn't drawn disconnected and backwards.
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2

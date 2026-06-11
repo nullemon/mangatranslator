@@ -1,7 +1,7 @@
 import math
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, features
 from typing import List, Tuple, Optional, Dict
 import os
 
@@ -34,6 +34,13 @@ class TextRenderer:
         self._font_cache: Dict[tuple, ImageFont.FreeTypeFont] = {}
         self._cov_cache: Dict[str, Optional[set]] = {}
         self._active_font_path: Optional[str] = None
+        # Right-to-left (Arabic / Hebrew) typesetting state for the current
+        # draw_in_rect call. With libraqm, Pillow shapes + reorders natively when
+        # we pass direction="rtl"; without it we pre-shape via arabic_reshaper +
+        # python-bidi (if installed) and draw the visual-order string LTR.
+        self._has_raqm = bool(features.check("raqm"))
+        self._draw_dir: Optional[str] = None   # "rtl" when raqm handles a RTL line
+        self._reshape_text = False             # True when we pre-shape (no raqm)
 
     def _find_font(self) -> Optional[str]:
         for p in self.FONT_CANDIDATES:
@@ -67,11 +74,24 @@ class TextRenderer:
     _FALLBACK_CANDIDATES = [
         "fonts/NotoSansSymbols2-Regular.ttf",
         "fonts/Symbola.ttf",
+        # Arabic / RTL-capable fonts. A bundled comic-style Arabic face (drop one
+        # into fonts/) wins; otherwise a proper Naskh, then DejaVu/FreeSerif —
+        # all carry Arabic glyphs AND the GSUB tables raqm needs to join letters.
+        "fonts/Arabic-Comic.ttf",
+        "fonts/NotoNaskhArabic-Bold.ttf",
+        "fonts/Amiri-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     ]
+
+    # Unicode blocks that read right-to-left (Arabic family + Hebrew + the
+    # Arabic presentation forms emitted by arabic_reshaper).
+    _RTL_RANGES = (
+        (0x0590, 0x05FF), (0x0600, 0x06FF), (0x0750, 0x077F),
+        (0x08A0, 0x08FF), (0xFB1D, 0xFDFF), (0xFE70, 0xFEFF),
+    )
 
     def _normalize_text(self, text: str) -> str:
         return "".join(self._NORMALIZE.get(c, c) for c in text)
@@ -120,6 +140,36 @@ class TextRenderer:
             return sum(1 for c in chars if cov and ord(c) in cov)
         return max([self.font_path] + self._fallback_font_paths(), key=score)
 
+    # ── Right-to-left (Arabic / Hebrew) shaping & ordering ──
+    def _is_rtl(self, text: str) -> bool:
+        for ch in text:
+            o = ord(ch)
+            if any(lo <= o <= hi for lo, hi in self._RTL_RANGES):
+                return True
+        return False
+
+    def _dir_kw(self) -> dict:
+        """direction kwarg for textbbox/textlength/text. Only set when libraqm
+        is present — passing it without raqm raises in Pillow."""
+        return {"direction": self._draw_dir} if self._draw_dir else {}
+
+    def _shape(self, line: str) -> str:
+        """For the no-raqm fallback only: turn logical Arabic into a visually
+        ordered, glyph-joined string so a plain LTR draw looks correct. A no-op
+        when raqm is doing the shaping (or the libs aren't installed)."""
+        if not self._reshape_text or not line:
+            return line
+        try:
+            import arabic_reshaper
+            from bidi.algorithm import get_display
+            return get_display(arabic_reshaper.reshape(line))
+        except Exception:
+            return line
+
+    def _bbox(self, draw, s, font, stroke_width=0):
+        return draw.textbbox((0, 0), self._shape(s), font=font,
+                             stroke_width=stroke_width, **self._dir_kw())
+
     def render(
         self,
         image: np.ndarray,
@@ -167,11 +217,18 @@ class TextRenderer:
         # Use a font that can actually render every glyph in this text (so ♪, ―
         # etc. don't come out as boxes), for the whole call — wrap, measure, draw.
         prev_font = self._active_font_path
+        prev_dir, prev_reshape = self._draw_dir, self._reshape_text
         self._active_font_path = self._effective_font_path(text)
+        # Right-to-left text: let raqm shape+reorder via direction="rtl"; if raqm
+        # is absent, fall back to pre-shaping each line into visual order.
+        rtl = self._is_rtl(text)
+        self._draw_dir = "rtl" if (rtl and self._has_raqm) else None
+        self._reshape_text = rtl and not self._has_raqm
         try:
             return self._draw_in_rect_inner(image, rect, text, color, italic, rotation)
         finally:
             self._active_font_path = prev_font
+            self._draw_dir, self._reshape_text = prev_dir, prev_reshape
 
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
@@ -200,7 +257,7 @@ class TextRenderer:
 
         heights = []
         for line in lines:
-            bb = draw.textbbox((0, 0), line, font=font)
+            bb = self._bbox(draw, line, font)
             heights.append(bb[3] - bb[1])
 
         spacing = max(int(font_size * self.line_spacing_ratio), 1)
@@ -212,15 +269,16 @@ class TextRenderer:
         stroke_w = max(1, font_size // 18)
 
         for i, line in enumerate(lines):
-            bb = draw.textbbox((0, 0), line, font=font)
+            bb = self._bbox(draw, line, font)
             lw = bb[2] - bb[0]
             lx = inner_x + max(0, (inner_w - lw) // 2)
             if italic:
                 self._draw_italic_line(image, lx - bb[0], cur_y - bb[1], line,
                                        font, color, stroke_w, stroke_c)
             else:
-                draw.text((lx - bb[0], cur_y - bb[1]), line, fill=color, font=font,
-                          stroke_width=stroke_w, stroke_fill=stroke_c)
+                draw.text((lx - bb[0], cur_y - bb[1]), self._shape(line), fill=color,
+                          font=font, stroke_width=stroke_w, stroke_fill=stroke_c,
+                          **self._dir_kw())
             cur_y += heights[i] + spacing
 
         return image
@@ -271,13 +329,13 @@ class TextRenderer:
         """Render one line slanted (faux-italic) and composite it onto `image`,
         landing where an upright draw.text((ax, ay), ...) would have placed it."""
         probe = ImageDraw.Draw(image)
-        bb = probe.textbbox((0, 0), line, font=font, stroke_width=stroke_w)
+        bb = self._bbox(probe, line, font, stroke_width=stroke_w)
         lw = max(bb[2] + stroke_w + 2, 1)
         lh = max(bb[3] + stroke_w + 2, 1)
         layer = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
         ImageDraw.Draw(layer).text(
-            (0, 0), line, font=font, fill=color + (255,),
-            stroke_width=stroke_w, stroke_fill=stroke_c + (255,),
+            (0, 0), self._shape(line), font=font, fill=color + (255,),
+            stroke_width=stroke_w, stroke_fill=stroke_c + (255,), **self._dir_kw(),
         )
         shear = 0.24
         ext = int(np.ceil(shear * lh))
@@ -327,7 +385,7 @@ class TextRenderer:
         total = 0
         spacing = max(int(size * self.line_spacing_ratio), 1)
         for i, line in enumerate(lines):
-            bb = draw.textbbox((0, 0), line, font=font)
+            bb = self._bbox(draw, line, font)
             lw = bb[2] - bb[0]
             lh = bb[3] - bb[1]
             if lw > eff_w:
@@ -359,7 +417,7 @@ class TextRenderer:
 
         k = len(greedy)
         longest = max(
-            draw.textbbox((0, 0), wd, font=font)[2] for wd in words
+            self._bbox(draw, wd, font)[2] for wd in words
         )
         lo, hi = max(longest, 8), max_w
         best = greedy
@@ -378,7 +436,7 @@ class TextRenderer:
         current = ""
         for word in words:
             test = f"{current} {word}".strip() if current else word
-            bb = draw.textbbox((0, 0), test, font=font)
+            bb = self._bbox(draw, test, font)
             if bb[2] - bb[0] <= max_w:
                 current = test
             else:
