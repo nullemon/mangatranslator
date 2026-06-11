@@ -607,6 +607,10 @@ class TranslationPipeline:
                 and self.upscale_on
                 and max(image.shape[:2]) < 2000
                 and self.upscaler.ok):
+            if self.max_quality:
+                print("[pipeline] NOTE: HD Upscale + Maximum Quality together is "
+                      "very heavy — on an 8GB laptop GPU this can take many "
+                      "minutes. For fast translation, leave HD Upscale OFF.")
             update(0, "Upscaling page to HD (MangaJaNai)...", 4)
             try:
                 image = self.upscaler.upscale(image)

@@ -148,6 +148,7 @@ class Upscaler:
                 tile: int = 384, overlap: int = 16) -> np.ndarray:
         """Upscale `image` (BGR) and return it with its long edge at
         `target_long` (never more than the model's native scale allows)."""
+        import time
         h, w = image.shape[:2]
         loaded = _get_best(max(h, w))
         if loaded is None:
@@ -158,6 +159,15 @@ class Upscaler:
         scale = int(desc.scale)
         gray_model = int(getattr(desc, "input_channels", 3)) == 1
 
+        rows = (h + tile - 1) // tile
+        cols = (w + tile - 1) // tile
+        n_tiles = rows * cols
+        t_start = time.time()
+        print(f"[upscale] {w}x{h} x{scale} on {device.upper()} — "
+              f"{n_tiles} tiles ({cols}x{rows})"
+              + ("  ⚠ CPU: this is SLOW, consider turning HD Upscale off"
+                 if device == "cpu" else ""))
+
         if gray_model:
             src = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
             out = np.zeros((h * scale, w * scale), np.float32)
@@ -165,8 +175,9 @@ class Upscaler:
             src = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
             out = np.zeros((h * scale, w * scale, 3), np.float32)
 
+        done = 0
         with torch.inference_mode():
-            for y0 in range(0, h, tile):
+            for ri, y0 in enumerate(range(0, h, tile)):
                 for x0 in range(0, w, tile):
                     y1, x1 = min(h, y0 + tile), min(w, x0 + tile)
                     # Expand the tile by `overlap` so seams blend away, then
@@ -184,7 +195,13 @@ class Upscaler:
                     out[y0 * scale:y1 * scale, x0 * scale:x1 * scale] = sr[
                         cy0:cy0 + (y1 - y0) * scale, cx0:cx0 + (x1 - x0) * scale
                     ]
+                    done += 1
+                rate = done / max(time.time() - t_start, 1e-3)
+                eta = (n_tiles - done) / max(rate, 1e-3)
+                print(f"[upscale]   row {ri + 1}/{rows} — {done}/{n_tiles} tiles, "
+                      f"~{eta:4.0f}s left", flush=True)
 
+        print(f"[upscale] done in {time.time() - t_start:.0f}s")
         out = (out * 255.0 + 0.5).astype(np.uint8)
         out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR if gray_model else cv2.COLOR_RGB2BGR)
 
