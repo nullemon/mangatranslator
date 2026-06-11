@@ -240,6 +240,42 @@ def scan_finish(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def preserve_dark_regions(enhanced: np.ndarray, original: np.ndarray) -> np.ndarray:
+    """A generative "scan" (Grok/Gemini) bleaches solid-black art — black
+    panels, gutters, white-on-black title text — to white, inverting the page.
+    Claw those back: wherever the ORIGINAL has a LARGE solid-dark region, use
+    the locally clean-scanned original there instead of the AI output, so black
+    manga areas (and any white lettering inside them) stay exactly as drawn.
+
+    Scoped to big blobs only (panels/gutters/title slabs), never individual ink
+    strokes, so the AI's clean lineart everywhere else is untouched."""
+    if enhanced.shape[:2] != original.shape[:2]:
+        original = cv2.resize(original, (enhanced.shape[1], enhanced.shape[0]),
+                              interpolation=cv2.INTER_AREA)
+    clean = scan_finish(original)          # black stays black, white text stays
+    g = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY)
+    h, w = g.shape[:2]
+    dark = (g < 90).astype(np.uint8) * 255
+    # Close over white-on-black lettering so a titled black slab counts as ONE
+    # solid region (text included), then drop thin/ink-sized bits.
+    k = max(9, (min(h, w) // 80) | 1)
+    ker = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, ker)
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, ker)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    keep = np.zeros((h, w), np.uint8)
+    min_area = 0.004 * h * w               # ≥0.4% of the page = a real black area
+    for i in range(1, num):
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+            keep[labels == i] = 255
+    if cv2.countNonZero(keep) == 0:
+        return enhanced
+    keep = cv2.GaussianBlur(keep, (0, 0), 2)        # feather the swap boundary
+    a = (keep.astype(np.float32) / 255.0)[..., None]
+    out = clean.astype(np.float32) * a + enhanced.astype(np.float32) * (1 - a)
+    return out.clip(0, 255).astype(np.uint8)
+
+
 def compress_upload(data: bytes, max_dim: int = 3200, target_kb: int = 3072) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't
     choke on huge payloads. Caps the long side at `max_dim`, then re-encodes as

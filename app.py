@@ -36,7 +36,8 @@ from starlette.requests import Request
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from core.pipeline import TranslationPipeline, scan_cleanup, compress_upload
+from core.pipeline import (TranslationPipeline, scan_cleanup, compress_upload,
+                           preserve_dark_regions)
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
@@ -195,14 +196,18 @@ async def _run(
                 img = cv2.imread(image_path)
                 if img is None:
                     raise ValueError(f"Cannot load image: {image_path}")
-                tasks[task_id].update({"progress": 8, "message": "Cropping and cleaning page..."})
-                cleaned = scan_cleanup(img)
                 tasks[task_id].update(
                     {"progress": 15,
                      "message": f"Sending to {enhance_provider.title()} (this can take 30-60s)..."}
                 )
+                ai_ok = False
                 try:
-                    out = enhancer.enhance(cleaned, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                    # Send the RAW page straight to the AI scanner. Pre-deskewing
+                    # locally here and letting the pipeline deskew again warped
+                    # the page twice and stretched it on the way back (visible
+                    # distortion). One clean pass: AI scans, pipeline deskews once.
+                    out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                    ai_ok = True
                     tasks[task_id].update({"progress": 35, "message": "AI enhancement complete!"})
                 except Exception as e:
                     print(f"[enhance] AI step failed, using local scan cleanup: {e}")
@@ -217,13 +222,16 @@ async def _run(
                                     f"{reason[:160]} — fell back to local cleanup "
                                     f"(not the AI scan you asked for)."}
                     )
-                    out = cleaned
-                # Keep the enhanced page geometrically identical to the source —
-                # a generative model can hand back a different size or a square,
-                # which would misalign every detection box and text placement.
+                    out = scan_cleanup(img)
+                # Snap the AI result back to the EXACT source geometry so nothing
+                # is stretched and detection boxes stay aligned.
                 if out.shape[:2] != img.shape[:2]:
                     out = cv2.resize(out, (img.shape[1], img.shape[0]),
                                      interpolation=cv2.INTER_AREA)
+                # Claw back solid-black art the generative scan bleached to white
+                # (black panels, gutters, white-on-black titles stay as drawn).
+                if ai_ok:
+                    out = preserve_dark_regions(out, img)
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
