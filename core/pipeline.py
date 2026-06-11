@@ -377,8 +377,13 @@ class TranslationPipeline:
         style_prompt: str = "",
         text_case: str = "upper",
         finish: str = "clean",
+        upscale: Optional[bool] = None,
     ):
         self.finish = finish
+        # HD upscale: explicit per-run choice wins; otherwise fall back to the
+        # MANGA_UPSCALE env default. OFF unless asked for.
+        self.upscale_on = (upscale if upscale is not None
+                           else os.environ.get("MANGA_UPSCALE", "0") == "1")
         self.detector, self.detector_name = make_detector(use_seg)
         self.translator = make_translator(provider, api_key, model, style_prompt)
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"))
@@ -436,16 +441,15 @@ class TranslationPipeline:
         update(0, "Preprocessing image...", 2)
         image = auto_crop_page(image)
 
-        # Upscaling (Real-ESRGAN) REDRAWS and sharpens the art, so it's OFF by
-        # default — "raw" means the page is translated on exactly the pixels you
-        # uploaded, art untouched. Detection still runs at high resolution via
-        # the bubble model's own imgsz, so OCR/recall don't suffer from skipping
-        # this. Opt in with MANGA_UPSCALE=1 only for genuinely tiny raws.
+        # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
+        # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts
+        # without redrawing, so the art is preserved; Real-ESRGAN is the more
+        # aggressive fallback. Only runs on pages that aren't already large.
         if (self.upscaler is not None
-                and os.environ.get("MANGA_UPSCALE", "0") == "1"
-                and max(image.shape[:2]) < 1600
+                and self.upscale_on
+                and max(image.shape[:2]) < 2000
                 and self.upscaler.ok):
-            update(0, "Upscaling low-res page (Real-ESRGAN)...", 4)
+            update(0, "Upscaling page to HD (MangaJaNai)...", 4)
             try:
                 image = self.upscaler.upscale(image)
                 print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")

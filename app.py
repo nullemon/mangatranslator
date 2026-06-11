@@ -108,6 +108,7 @@ async def translate(
     style_prompt: str = Form(""),
     text_case: str = Form("upper"),
     finish: str = Form("clean"),
+    upscale: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -151,6 +152,7 @@ async def translate(
             style_prompt=style_prompt.strip(),
             text_case=text_case,
             finish=finish,
+            upscale=(upscale == "true"),
         )
     )
 
@@ -176,6 +178,7 @@ async def _run(
     style_prompt: str = "",
     text_case: str = "upper",
     finish: str = "clean",
+    upscale: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -258,6 +261,7 @@ async def _run(
             style_prompt=style_prompt,
             text_case=text_case,
             finish=finish,
+            upscale=upscale,
         )
 
         def on_progress(update):

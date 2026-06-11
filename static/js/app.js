@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const targetLang     = document.getElementById("targetLang");
   const modelSelect    = document.getElementById("model");
   const smartMode      = document.getElementById("smartMode");
+  const hdUpscale      = document.getElementById("hdUpscale");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
   const enhanceProvider= document.getElementById("enhanceProvider");
@@ -83,6 +84,12 @@ document.addEventListener("DOMContentLoaded", () => {
   smartMode.checked = localStorage.getItem("manga_smart") === "1";
   smartMode.addEventListener("change", () =>
     localStorage.setItem("manga_smart", smartMode.checked ? "1" : "0"));
+
+  if (hdUpscale) {
+    hdUpscale.checked = localStorage.getItem("manga_hd_upscale") === "1";
+    hdUpscale.addEventListener("change", () =>
+      localStorage.setItem("manga_hd_upscale", hdUpscale.checked ? "1" : "0"));
+  }
 
   if (textCase) {
     textCase.value = localStorage.getItem("manga_case") || "upper";
@@ -519,6 +526,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("provider", engineSelect.value);
       f.append("model", modelSelect.value);
       f.append("smart_mode", smartMode.checked ? "true" : "false");
+      f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");
       f.append("finish", pageFinish ? pageFinish.value : "clean");
