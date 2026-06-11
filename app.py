@@ -87,7 +87,21 @@ MASKS: dict = {}
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request, name="index.html", context={"version": _asset_version()})
+
+
+def _asset_version() -> str:
+    """Cache-buster appended to the CSS/JS URLs. Uses the newest mtime of the
+    static assets so a browser always fetches fresh code after an update,
+    instead of silently running a stale app.js."""
+    newest = 0.0
+    for p in ("static/js/app.js", "static/css/style.css", "templates/index.html"):
+        try:
+            newest = max(newest, os.path.getmtime(p))
+        except OSError:
+            pass
+    return str(int(newest)) or "1"
 
 
 _HEALTH_CACHE = {}
