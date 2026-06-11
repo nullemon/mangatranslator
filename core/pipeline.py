@@ -378,15 +378,22 @@ class TranslationPipeline:
         text_case: str = "upper",
         finish: str = "clean",
         upscale: Optional[bool] = None,
+        source_lang: str = "Japanese",
+        translate_sfx: bool = False,
     ):
         self.finish = finish
+        self.source_lang = source_lang or "Japanese"
+        self.translate_sfx = bool(translate_sfx)
         # HD upscale: explicit per-run choice wins; otherwise fall back to the
         # MANGA_UPSCALE env default. OFF unless asked for.
         self.upscale_on = (upscale if upscale is not None
                            else os.environ.get("MANGA_UPSCALE", "0") == "1")
         self.detector, self.detector_name = make_detector(use_seg)
-        self.translator = make_translator(provider, api_key, model, style_prompt)
-        self.compositor = Compositor(font_path, uppercase=(text_case != "keep"))
+        self.translator = make_translator(
+            provider, api_key, model, style_prompt,
+            source_lang=self.source_lang, translate_sfx=self.translate_sfx)
+        self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
+                                     translate_sfx=self.translate_sfx)
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}
@@ -620,7 +627,7 @@ class TranslationPipeline:
         if not dets:
             return []
 
-        from .ocr import _has_japanese
+        from .ocr import _has_source_text
         bubble_boxes = [list(r.bbox) for r in bubble_regions]
         next_id = max((r.id for r in bubble_regions), default=0) + 1
         used: List[list] = []
@@ -650,10 +657,14 @@ class TranslationPipeline:
             # The "sfx" label alone isn't trusted: the LLM tags big dramatic
             # display lines (ここから…, 一人でこの戦場を…) as sfx, but those
             # carry meaning and official releases translate them. Skip only
-            # when the text itself reads like onomatopoeia.
-            if not jp or not _has_japanese(jp) or _is_sfx(jp):
+            # when the text itself reads like onomatopoeia — unless the user
+            # opted to translate SFX, in which case keep it as a placed sfx item.
+            if not jp or not _has_source_text(jp, self.source_lang):
                 continue
-            if typ in ("sfx", "sound", "onomatopoeia"):
+            is_sfx = _is_sfx(jp) or typ in ("sfx", "sound", "onomatopoeia")
+            if is_sfx and not self.translate_sfx:
+                continue
+            if typ in ("sfx", "sound", "onomatopoeia") and not self.translate_sfx:
                 typ = "narration"
             if not tr:
                 continue
@@ -683,12 +694,17 @@ class TranslationPipeline:
             except (ValueError, TypeError):
                 pass
 
+            allowed = ("title", "credit", "narration", "caption")
+            if self.translate_sfx and is_sfx:
+                out_type = "sfx"
+            else:
+                out_type = typ if typ in allowed else "narration"
             items.append({
                 "id": next_id,
                 "bbox": box,
                 "original": jp,
                 "translation": tr,
-                "type": typ if typ in ("title", "credit", "narration", "caption") else "narration",
+                "type": out_type,
                 "in_bubble": False,
                 "dark": False,
                 "rotation": rotation,
@@ -716,7 +732,7 @@ class TranslationPipeline:
         if not boxes:
             return []
 
-        from .ocr import _has_japanese
+        from .ocr import _has_source_text
         # Giant display lettering arrives as one box per glyph — merge the
         # aligned boxes into whole columns/runs so OCR reads full phrases.
         boxes = _merge_column_boxes(boxes)
@@ -732,7 +748,9 @@ class TranslationPipeline:
             if any(_boxes_overlap(list(box), tb) for tb in taken):
                 continue
             jp = self.ocr.read_region(image, box, None)
-            if not jp or not _has_japanese(jp) or _is_sfx(jp):
+            if not jp or not _has_source_text(jp, self.source_lang):
+                continue
+            if _is_sfx(jp) and not self.translate_sfx:
                 continue
             # Same text already found by another pass (LLM box was off but
             # close enough that both versions would be placed = doubled text).
@@ -794,7 +812,7 @@ class TranslationPipeline:
             jp = self.ocr.read_region(image, box, None)
             if not jp:
                 continue
-            if _is_sfx(jp):
+            if _is_sfx(jp) and not self.translate_sfx:
                 continue
             fid = next_id
             next_id += 1
@@ -835,7 +853,7 @@ class TranslationPipeline:
         across the art and skipped bubbles. Here each LLM translation is snapped
         onto the bubble mask that overlaps it (so text is contained), and any
         balloon the LLM missed is OCR'd + translated so nothing is left behind."""
-        from .ocr import _has_japanese
+        from .ocr import _has_source_text
         update(1, "AI is analyzing the page...", 10)
         try:
             detections = self.translator.smart_detect_and_translate(image, self.target_lang)
@@ -914,7 +932,7 @@ class TranslationPipeline:
             jp = ""
             if self.ocr is not None and self.ocr.ok:
                 jp = (self.ocr.read_region(image, rb, getattr(reg, "mask", None)) or "").strip()
-            if not jp or not _has_japanese(jp):
+            if not jp or not _has_source_text(jp, self.source_lang):
                 continue
             tr = ""
             try:

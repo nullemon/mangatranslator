@@ -22,6 +22,34 @@ def _has_japanese(text: str) -> bool:
     return False
 
 
+def _has_arabic(text: str) -> bool:
+    """True if the string contains at least one Arabic-script character (covers
+    the main block plus the Supplement and Presentation Forms used for
+    ligatures). Used to keep real Arabic and drop latin/art hallucinations."""
+    for ch in text:
+        o = ord(ch)
+        if (0x0600 <= o <= 0x06FF      # Arabic
+                or 0x0750 <= o <= 0x077F  # Arabic Supplement
+                or 0x08A0 <= o <= 0x08FF  # Arabic Extended-A
+                or 0xFB50 <= o <= 0xFDFF  # Presentation Forms-A
+                or 0xFE70 <= o <= 0xFEFF):  # Presentation Forms-B
+            return True
+    return False
+
+
+def _has_source_text(text: str, source_lang: str = "Japanese") -> bool:
+    """Whether `text` looks like real source-language text for the chosen
+    source. Japanese and Arabic get script-specific checks; 'auto' (or anything
+    else) just requires at least one letter so the vision-LLM's reading isn't
+    thrown away over a non-Japanese page."""
+    sl = (source_lang or "Japanese").strip().lower()
+    if sl in ("japanese", "ja", "jp"):
+        return _has_japanese(text)
+    if sl in ("arabic", "ar"):
+        return _has_arabic(text)
+    return any(ch.isalpha() for ch in text)
+
+
 class MangaOCR:
     _shared = None  # process-wide cache of the loaded model
 

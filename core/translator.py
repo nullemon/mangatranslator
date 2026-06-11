@@ -60,10 +60,13 @@ def _to_region_dict(items: list) -> Dict[int, dict]:
 class ClaudeTranslator:
     """Translation backend powered by Anthropic Claude (vision)."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", style: str = ""):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", style: str = "",
+                 source_lang: str = "Japanese", translate_sfx: bool = False):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
         self.style = (style or "").strip()
+        self.source_lang = source_lang or "Japanese"
+        self.translate_sfx = bool(translate_sfx)
 
     def _image_block(self, image: np.ndarray) -> dict:
         return {
@@ -86,25 +89,29 @@ class ClaudeTranslator:
     def translate_regions(
         self, original, annotated, num_regions, target_lang="English"
     ) -> Dict[int, dict]:
-        prompt = prompts.region_translate_prompt(target_lang, num_regions, self.style)
+        prompt = prompts.region_translate_prompt(
+            target_lang, num_regions, self.style, self.source_lang, self.translate_sfx)
         text = self._ask(
             [self._image_block(original), self._image_block(annotated), {"type": "text", "text": prompt}]
         )
         return _to_region_dict(prompts.extract_json_array(text))
 
     def smart_detect_and_translate(self, image, target_lang="English") -> List[dict]:
-        prompt = prompts.smart_detect_prompt(target_lang, self.style)
+        prompt = prompts.smart_detect_prompt(
+            target_lang, self.style, self.source_lang, self.translate_sfx)
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         return prompts.extract_json_array(text)
 
     def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
-        prompt = prompts.text_translate_prompt(target_lang, self.style)
+        prompt = prompts.text_translate_prompt(
+            target_lang, self.style, self.source_lang, self.translate_sfx)
         payload = json.dumps(id_to_text, ensure_ascii=False)
         text = self._ask([{"type": "text", "text": prompt + "\n\n" + payload}])
         return _to_region_dict(prompts.extract_json_array(text))
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
-        prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [], self.style)
+        prompt = prompts.free_text_detect_prompt(
+            target_lang, bubble_ids or [], self.style, self.source_lang, self.translate_sfx)
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         try:
             return prompts.extract_json_array(text)
@@ -118,11 +125,14 @@ class GeminiTranslator:
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash",
-                 timeout: float = 180.0, style: str = ""):
+                 timeout: float = 180.0, style: str = "",
+                 source_lang: str = "Japanese", translate_sfx: bool = False):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
         self.style = (style or "").strip()
+        self.source_lang = source_lang or "Japanese"
+        self.translate_sfx = bool(translate_sfx)
 
     def _image_part(self, image: np.ndarray) -> dict:
         return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
@@ -157,25 +167,29 @@ class GeminiTranslator:
     def translate_regions(
         self, original, annotated, num_regions, target_lang="English"
     ) -> Dict[int, dict]:
-        prompt = prompts.region_translate_prompt(target_lang, num_regions, self.style)
+        prompt = prompts.region_translate_prompt(
+            target_lang, num_regions, self.style, self.source_lang, self.translate_sfx)
         text = self._ask(
             [{"text": prompt}, self._image_part(original), self._image_part(annotated)]
         )
         return _to_region_dict(prompts.extract_json_array(text))
 
     def smart_detect_and_translate(self, image, target_lang="English") -> List[dict]:
-        prompt = prompts.smart_detect_prompt(target_lang, self.style)
+        prompt = prompts.smart_detect_prompt(
+            target_lang, self.style, self.source_lang, self.translate_sfx)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         return prompts.extract_json_array(text)
 
     def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
-        prompt = prompts.text_translate_prompt(target_lang, self.style)
+        prompt = prompts.text_translate_prompt(
+            target_lang, self.style, self.source_lang, self.translate_sfx)
         payload = json.dumps(id_to_text, ensure_ascii=False)
         text = self._ask([{"text": prompt + "\n\n" + payload}])
         return _to_region_dict(prompts.extract_json_array(text))
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
-        prompt = prompts.free_text_detect_prompt(target_lang, bubble_ids or [], self.style)
+        prompt = prompts.free_text_detect_prompt(
+            target_lang, bubble_ids or [], self.style, self.source_lang, self.translate_sfx)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         try:
             return prompts.extract_json_array(text)
@@ -196,7 +210,8 @@ class GeminiTranslator:
 DEFAULT_MODELS = {"claude": "claude-sonnet-4-6", "gemini": "gemini-2.5-flash"}
 
 
-def make_translator(provider: str, api_key: str, model: str = "", style: str = ""):
+def make_translator(provider: str, api_key: str, model: str = "", style: str = "",
+                    source_lang: str = "Japanese", translate_sfx: bool = False):
     provider = (provider or "claude").lower().strip()
     model = (model or "").strip()
 
@@ -204,11 +219,13 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
         # Guard against a stale Gemini model id being sent for Claude.
         if not model or model.startswith("gemini"):
             model = DEFAULT_MODELS["claude"]
-        return ClaudeTranslator(api_key, model, style=style)
+        return ClaudeTranslator(api_key, model, style=style,
+                                source_lang=source_lang, translate_sfx=translate_sfx)
 
     if provider in ("gemini", "google"):
         if not model or model.startswith("claude"):
             model = DEFAULT_MODELS["gemini"]
-        return GeminiTranslator(api_key, model, style=style)
+        return GeminiTranslator(api_key, model, style=style,
+                                source_lang=source_lang, translate_sfx=translate_sfx)
 
     raise ValueError(f"Unknown translation provider: {provider!r}")

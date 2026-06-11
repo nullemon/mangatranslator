@@ -13,8 +13,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const apiKeyInput    = document.getElementById("apiKey");
   const apiKeyLabel    = document.getElementById("apiKeyLabel");
   const targetLang     = document.getElementById("targetLang");
+  const sourceLang     = document.getElementById("sourceLang");
   const modelSelect    = document.getElementById("model");
   const smartMode      = document.getElementById("smartMode");
+  const translateSfx   = document.getElementById("translateSfx");
   const hdUpscale      = document.getElementById("hdUpscale");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
@@ -81,9 +83,21 @@ document.addEventListener("DOMContentLoaded", () => {
   targetLang.addEventListener("change", () =>
     localStorage.setItem("manga_lang", targetLang.value));
 
+  if (sourceLang) {
+    sourceLang.value = localStorage.getItem("manga_source_lang") || "Japanese";
+    sourceLang.addEventListener("change", () =>
+      localStorage.setItem("manga_source_lang", sourceLang.value));
+  }
+
   smartMode.checked = localStorage.getItem("manga_smart") === "1";
   smartMode.addEventListener("change", () =>
     localStorage.setItem("manga_smart", smartMode.checked ? "1" : "0"));
+
+  if (translateSfx) {
+    translateSfx.checked = localStorage.getItem("manga_translate_sfx") === "1";
+    translateSfx.addEventListener("change", () =>
+      localStorage.setItem("manga_translate_sfx", translateSfx.checked ? "1" : "0"));
+  }
 
   if (hdUpscale) {
     hdUpscale.checked = localStorage.getItem("manga_hd_upscale") === "1";
@@ -525,9 +539,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (needsTranslate(workflow)) {
       f.append("api_key", apiKeyInput.value.trim());
       f.append("target_lang", targetLang.value);
+      f.append("source_lang", sourceLang ? sourceLang.value : "Japanese");
       f.append("provider", engineSelect.value);
       f.append("model", modelSelect.value);
       f.append("smart_mode", smartMode.checked ? "true" : "false");
+      f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");

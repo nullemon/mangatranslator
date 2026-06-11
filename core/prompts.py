@@ -17,18 +17,42 @@ USER STYLE INSTRUCTIONS (follow these — they override the defaults above):
 {style}"""
 
 
-def region_translate_prompt(target_lang: str, num_regions: int, style: str = "") -> str:
+def _source_label(source_lang: str, target_lang: str) -> str:
+    """Human-readable name for the source script used in prompts. 'auto' (or
+    empty) becomes a generic 'non-{target}' so the model detects any language."""
+    sl = (source_lang or "Japanese").strip()
+    if sl.lower() in ("", "auto", "auto-detect", "autodetect", "detect", "any"):
+        return f"non-{target_lang}"
+    return sl
+
+
+def _sfx_rule(translate_sfx: bool) -> str:
+    """The SFX instruction shared by the detection prompts. By default sound
+    effects are left in the artwork; when enabled they are translated too."""
+    if translate_sfx:
+        return ('- Set type to "sfx" for sound effects / onomatopoeia and DO '
+                'translate them into a short punchy equivalent (e.g. BOOM, '
+                'CRASH, THUD) so they can be typeset over the artwork.')
+    return ('- Set type to "sfx" for sound effects / onomatopoeia (e.g. ドーン, '
+            'バァン, わぁぁ). SFX will NOT be replaced — everything else WILL be '
+            'translated and placed.')
+
+
+def region_translate_prompt(target_lang: str, num_regions: int, style: str = "",
+                            source_lang: str = "Japanese",
+                            translate_sfx: bool = False) -> str:
+    src = _source_label(source_lang, target_lang)
     return f"""You are an expert manga/comic translator. You are shown two images:
 1. An original manga page
 2. The SAME page with detected text regions marked by red numbered boxes
 
-There are {num_regions} numbered regions. For each one that contains Japanese
+There are {num_regions} numbered regions. For each one that contains {src}
 (or other non-{target_lang}) text, translate it into natural {target_lang}.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
-  {{"id": 1, "original": "Japanese text here", "translation": "{target_lang.upper()} TEXT HERE", "type": "dialogue"}},
-  {{"id": 2, "original": "ナレーション", "translation": "NARRATION", "type": "narration"}}
+  {{"id": 1, "original": "original text here", "translation": "{target_lang.upper()} TEXT HERE", "type": "dialogue"}},
+  {{"id": 2, "original": "original narration", "translation": "NARRATION", "type": "narration"}}
 ]
 
 Rules:
@@ -42,10 +66,13 @@ Rules:
 - Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def smart_detect_prompt(target_lang: str, style: str = "") -> str:
+def smart_detect_prompt(target_lang: str, style: str = "",
+                        source_lang: str = "Japanese",
+                        translate_sfx: bool = False) -> str:
+    src = _source_label(source_lang, target_lang)
     return f"""You are an expert manga page analyzer and translator.
 
-Carefully examine this manga page. Find EVERY piece of Japanese text — speech
+Carefully examine this manga page. Find EVERY piece of {src} text — speech
 bubbles, narration boxes, titles, credits, captions, and annotations.
 
 For each text region, return its bounding box as PERCENTAGE coordinates of the
@@ -63,7 +90,7 @@ Return ONLY a JSON array — no markdown fences, no commentary:
     "width_pct": 20.0,
     "height_pct": 8.0,
     "rotation_deg": 0,
-    "original": "日本語テキスト",
+    "original": "original text",
     "translation": "{target_lang.upper()} TEXT",
     "type": "dialogue",
     "in_bubble": true
@@ -78,18 +105,26 @@ Rules:
 - type must be one of: "dialogue", "narration", "sfx", "title", "credit", "caption".
 - "in_bubble": true if the text is enclosed in a speech bubble or drawn box.
   Set to false for titles, credits, captions, and any text NOT enclosed.
-- Set type to "sfx" for sound effects / onomatopoeia (e.g. ドーン, バァン, わぁぁ).
-  SFX will NOT be replaced — everything else WILL be translated and placed.
+{_sfx_rule(translate_sfx)}
 - Do NOT include tiny furigana readings above kanji.
 - Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def free_text_detect_prompt(target_lang: str, bubble_ids: list, style: str = "") -> str:
+def free_text_detect_prompt(target_lang: str, bubble_ids: list, style: str = "",
+                            source_lang: str = "Japanese",
+                            translate_sfx: bool = False) -> str:
+    src = _source_label(source_lang, target_lang)
     skip = f"Already-handled bubble IDs: {bubble_ids}. " if bubble_ids else ""
+    # SFX go in the "find these" list (with type "sfx") only when the user opts
+    # in; otherwise they stay in the "Do NOT include" list and are left in art.
+    sfx_find = ('- Sound effects / onomatopoeia — translate into a short punchy '
+                'equivalent (BOOM, CRASH, …), type "sfx"\n') if translate_sfx else ""
+    sfx_skip = "" if translate_sfx else "- Sound effects / onomatopoeia (ドーン, バァン, etc.)\n"
+    sfx_types = ', "sfx"' if translate_sfx else ""
     return f"""You are an expert manga page analyzer and translator.
 
 The speech bubbles on this page have already been translated. {skip}Now find any
-REMAINING Japanese text that is NOT inside a speech bubble and should be translated:
+REMAINING {src} text that is NOT inside a speech bubble and should be translated:
 
 - Chapter titles (e.g. 第1163話 "約束")
 - Author names / credits
@@ -100,10 +135,9 @@ REMAINING Japanese text that is NOT inside a speech bubble and should be transla
   action scenes — e.g. a bold vertical column of kanji/kana like
   生きようとしてるからだ!!!, 俺は俺の意志で, etc.)
 - Text on diagonal narration bars or banners crossing the page
-
+{sfx_find}
 Do NOT include:
-- Sound effects / onomatopoeia (ドーン, バァン, etc.)
-- Text already in {target_lang}
+{sfx_skip}- Text already in {target_lang}
 - Tiny furigana readings above kanji
 - Patterns on character faces, eyes, or bodies — those are drawn artwork,
   not text. Only flag actual written characters on a background or in a box.
@@ -145,21 +179,24 @@ Return ONLY a JSON array — no markdown fences:
   }}
 ]
 
-type must be one of: "title", "credit", "narration", "caption".
+type must be one of: "title", "credit", "narration", "caption"{sfx_types}.
 Translate naturally and idiomatically — meaning and emotion, not word-for-word.
 Keep translations concise. Return an empty array [] if no free text is found.
 Return ONLY the JSON array.{_style_block(style)}"""
 
 
-def text_translate_prompt(target_lang: str, style: str = "") -> str:
+def text_translate_prompt(target_lang: str, style: str = "",
+                          source_lang: str = "Japanese",
+                          translate_sfx: bool = False) -> str:
+    src = _source_label(source_lang, target_lang)
     return f"""You are an expert manga translator localizing for an official
 {target_lang} release. Below is a JSON object mapping each speech-bubble id to
-the Japanese text that was read from that bubble (by OCR). Translate every
+the {src} text that was read from that bubble (by OCR). Translate every
 entry into natural, punchy {target_lang}.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
-  {{"id": 1, "original": "<the Japanese>", "translation": "{target_lang.upper()} TEXT", "type": "dialogue"}}
+  {{"id": 1, "original": "<the original text>", "translation": "{target_lang.upper()} TEXT", "type": "dialogue"}}
 ]
 
 Rules:

@@ -109,6 +109,8 @@ async def translate(
     text_case: str = Form("upper"),
     finish: str = Form("clean"),
     upscale: str = Form("false"),
+    source_lang: str = Form("Japanese"),
+    translate_sfx: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -141,6 +143,8 @@ async def translate(
         "enhance_prompt": enhance_prompt,
         "name": file.filename or "page.png",
         "mode": "translate",
+        "source_lang": source_lang,
+        "translate_sfx": translate_sfx == "true",
     }
 
     asyncio.create_task(
@@ -153,6 +157,8 @@ async def translate(
             text_case=text_case,
             finish=finish,
             upscale=(upscale == "true"),
+            source_lang=source_lang,
+            translate_sfx=(translate_sfx == "true"),
         )
     )
 
@@ -179,6 +185,8 @@ async def _run(
     text_case: str = "upper",
     finish: str = "clean",
     upscale: bool = False,
+    source_lang: str = "Japanese",
+    translate_sfx: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -265,6 +273,8 @@ async def _run(
             text_case=text_case,
             finish=finish,
             upscale=upscale,
+            source_lang=source_lang,
+            translate_sfx=translate_sfx,
         )
 
         def on_progress(update):
@@ -599,7 +609,8 @@ async def rerender(task_id: str, request: Request):
         if base_img is None:
             raise ValueError("Base image missing")
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
-                          uppercase=(t.get("text_case", "upper") != "keep"))
+                          uppercase=(t.get("text_case", "upper") != "keep"),
+                          translate_sfx=bool(t.get("translate_sfx", False)))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the
@@ -709,7 +720,9 @@ async def ocr_translate(task_id: str, request: Request):
         if not original:
             return {"original": "", "translation": ""}
 
-        translator = make_translator(provider, api_key, model, style_prompt)
+        translator = make_translator(provider, api_key, model, style_prompt,
+                                     source_lang=t.get("source_lang", "Japanese"),
+                                     translate_sfx=bool(t.get("translate_sfx", False)))
         out = translator.translate_texts({"0": original}, target_lang)
         entry = out.get(0) or out.get("0") or {}
         translation = entry.get("translation", original)

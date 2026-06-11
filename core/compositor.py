@@ -28,9 +28,13 @@ class Compositor:
     ellipse — never a bare rectangle that would spill past the outline."""
 
     def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
-                 use_lama: bool = True, uppercase: bool = True):
+                 use_lama: bool = True, uppercase: bool = True,
+                 translate_sfx: bool = False):
         self.renderer = TextRenderer(font_path, font_scale=font_scale,
                                      uppercase=uppercase)
+        # Background SFX (out-of-bubble onomatopoeia) are left in the artwork
+        # unless the user opts in to translating + typesetting them.
+        self.translate_sfx = bool(translate_sfx)
         self.lama = None
         if use_lama:
             try:
@@ -110,7 +114,7 @@ class Compositor:
             if not text:
                 continue
             kind = (it.get("type") or "").lower().replace(" ", "_")
-            if kind in SFX_TYPES and it.get("in_bubble") is False:
+            if kind in SFX_TYPES and it.get("in_bubble") is False and not self.translate_sfx:
                 continue
             ital = _is_expressive(text, it)
             bbox = it.get("bbox")
