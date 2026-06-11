@@ -14,11 +14,17 @@ Override the weights path with env var TEXT_SEG_MODEL.
 """
 
 import os
+import hashlib
 import cv2
 import numpy as np
 
 _SESSION = None
 _TRIED = False
+
+# Page stroke-mask cache: re-rendering the same page (an editor Apply) shouldn't
+# re-run the GPU segmentation — the base image is identical every time. Keyed by
+# a cheap content signature, bounded to a handful of recent pages.
+_MASK_CACHE = {}
 
 INPUT_SIZE = 1024
 DEFAULT_PATH = "models/comictextdetector.pt.onnx"
@@ -146,9 +152,21 @@ class TextSegmenter:
         name = sess.get_inputs()[0].name
         return sess.run(None, {name: blob}), scale, nw, nh
 
+    @staticmethod
+    def _sig(image: np.ndarray):
+        """Cheap content signature for the mask cache (shape + hash of a 32x32
+        thumbnail) — fast, and collisions are effectively impossible here."""
+        small = cv2.resize(image, (32, 32), interpolation=cv2.INTER_AREA)
+        return (image.shape, hashlib.blake2b(small.tobytes(), digest_size=16).digest())
+
     def mask(self, image: np.ndarray) -> np.ndarray:
-        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes."""
+        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes.
+        Cached per page so an editor re-render doesn't re-run the model."""
         h, w = image.shape[:2]
+        key = self._sig(image)
+        hit = _MASK_CACHE.get(key)
+        if hit is not None and hit.shape == (h, w):
+            return hit
         ran = self._run(image)
         if ran is None:
             return np.zeros((h, w), np.uint8)
@@ -176,6 +194,9 @@ class TextSegmenter:
         m = m[:nh, :nw]
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
         _, binary = cv2.threshold(m, 60, 255, cv2.THRESH_BINARY)
+        _MASK_CACHE[key] = binary
+        if len(_MASK_CACHE) > 8:
+            _MASK_CACHE.pop(next(iter(_MASK_CACHE)))
         return binary
 
     def detect_blocks(self, image: np.ndarray, conf_thresh: float = 0.45,

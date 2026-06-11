@@ -26,6 +26,22 @@ def _source_label(source_lang: str, target_lang: str) -> str:
     return sl
 
 
+def _manga_context(target_lang: str) -> str:
+    """Shared 'treat the whole page as a manga, not isolated lines' guidance.
+    Reading the panels in order with cross-panel context makes the translation
+    flow as a real conversation and stay consistent."""
+    return f"""
+Translate this as a MANGA page, not a list of disconnected lines:
+- Read the panels in manga order — right-to-left, top-to-bottom — and follow the
+  conversation ACROSS panels so each line answers what was just said.
+- Use the whole page as context: who is speaking, their mood from the art
+  (shouting, whispering, thinking, crying), and what is happening in the scene.
+- Stay consistent across the page — a character's voice, tone, pronouns, name
+  and honorifics must not change from one bubble to the next.
+- Keep running jokes, callbacks and emphasis intact; render natural, idiomatic
+  {target_lang} a real reader would enjoy, never a literal word-for-word gloss."""
+
+
 def _sfx_rule(translate_sfx: bool) -> str:
     """The SFX instruction shared by the detection prompts. By default sound
     effects are left in the artwork; when enabled they are translated too."""
@@ -48,6 +64,7 @@ def region_translate_prompt(target_lang: str, num_regions: int, style: str = "",
 
 There are {num_regions} numbered regions. For each one that contains {src}
 (or other non-{target_lang}) text, translate it into natural {target_lang}.
+{_manga_context(target_lang)}
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
@@ -78,6 +95,7 @@ def smart_detect_prompt(target_lang: str, style: str = "",
 
 Carefully examine this manga page. Find EVERY piece of {src} text — speech
 bubbles, narration boxes, titles, credits, captions, and annotations.
+{_manga_context(target_lang)}
 
 For each text region, return its bounding box as PERCENTAGE coordinates of the
 image (so they are resolution independent):
@@ -214,6 +232,8 @@ def text_translate_prompt(target_lang: str, style: str = "",
 {target_lang} release. Below is a JSON object mapping each speech-bubble id to
 the {src} text that was read from that bubble (by OCR). Translate every
 entry into natural, punchy {target_lang}.
+{_manga_context(target_lang)}
+The ids are in reading order; treat them as one flowing conversation.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
