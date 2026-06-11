@@ -179,6 +179,10 @@ async def _run(
     try:
         loop = asyncio.get_event_loop()
 
+        # Default: translate on the exact uploaded pixels. The Scan workflows
+        # below redirect this to the cleaned/enhanced page.
+        translate_source = image_path
+
         if enhance:
             tasks[task_id].update(
                 {"step": 0, "progress": 2,
@@ -207,15 +211,27 @@ async def _run(
                          "message": f"AI failed ({type(e).__name__}), using local clean scan"}
                     )
                     out = cleaned
+                # Keep the enhanced page geometrically identical to the source —
+                # a generative model can hand back a different size or a square,
+                # which would misalign every detection box and text placement.
+                if out.shape[:2] != img.shape[:2]:
+                    out = cv2.resize(out, (img.shape[1], img.shape[0]),
+                                     interpolation=cv2.INTER_AREA)
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
             tasks[task_id]["enhanced_path"] = enhanced_path
             tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
-            # NOTE: translation stays on the ORIGINAL page, NOT the AI-enhanced
-            # one. Whole-page generative "enhancement" repaints/bleaches the art
-            # and background; we only ever edit the exact text regions. The
-            # enhanced image is kept available as a separate preview.
+            # Scan workflows (Raw → Scan → Translate) translate ON the cleaned /
+            # AI-scanned page — that IS the point of the scan step: the user
+            # wants the clean TCB-style result with English typeset over it. So
+            # the enhanced page becomes the translation base. (Plain Raw →
+            # Translate doesn't enhance, so it stays on the original pixels.)
+            translate_source = enhanced_path
+            # The enhanced page already carries the desired clean-scan look — do
+            # NOT run the local scan finish over it again; keep it as delivered.
+            finish = "off"
+            tasks[task_id]["finish"] = "off"
 
         pipeline = TranslationPipeline(
             api_key=api_key,
@@ -234,7 +250,7 @@ async def _run(
 
         result = await loop.run_in_executor(
             None,
-            lambda: pipeline.process(image_path, output_path, on_progress),
+            lambda: pipeline.process(translate_source, output_path, on_progress),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
 
