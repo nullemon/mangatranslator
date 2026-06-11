@@ -69,8 +69,13 @@ def _load():
 
 
 class BubbleSegDetector:
-    def __init__(self, conf: float = 0.22):
-        self.conf = conf
+    def __init__(self, conf: Optional[float] = None):
+        # Lower confidence = higher recall (catch faint, small, half-cut and
+        # overlapping balloons). False positives are cheap: every region is
+        # OCR-checked downstream and dropped if it isn't really Japanese.
+        # Override with BUBBLE_CONF.
+        self.conf = conf if conf is not None else float(
+            os.environ.get("BUBBLE_CONF", "0.15"))
         self.model = _load()
 
     @property
@@ -83,10 +88,21 @@ class BubbleSegDetector:
         h, w = image.shape[:2]
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
+        # Run detection at high resolution. The model's default 640px downscale
+        # loses small / distant / dense balloons on a full manga page — the
+        # single biggest cause of "it missed bubbles". A 4080 handles 1536–2048
+        # easily. Default scales with the page (≤2048), override with
+        # BUBBLE_IMGSZ. This changes nothing about the output pixels — it's only
+        # the internal detection resolution.
+        env_imgsz = os.environ.get("BUBBLE_IMGSZ", "").strip()
+        if env_imgsz:
+            imgsz = int(env_imgsz)
+        else:
+            imgsz = min(2048, max(1024, (max(h, w) + 31) // 32 * 32))
         try:
             results = self.model.predict(
                 image, conf=self.conf, device=_device(),
-                retina_masks=True, verbose=False,
+                retina_masks=True, verbose=False, imgsz=imgsz,
             )
         except Exception as e:
             print(f"[bubble_seg] inference failed, CV fallback: {e}")

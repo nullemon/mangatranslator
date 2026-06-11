@@ -240,7 +240,7 @@ def scan_finish(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def compress_upload(data: bytes, max_dim: int = 2600, target_kb: int = 1024) -> bytes:
+def compress_upload(data: bytes, max_dim: int = 3200, target_kb: int = 3072) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't
     choke on huge payloads. Caps the long side at `max_dim`, then re-encodes as
     JPEG — first lowering quality, then stepping the resolution down further if
@@ -400,11 +400,13 @@ class TranslationPipeline:
         update(0, "Preprocessing image...", 2)
         image = auto_crop_page(image)
 
-        # Low-res raws cap everything downstream (OCR accuracy, cleanup edges,
-        # lettering crispness). Upscale them with the anime-trained model
-        # before any detection runs. Disable with MANGA_UPSCALE=0.
+        # Upscaling (Real-ESRGAN) REDRAWS and sharpens the art, so it's OFF by
+        # default — "raw" means the page is translated on exactly the pixels you
+        # uploaded, art untouched. Detection still runs at high resolution via
+        # the bubble model's own imgsz, so OCR/recall don't suffer from skipping
+        # this. Opt in with MANGA_UPSCALE=1 only for genuinely tiny raws.
         if (self.upscaler is not None
-                and os.environ.get("MANGA_UPSCALE", "1") != "0"
+                and os.environ.get("MANGA_UPSCALE", "0") == "1"
                 and max(image.shape[:2]) < 1600
                 and self.upscaler.ok):
             update(0, "Upscaling low-res page (Real-ESRGAN)...", 4)
