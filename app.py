@@ -311,6 +311,7 @@ async def enhance_only(
     api_key: str = Form(...),
     prompt: str = Form(""),
     model: str = Form(""),
+    upscale: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -335,7 +336,8 @@ async def enhance_only(
     }
 
     asyncio.create_task(
-        _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt, model)
+        _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt,
+                     model, upscale=(upscale == "true"))
     )
     return {"task_id": task_id}
 
@@ -348,6 +350,7 @@ async def _run_enhance(
     api_key: str,
     prompt: str,
     model: str,
+    upscale: bool = False,
 ):
     try:
         tasks[task_id].update(
@@ -366,16 +369,34 @@ async def _run_enhance(
                 {"progress": 30,
                  "message": f"Sending to {provider.title()} (this can take 30-60s)..."}
             )
+            ai_ok = False
             try:
                 out = enhancer.enhance(cleaned, prompt, provider, api_key, model)
-                tasks[task_id].update({"progress": 85, "message": "AI enhancement complete!"})
+                ai_ok = True
+                tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
             except Exception as e:
                 print(f"[enhance] AI step failed, using local scan cleanup: {e}")
                 tasks[task_id].update(
-                    {"progress": 85,
+                    {"progress": 70,
                      "message": f"AI failed ({type(e).__name__}); used local clean scan"}
                 )
                 out = cleaned
+            # Keep solid blacks the generative scan would otherwise bleach.
+            if ai_ok:
+                out = preserve_dark_regions(out, cleaned)
+            # Optional second stage: faithful HD upscale on top of the AI scan.
+            if upscale:
+                from core.upscale import Upscaler
+                tasks[task_id].update({"progress": 85,
+                                       "message": "Upscaling to HD (MangaJaNai)..."})
+                up = Upscaler()
+                if up.ok:
+                    try:
+                        out = up.upscale(out, target_long=3600)
+                    except Exception as e:
+                        print(f"[enhance] HD upscale step failed: {e}")
+                else:
+                    print("[enhance] HD upscale requested but no model installed")
             cv2.imwrite(output_path, out)
 
         loop = asyncio.get_event_loop()

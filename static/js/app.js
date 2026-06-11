@@ -179,8 +179,8 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
-  const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan";
-  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only";
+  const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
+  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale";
   const isUpscaleOnly = wf => wf === "upscale-only";
 
   /* ══ THEME ══ */
@@ -217,7 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
     goBtn.textContent = {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
-      "upscale-only": "Upscale to HD",
+      "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
   }
@@ -555,6 +555,11 @@ document.addEventListener("DOMContentLoaded", () => {
     f.append("api_key", enhanceKey.value.trim());
     f.append("prompt", enhancePrompt.value);
     f.append("model", enhanceModel.value);
+    // "AI Scan → HD" chains MangaJaNai after the generative scan; the HD toggle
+    // also forces the upscale stage on a plain "Raw → Scan" run.
+    if (workflow === "scan-upscale" || (hdUpscale && hdUpscale.checked)) {
+      f.append("upscale", "true");
+    }
     return { url: "/api/enhance", form: f };
   }
 
