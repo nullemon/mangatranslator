@@ -42,6 +42,7 @@ class TextRenderer:
         self._draw_dir: Optional[str] = None   # "rtl" when raqm handles a RTL line
         self._reshape_text = False             # True when we pre-shape (no raqm)
         self._mix = False                      # True = per-glyph font fallback (LTR)
+        self._size_scale = 1.0                 # per-region font-size multiplier
 
     def _find_font(self) -> Optional[str]:
         for p in self.FONT_CANDIDATES:
@@ -258,6 +259,7 @@ class TextRenderer:
         color: Tuple[int, int, int] = (0, 0, 0),
         italic: bool = False,
         rotation: float = 0,
+        scale: float = 1.0,
     ) -> Image.Image:
         """Fit `text` (wrapped, auto-sized, centered) inside `rect`.
 
@@ -266,7 +268,10 @@ class TextRenderer:
         When `rotation` is nonzero the text is rendered upright into a temporary
         layer, rotated to the specified clockwise angle, and composited onto
         *image* so it sits inside the target rect at the same tilt as the
-        original Japanese."""
+        original Japanese.
+        `scale` multiplies the auto-fitted size for a single region (the editor's
+        per-bubble A-/A+ control), so one bubble can be enlarged past the default
+        fit without changing every other bubble."""
         if self.uppercase:
             text = text.upper()
         text = self._normalize_text(text)
@@ -274,6 +279,8 @@ class TextRenderer:
         # etc. don't come out as boxes), for the whole call — wrap, measure, draw.
         prev_font = self._active_font_path
         prev_dir, prev_reshape, prev_mix = self._draw_dir, self._reshape_text, self._mix
+        prev_scale = self._size_scale
+        self._size_scale = max(0.4, min(float(scale or 1.0), 3.0))
         rtl = self._is_rtl(text)
         if rtl:
             # Right-to-left text must be shaped + reordered as one run, so pick a
@@ -296,6 +303,7 @@ class TextRenderer:
         finally:
             self._active_font_path = prev_font
             self._draw_dir, self._reshape_text, self._mix = prev_dir, prev_reshape, prev_mix
+            self._size_scale = prev_scale
 
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
@@ -317,6 +325,12 @@ class TextRenderer:
 
         draw = ImageDraw.Draw(image)
         font_size = self._optimal_size(text, inner_w, inner_h, draw)
+        if self._size_scale != 1.0:
+            # Per-region bump/shrink. Allowed to exceed the auto-fit (the user
+            # asked for bigger) but kept within the rect so it can't blow up.
+            cap = max(inner_w, inner_h)
+            font_size = max(self.min_font_size,
+                            min(int(round(font_size * self._size_scale)), cap))
         font = self._get_font(font_size)
         sw = max(1, font_size // 18) * 2
         wrap_w = max(inner_w - sw, 8)
@@ -379,7 +393,8 @@ class TextRenderer:
         rh = max(12, int(rh))
 
         tmp = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
-        self.draw_in_rect(tmp, (0, 0, rw, rh), text, color, italic=italic, rotation=0)
+        self.draw_in_rect(tmp, (0, 0, rw, rh), text, color, italic=italic,
+                          rotation=0, scale=self._size_scale)
 
         rotated = tmp.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
 

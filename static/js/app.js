@@ -417,7 +417,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, error: "", rev: 0,
+        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, fontScales: {}, error: "", rev: 0,
       });
     }
 
@@ -657,6 +657,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.items = (d.result && d.result.items) ? d.result.items : [];
             page.excluded = new Set();
             page.erased = new Set();
+            page.fontScales = {};
             page.rev++;
             renderStrip(); updateBatch();
             if (page.uid === activeUid) renderActivePage();
@@ -846,6 +847,11 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="tl-clr${c === "black" ? " on" : ""}" data-c="black" title="Black text">B</button>
             <button class="tl-clr${c === "white" ? " on" : ""}" data-c="white" title="White text">W</button>
           </span>
+          <span class="tl-fs" title="Font size for this bubble">
+            <button class="tl-fsb" data-id="${it.id}" data-d="-1" title="Smaller">A−</button>
+            <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
+            <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
+          </span>
           <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
         </div>
@@ -868,6 +874,11 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="tl-clr${ac === "auto" ? " on" : ""}" data-c="auto" title="Auto color">A</button>
             <button class="tl-clr${ac === "black" ? " on" : ""}" data-c="black" title="Black text">B</button>
             <button class="tl-clr${ac === "white" ? " on" : ""}" data-c="white" title="White text">W</button>
+          </span>
+          <span class="tl-fs" title="Font size for this text">
+            <button class="tl-fsb" data-id="${it.id}" data-d="-1" title="Smaller">A−</button>
+            <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
+            <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
           <button class="tl-del" title="Delete this added text" data-id="${it.id}">✕</button>
         </div>
@@ -904,6 +915,20 @@ document.addEventListener("DOMContentLoaded", () => {
         if (page.erased.has(id)) page.erased.delete(id);
         else { page.erased.add(id); page.excluded.delete(id); }
         buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-fsb").forEach(btn => {
+      btn.addEventListener("click", () => {
+        collectEdits(page);
+        const id = btn.dataset.id;
+        page.fontScales = page.fontScales || {};
+        const cur = page.fontScales[id] || 1.0;
+        const next = Math.max(0.5, Math.min(2.5,
+          Math.round((cur + 0.1 * Number(btn.dataset.d)) * 10) / 10));
+        if (next === 1.0) delete page.fontScales[id]; else page.fontScales[id] = next;
+        // Update just this row's % readout without rebuilding the whole list.
+        const span = btn.parentElement.querySelector(".tl-fsv");
+        if (span) span.textContent = Math.round((page.fontScales[id] || 1) * 100) + "%";
       });
     });
     el.querySelectorAll(".tl-del").forEach(btn => {
@@ -952,6 +977,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           excluded: [...page.excluded], erased: [...(page.erased || [])], edits,
           font_scale: parseFloat(fontScale.value),
+          font_scales: page.fontScales || {},
           offsets: page.offsets || {},
           covers: page.covers || [],
           colors: page.colors || {},
@@ -1353,7 +1379,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
-      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {};
+      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

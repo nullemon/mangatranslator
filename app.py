@@ -597,6 +597,13 @@ async def rerender(task_id: str, request: Request):
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
     covers = payload.get("covers") or []
     colors = {str(k): v for k, v in (payload.get("colors") or {}).items()}
+    font_scales = {str(k): v for k, v in (payload.get("font_scales") or {}).items()}
+
+    def _scale(nid):
+        try:
+            return max(0.4, min(float(font_scales.get(nid, 1.0)), 3.0))
+        except (TypeError, ValueError):
+            return 1.0
 
     items = []
     for it in r.get("items", []):
@@ -624,6 +631,7 @@ async def rerender(task_id: str, request: Request):
             "dark": it.get("dark", False),
             "color": colors.get(nid, "auto"),
             "rotation": it.get("rotation", 0),
+            "font_scale": _scale(nid),
         })
 
     # Manually added text regions (drawn over missed / leftover spots).
@@ -643,6 +651,7 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": False,
             "manual": True,
             "color": colors.get(aid, "auto"),
+            "font_scale": _scale(aid),
         })
 
     all_items = items + added

@@ -343,6 +343,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-del:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-x{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.75rem;line-height:1;transition:.15s}
 .tl-x:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+.tl-fs{display:inline-flex;align-items:center;gap:.25rem;margin-left:.35rem}
+.tl-fsb{background:transparent;border:1px solid var(--border);color:var(--text-faint);min-width:24px;height:25px;border-radius:6px;cursor:pointer;font-size:.72rem;line-height:1;transition:.15s}
+.tl-fsb:hover{border-color:var(--accent);color:var(--accent)}
+.tl-fsv{font-size:.7rem;color:var(--text-faint);min-width:30px;text-align:center}
 .tl-erase{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
 .tl-erase:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-erase.on{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
