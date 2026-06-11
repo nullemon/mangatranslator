@@ -87,8 +87,10 @@ class FreeTextDetector:
             print(f"[text_detect] CRAFT failed, trying CV: {e}")
             return self._detect_cv(image, existing_boxes)
 
-        char_boxes = result.get("boxes", [])
-        if not char_boxes:
+        char_boxes = result.get("boxes")
+        # CRAFT returns boxes as a numpy array — test it explicitly, never with
+        # `if not char_boxes` (ambiguous truth value on a multi-element array).
+        if char_boxes is None or len(char_boxes) == 0:
             return self._detect_cv(image, existing_boxes)
 
         rects = []

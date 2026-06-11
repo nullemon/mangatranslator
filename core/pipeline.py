@@ -301,6 +301,20 @@ def _boxes_overlap(a, b, thresh=0.3) -> bool:
     return inter / smaller > thresh or center_in
 
 
+def _overlap_frac(a, b) -> float:
+    """Intersection area as a fraction of the smaller box — how strongly two
+    boxes coincide (used to match an LLM translation to a precise GPU bubble)."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    xi, yi = max(ax, bx), max(ay, by)
+    xf, yf = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    if xi >= xf or yi >= yf:
+        return 0.0
+    inter = (xf - xi) * (yf - yi)
+    smaller = max(min(aw * ah, bw * bh), 1)
+    return inter / smaller
+
+
 def make_detector(use_seg: bool = True):
     """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
     if use_seg:
@@ -529,11 +543,25 @@ class TranslationPipeline:
         LLM path returns nothing or is unavailable. Finally the manga-trained
         text-block detector supplements whatever was found with any block the
         other passes missed — each candidate is verified by OCR so a stray
-        detection just reads as no Japanese and is dropped."""
-        items = self._free_text_llm(image, bubble_regions, update)
+        detection just reads as no Japanese and is dropped.
+
+        Every pass is isolated: a failure in one detector degrades gracefully
+        (we keep what the others found) instead of crashing the whole page."""
+        items = []
+        try:
+            items = self._free_text_llm(image, bubble_regions, update)
+        except Exception as e:
+            print(f"[pipeline] LLM free-text pass failed: {e}")
         if not items:
-            items = self._free_text_cv(image, bubble_regions, update)
-        items += self._free_text_seg(image, bubble_regions, items, update)
+            try:
+                items = self._free_text_cv(image, bubble_regions, update)
+            except Exception as e:
+                print(f"[pipeline] CV free-text pass failed: {e}")
+                items = []
+        try:
+            items += self._free_text_seg(image, bubble_regions, items, update)
+        except Exception as e:
+            print(f"[pipeline] text-block free-text pass failed: {e}")
         return items
 
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
@@ -758,14 +786,24 @@ class TranslationPipeline:
         return items
 
     def _smart_detect(self, image, output_path, update):
+        """Hybrid detection: the vision-LLM reads + translates the page (good
+        translations, reading order, free text), while the GPU segmentation
+        model supplies the PRECISE balloon shape for every bubble. The LLM box
+        alone is a loose rectangle with no mask — that's what let text sprawl
+        across the art and skipped bubbles. Here each LLM translation is snapped
+        onto the bubble mask that overlaps it (so text is contained), and any
+        balloon the LLM missed is OCR'd + translated so nothing is left behind."""
+        from .ocr import _has_japanese
         update(1, "AI is analyzing the page...", 10)
-        detections = self.translator.smart_detect_and_translate(image, self.target_lang)
-        update(2, f"Found {len(detections)} text regions", 45)
-        if not detections:
-            return [], "", {}
+        try:
+            detections = self.translator.smart_detect_and_translate(image, self.target_lang)
+        except Exception as e:
+            print(f"[pipeline] smart detect failed, using standard detect: {e}")
+            return self._standard_detect(image, output_path, update)
+        update(2, f"Found {len(detections)} text regions", 35)
 
         h, w = image.shape[:2]
-        items = []
+        llm_items = []
         for i, det in enumerate(detections):
             x = max(0, min(int(det.get("x_pct", 0) / 100 * w), w - 1))
             y = max(0, min(int(det.get("y_pct", 0) / 100 * h), h - 1))
@@ -776,7 +814,7 @@ class TranslationPipeline:
                 rotation = float(det.get("rotation_deg", 0))
             except (ValueError, TypeError):
                 pass
-            items.append({
+            llm_items.append({
                 "id": i + 1,
                 "bbox": [x, y, bw, bh],
                 "original": det.get("original", ""),
@@ -786,7 +824,85 @@ class TranslationPipeline:
                 "dark": False,
                 "rotation": rotation,
             })
-        return items, "", {}
+
+        # GPU balloon masks: precise containment + recall for missed bubbles.
+        seg_regions = []
+        try:
+            update(2, "Locating balloons precisely (GPU)...", 42)
+            seg_regions = self.detector.detect(image)
+        except Exception as e:
+            print(f"[pipeline] seg detect in smart mode failed: {e}")
+
+        # No precise masks available (CPU-only / model absent): fall back to the
+        # LLM boxes alone, but route bubble text through the free-text path so
+        # it's contained to its strokes rather than a loose oversized box.
+        if not seg_regions:
+            for it in llm_items:
+                it["in_bubble"] = False
+            return llm_items, "", {}
+
+        masks: Dict[int, Any] = {}
+        items: List[dict] = []
+        matched = set()
+
+        # 1) Snap each precise bubble to the LLM translation that overlaps it.
+        for reg in seg_regions:
+            rb = [int(v) for v in reg.bbox]
+            best, best_ov = None, 0.0
+            for it in llm_items:
+                if id(it) in matched or it.get("in_bubble") is False:
+                    continue
+                ov = _overlap_frac(rb, it["bbox"])
+                if ov > best_ov:
+                    best, best_ov = it, ov
+            if best is not None and best_ov >= 0.2:
+                matched.add(id(best))
+                items.append({
+                    "id": reg.id, "bbox": rb,
+                    "original": best.get("original", ""),
+                    "translation": best.get("translation", ""),
+                    "type": best.get("type", "dialogue"),
+                    "in_bubble": True,
+                    "dark": bool(getattr(reg, "dark", False)),
+                    "rotation": 0.0,
+                })
+                masks[reg.id] = reg.mask
+                continue
+            # Bubble the LLM missed entirely → read it locally and translate.
+            jp = ""
+            if self.ocr is not None and self.ocr.ok:
+                jp = (self.ocr.read_region(image, rb, getattr(reg, "mask", None)) or "").strip()
+            if not jp or not _has_japanese(jp):
+                continue
+            tr = ""
+            try:
+                out = self.translator.translate_texts({reg.id: jp}, self.target_lang)
+                tr = ((out.get(reg.id) or {}).get("translation") or "").strip()
+            except Exception as e:
+                print(f"[pipeline] missed-bubble translate failed: {e}")
+            if not tr:
+                continue
+            items.append({
+                "id": reg.id, "bbox": rb, "original": jp, "translation": tr,
+                "type": "dialogue", "in_bubble": True,
+                "dark": bool(getattr(reg, "dark", False)), "rotation": 0.0,
+            })
+            masks[reg.id] = reg.mask
+
+        # 2) LLM detections with no matching balloon = free text over artwork.
+        #    Keep them, but as free text so the compositor contains them to the
+        #    actual lettering strokes instead of a loose rectangle.
+        next_id = max([r.id for r in seg_regions] + [0]) + 1
+        for it in llm_items:
+            if id(it) in matched:
+                continue
+            it["id"] = next_id
+            next_id += 1
+            it["in_bubble"] = False
+            items.append(it)
+
+        update(2, f"Placed {len(items)} regions ({len(masks)} masked)", 50)
+        return items, "", masks
 
     # ── Re-render with an edited / filtered item set ──
     def recompose(self, base_path: str, items: List[dict], output_path: str,
