@@ -717,7 +717,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       pageResult.style.display = "none";
       pageProcessing.style.display = "";
-      stepsEl.style.display = scanOnly ? "none" : "";
+      stepsEl.style.display = noTranslate ? "none" : "";
       progressBarWrap.style.display = "";
       retryPageBtn.style.display = "none";
       updateSteps(p);
