@@ -1026,6 +1026,7 @@ document.addEventListener("DOMContentLoaded", () => {
     edit: "Click any translation to fix its text.",
     cover: "Drag a box over a watermark or leftover text to erase it, then Apply & Re-render.",
     lasso: "Draw a free-form outline around anything (weird shapes) — it's content-aware erased. Then Apply & Re-render.",
+    "lasso-add": "Beta: draw a free-form shape over missed text — it's OCR'd and auto-translated. Edit, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
   };
 
@@ -1039,15 +1040,40 @@ document.addEventListener("DOMContentLoaded", () => {
     liberal: "Localize liberally — rephrase freely so it reads like it was "
       + "originally written in the target language; prioritize natural flow and impact.",
   };
+  const glossary = document.getElementById("glossary");
   function styleText() {
     const preset = STYLE_PRESETS[transStyle ? transStyle.value : "natural"] || "";
     const user = stylePrompt && stylePrompt.value.trim() ? stylePrompt.value.trim() : "";
-    return [preset, user].filter(Boolean).join("\n");
+    const gl = (betaOn() && glossary && glossary.value.trim())
+      ? "GLOSSARY — translate these names/terms EXACTLY and consistently on "
+        + "every page:\n" + glossary.value.trim()
+      : "";
+    return [preset, gl, user].filter(Boolean).join("\n");
   }
   if (transStyle) {
     transStyle.value = localStorage.getItem("manga_trans_style") || "natural";
     transStyle.addEventListener("change", () =>
       localStorage.setItem("manga_trans_style", transStyle.value));
+  }
+
+  // ── Beta features: a master switch that reveals experimental tools ──
+  const betaMode = document.getElementById("betaMode");
+  function betaOn() { return !!(betaMode && betaMode.checked); }
+  function applyBeta() { document.body.classList.toggle("beta", betaOn()); }
+  if (betaMode) {
+    betaMode.checked = localStorage.getItem("manga_beta") === "1";
+    applyBeta();
+    betaMode.addEventListener("change", () => {
+      localStorage.setItem("manga_beta", betaMode.checked ? "1" : "0");
+      applyBeta();
+      const p = getActive();
+      if (p) { buildTranslationsList(p); if (tool) buildOverlay(); }
+    });
+  }
+  if (glossary) {
+    glossary.value = localStorage.getItem("manga_glossary") || "";
+    glossary.addEventListener("input", () =>
+      localStorage.setItem("manga_glossary", glossary.value));
   }
 
   const rescanBtn = document.getElementById("rescanBtn");
@@ -1402,17 +1428,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const NS = "http://www.w3.org/2000/svg";
     let drawing = false, pts = [], svg = null, poly = null;
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "lasso") return;
+      if (tool !== "lasso" && tool !== "lasso-add") return;
       if (e.target !== moveLayer) return;
       const page = getActive(); if (!page || !curDims()) return;
       drawing = true; pts = [];
+      const add = tool === "lasso-add";
       svg = document.createElementNS(NS, "svg");
       svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6";
       svg.setAttribute("viewBox", "0 0 100 100");
       svg.setAttribute("preserveAspectRatio", "none");
       poly = document.createElementNS(NS, "polyline");
-      poly.setAttribute("fill", "rgba(220,38,38,.18)");
-      poly.setAttribute("stroke", "#dc2626");
+      poly.setAttribute("fill", add ? "rgba(22,163,74,.18)" : "rgba(220,38,38,.18)");
+      poly.setAttribute("stroke", add ? "#16a34a" : "#dc2626");
       poly.setAttribute("stroke-width", "0.5");
       svg.appendChild(poly); moveLayer.appendChild(svg);
       const r = moveLayer.getBoundingClientRect();
@@ -1434,10 +1461,23 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!page || !dims || pts.length < 3) { pts = []; return; }
       const [W, H] = dims;
       const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
+      const wasAdd = tool === "lasso-add";
       pts = [];
-      page.covers = page.covers || [];
-      page.covers.push({ poly: polyImg });
-      buildOverlay();
+      if (wasAdd) {
+        // Free-form add: OCR + translate the shape's bbox, and erase the exact
+        // outlined shape (content-aware) so odd-shaped backgrounds stay clean.
+        const xs = polyImg.map(p => p[0]), ys = polyImg.map(p => p[1]);
+        const x = Math.min(...xs), y = Math.min(...ys);
+        const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+        page.covers = page.covers || [];
+        page.covers.push({ poly: polyImg });
+        if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h]);
+        else buildOverlay();
+      } else {
+        page.covers = page.covers || [];
+        page.covers.push({ poly: polyImg });
+        buildOverlay();
+      }
     };
     moveLayer.addEventListener("pointerup", finishLasso);
     moveLayer.addEventListener("pointercancel", finishLasso);

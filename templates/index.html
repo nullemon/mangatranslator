@@ -169,10 +169,17 @@
         <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
         <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
       </div>
+      <div class="setting-group prompt-group beta-only" style="grid-column:1/-1;flex-basis:100%;width:100%">
+        <label for="glossary">Glossary <span class="muted">(beta — names/terms kept consistent every page)</span></label>
+        <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
+      </div>
       <div class="setting-group" style="grid-column:1/-1;flex-basis:100%;width:100%;flex-direction:row;align-items:center;gap:.6rem">
         <span class="muted" style="font-size:.78rem">All settings save automatically and restore on reload.</span>
         <button type="button" class="btn btn-ghost btn-sm" id="resetSettings" title="Clear saved defaults (keeps API keys)">Reset defaults</button>
         <button type="button" class="btn btn-ghost btn-sm" id="checkSystem" title="Show which detection / GPU / Arabic components are active">System status</button>
+        <label class="beta-toggle" title="Turn on experimental features (glossary, free-form add, undo/redo, …)">
+          <input type="checkbox" id="betaMode"> <span>Beta features</span>
+        </label>
         <span id="systemStatus" class="muted" style="font-size:.74rem"></span>
       </div>
     </div>
@@ -370,6 +377,7 @@
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="cover" title="Drag a box over a watermark or leftover text to erase it">⌫ Erase</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso" title="Draw a free-form shape around anything (weird shapes) — content-aware erases it">⬡ Lasso erase</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
+              <button class="btn btn-ghost btn-sm tool-btn beta-only" data-tool="lasso-add" title="Beta: draw a free-form shape over missed text — it auto-OCRs &amp; translates">⬡＋ Lasso add</button>
               <button class="btn btn-ghost btn-sm" id="rescanBtn" title="Re-scan this page with AI and add any text it missed (keeps your edits)">🔍 Find missed text</button>
             </div>
             <span class="edit-hint" id="editHint">Pick a tool to fix anything by hand.</span>
