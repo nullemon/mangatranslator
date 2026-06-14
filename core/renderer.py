@@ -497,7 +497,23 @@ class TextRenderer:
         """Wrap into lines of even length (professional manga lettering keeps
         lines balanced, not greedy-ragged). Greedy first to find the natural
         line count, then the narrowest width that still fits that count —
-        every line stays ≤ max_w, so fit checks remain valid."""
+        every line stays ≤ max_w, so fit checks remain valid.
+
+        If the text contains explicit line breaks, those are HONORED exactly (so
+        you can lay a line out by hand in the editor); a manual line that's still
+        too wide is wrapped, but your breaks are kept."""
+        if "\n" in text:
+            out = []
+            for seg in text.split("\n"):
+                seg = seg.strip()
+                if not seg:
+                    out.append("")            # blank line = deliberate gap
+                elif self._line_w(draw, seg, font) <= max_w:
+                    out.append(seg)
+                else:
+                    out.extend(self._wrap_greedy(seg.split(), font, max_w, draw))
+            return out or [text]
+
         words = text.split()
         if not words:
             return [text]
