@@ -905,6 +905,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     el.querySelectorAll(".tl-x").forEach(btn => {
       btn.addEventListener("click", () => {
+        pushUndo(page);
         collectEdits(page);
         const id = btn.dataset.id;
         if (page.excluded.has(id)) page.excluded.delete(id); else page.excluded.add(id);
@@ -913,6 +914,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     el.querySelectorAll(".tl-erase").forEach(btn => {
       btn.addEventListener("click", () => {
+        pushUndo(page);
         collectEdits(page);
         const id = btn.dataset.id;
         page.erased = page.erased || new Set();
@@ -923,6 +925,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     el.querySelectorAll(".tl-glow").forEach(btn => {
       btn.addEventListener("click", () => {
+        pushUndo(page);
         collectEdits(page);
         const id = btn.dataset.id;
         page.glows = page.glows || new Set();
@@ -932,6 +935,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     el.querySelectorAll(".tl-fsb").forEach(btn => {
       btn.addEventListener("click", () => {
+        pushUndo(page);
         collectEdits(page);
         const id = btn.dataset.id;
         page.fontScales = page.fontScales || {};
@@ -1075,6 +1079,58 @@ document.addEventListener("DOMContentLoaded", () => {
     glossary.addEventListener("input", () =>
       localStorage.setItem("manga_glossary", glossary.value));
   }
+
+  // ── Undo / Redo (beta): snapshot the page's edit state before each change ──
+  function _snapshot(page) {
+    return JSON.stringify({
+      excluded: [...(page.excluded || [])], erased: [...(page.erased || [])],
+      glows: [...(page.glows || [])], offsets: page.offsets || {},
+      colors: page.colors || {}, fontScales: page.fontScales || {},
+      boxes: page.boxes || {}, covers: page.covers || [],
+      added: (page.added || []).map(a => ({ ...a })),
+      trans: (page.items || []).map(it => it.translation || ""),
+    });
+  }
+  function _restore(page, str) {
+    const s = JSON.parse(str);
+    page.excluded = new Set(s.excluded); page.erased = new Set(s.erased);
+    page.glows = new Set(s.glows); page.offsets = s.offsets; page.colors = s.colors;
+    page.fontScales = s.fontScales; page.boxes = s.boxes; page.covers = s.covers;
+    page.added = s.added;
+    (page.items || []).forEach((it, i) => { if (i < s.trans.length) it.translation = s.trans[i]; });
+  }
+  function pushUndo(page) {
+    if (!betaOn() || !page) return;
+    page._undo = page._undo || []; page._redo = [];
+    page._undo.push(_snapshot(page));
+    if (page._undo.length > 40) page._undo.shift();
+  }
+  function doUndo() {
+    const page = getActive();
+    if (!page || !(page._undo && page._undo.length)) return;
+    page._redo = page._redo || []; page._redo.push(_snapshot(page));
+    _restore(page, page._undo.pop());
+    buildTranslationsList(page); if (tool) buildOverlay();
+    if (editHint) editHint.textContent = "Undid last change. Apply & Re-render to see it.";
+  }
+  function doRedo() {
+    const page = getActive();
+    if (!page || !(page._redo && page._redo.length)) return;
+    page._undo = page._undo || []; page._undo.push(_snapshot(page));
+    _restore(page, page._redo.pop());
+    buildTranslationsList(page); if (tool) buildOverlay();
+  }
+  document.addEventListener("keydown", e => {
+    if (!betaOn()) return;
+    const k = (e.key || "").toLowerCase();
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && k === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); }
+    else if (mod && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); doRedo(); }
+  });
+  const undoBtn = document.getElementById("undoBtn");
+  const redoBtn = document.getElementById("redoBtn");
+  if (undoBtn) undoBtn.addEventListener("click", doUndo);
+  if (redoBtn) redoBtn.addEventListener("click", doRedo);
 
   const rescanBtn = document.getElementById("rescanBtn");
   if (rescanBtn) rescanBtn.addEventListener("click", async () => {
@@ -1228,6 +1284,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let mode = null, sx, sy, base;
     function down(e, m) {
       e.preventDefault(); e.stopPropagation();
+      pushUndo(page);
       mode = m; sx = e.clientX; sy = e.clientY; base = cur();
       box.classList.add("dragging");
       try { box.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1280,6 +1337,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let startX, startY, baseX, baseY, dragging = false;
     box.addEventListener("pointerdown", e => {
       e.preventDefault();
+      pushUndo(page);
       dragging = true;
       box.classList.add("dragging");
       try { box.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1412,6 +1470,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const h = Math.round(Math.abs(cy - sy) / r.height * H);
       if (w < 6 || h < 6) return;
       page.covers = page.covers || []; page.added = page.added || [];
+      pushUndo(page);
       if (tool === "cover") {
         page.covers.push([x, y, w, h]);
         buildOverlay();
@@ -1459,6 +1518,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (svg) { svg.remove(); svg = null; }
       const page = getActive(), dims = curDims();
       if (!page || !dims || pts.length < 3) { pts = []; return; }
+      pushUndo(page);
       const [W, H] = dims;
       const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
       const wasAdd = tool === "lasso-add";
