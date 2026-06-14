@@ -419,7 +419,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), erased: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+        excluded: new Set(), erased: new Set(), glows: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
       });
     }
 
@@ -659,6 +659,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.excluded = new Set();
             page.erased = new Set();
             page.fontScales = {};
+            page.glows = new Set();
             page.boxes = {};
             page.rev++;
             renderStrip(); updateBatch();
@@ -854,6 +855,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
+          <button class="tl-glow${page.glows && page.glows.has(String(it.id)) ? " on" : ""}" title="Add a soft outer glow (match stylized/glowing original text)" data-id="${it.id}">✨</button>
           <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
         </div>
@@ -919,6 +921,15 @@ document.addEventListener("DOMContentLoaded", () => {
         buildTranslationsList(page);
       });
     });
+    el.querySelectorAll(".tl-glow").forEach(btn => {
+      btn.addEventListener("click", () => {
+        collectEdits(page);
+        const id = btn.dataset.id;
+        page.glows = page.glows || new Set();
+        if (page.glows.has(id)) page.glows.delete(id); else page.glows.add(id);
+        btn.classList.toggle("on");
+      });
+    });
     el.querySelectorAll(".tl-fsb").forEach(btn => {
       btn.addEventListener("click", () => {
         collectEdits(page);
@@ -977,7 +988,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/rerender/${page.taskId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          excluded: [...page.excluded], erased: [...(page.erased || [])], edits,
+          excluded: [...page.excluded], erased: [...(page.erased || [])],
+          glows: [...(page.glows || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
           boxes: page.boxes || {},
@@ -1569,7 +1581,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
-      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.glows = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

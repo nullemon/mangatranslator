@@ -366,6 +366,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-fsb{background:transparent;border:1px solid var(--border);color:var(--text-faint);min-width:24px;height:25px;border-radius:6px;cursor:pointer;font-size:.72rem;line-height:1;transition:.15s}
 .tl-fsb:hover{border-color:var(--accent);color:var(--accent)}
 .tl-fsv{font-size:.7rem;color:var(--text-faint);min-width:30px;text-align:center}
+.tl-glow{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
+.tl-glow:hover{border-color:var(--accent);color:var(--accent)}
+.tl-glow.on{border-color:var(--accent);color:var(--accent);background:var(--ring)}
 .tl-erase{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
 .tl-erase:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-erase.on{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}

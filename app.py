@@ -665,6 +665,7 @@ async def rerender(task_id: str, request: Request):
         raise HTTPException(400, "Invalid JSON body")
     excluded = {str(i) for i in payload.get("excluded", [])}
     erased = {str(i) for i in payload.get("erased", [])}
+    glows = {str(i) for i in payload.get("glows", [])}
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
@@ -717,6 +718,7 @@ async def rerender(task_id: str, request: Request):
             "color": colors.get(nid, "auto"),
             "rotation": it.get("rotation", 0),
             "font_scale": _scale(nid),
+            "glow": nid in glows,
             # A box the user resized by hand is authoritative — the compositor
             # must use it as-is (erase + fit text to it), not re-shrink it.
             "manual_box": nid in boxes,

@@ -66,6 +66,11 @@ class Compositor:
             s = 1.0
         return max(0.4, min(s, 3.0))
 
+    @staticmethod
+    def _item_glow(it: dict) -> bool:
+        """Per-region soft-glow style (editor toggle), for stylized lines."""
+        return bool(it.get("glow"))
+
     def compose(
         self,
         image: np.ndarray,
@@ -145,7 +150,7 @@ class Compositor:
                         edited_rects.append(tuple(int(v) for v in touched))
                         if self.replace_watermark and self.watermark_text:
                             placements.append((rect, self.watermark_text,
-                                               self._pick_color(dark, it), False, 0, 1.0))
+                                               self._pick_color(dark, it), False, 0, 1.0, False))
                         it["placed"] = True
                 continue
 
@@ -187,7 +192,7 @@ class Compositor:
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it)))
+                               self._item_scale(it), self._item_glow(it)))
                 it["placed"] = True
                 continue
 
@@ -227,7 +232,7 @@ class Compositor:
                 it["bbox"] = [int(v) for v in rect]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it)))
+                               self._item_scale(it), self._item_glow(it)))
                 it["placed"] = True
                 continue
 
@@ -288,23 +293,23 @@ class Compositor:
             edited_rects.append(tuple(int(v) for v in bb))
             color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color, ital, 0,
-                               self._item_scale(it)))
+                               self._item_scale(it), self._item_glow(it)))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
         # AI box can push one past the edge, which is how text ended up out of
         # bounds. Clamp every rect to the page before anything is drawn.
         placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs)
-            for r, t, c, i, ro, fs in placements
+            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl)
+            for r, t, c, i, ro, fs, gl in placements
         ]
         placements = [p for p in placements if p[0] is not None]
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale in placements:
+            for rect, text, color, ital, rot, fscale, glow in placements:
                 self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
-                                           rotation=rot, scale=fscale)
+                                           rotation=rot, scale=fscale, glow=glow)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         # Hard guarantee: only the exact regions we edited may differ from the
@@ -312,7 +317,7 @@ class Compositor:
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
         placement_rects = []
-        for rect, text, color, ital, rot, fscale in placements:
+        for rect, text, color, ital, rot, fscale, glow in placements:
             placement_rects.append(self._rotated_aabb(rect, rot))
 
         edited = np.zeros((h, w), np.uint8)

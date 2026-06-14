@@ -1,7 +1,7 @@
 import math
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, features
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, features
 from typing import List, Tuple, Optional, Dict
 import os
 
@@ -251,6 +251,26 @@ class TextRenderer:
     ) -> Image.Image:
         return self.draw_in_rect(image, region.bbox, text, (0, 0, 0))
 
+    def _draw_with_glow(self, image, rect, text, color, italic, rotation, scale,
+                        glow_color=(255, 255, 255)):
+        """Draw the text with a soft outer halo behind it — for stylized lines
+        (e.g. glowing Japanese narration). The text is rendered to a transparent
+        layer, a blurred halo is built from its shape and painted under it, then
+        the crisp text goes on top. Works on the page's RGB image in place."""
+        layer = Image.new("RGBA", (image.width, image.height), (0, 0, 0, 0))
+        self.draw_in_rect(layer, rect, text, color, italic, rotation, scale, glow=False)
+        alpha = layer.split()[3]
+        if not alpha.getbbox():          # nothing drawn
+            return image
+        spread = max(3, int(rect[3] * 0.012) | 1)   # halo thickness ~ text size
+        halo = alpha.filter(ImageFilter.MaxFilter(spread)).filter(
+            ImageFilter.GaussianBlur(spread))
+        solid = Image.new("RGB", image.size, glow_color)
+        image.paste(solid, (0, 0), halo)   # paint the halo
+        image.paste(solid, (0, 0), halo)   # twice → a bit more intensity
+        image.paste(layer, (0, 0), layer)  # crisp text on top
+        return image
+
     def draw_in_rect(
         self,
         image: Image.Image,
@@ -260,6 +280,7 @@ class TextRenderer:
         italic: bool = False,
         rotation: float = 0,
         scale: float = 1.0,
+        glow: bool = False,
     ) -> Image.Image:
         """Fit `text` (wrapped, auto-sized, centered) inside `rect`.
 
@@ -271,7 +292,11 @@ class TextRenderer:
         original Japanese.
         `scale` multiplies the auto-fitted size for a single region (the editor's
         per-bubble A-/A+ control), so one bubble can be enlarged past the default
-        fit without changing every other bubble."""
+        fit without changing every other bubble.
+        `glow` adds a soft outer halo behind the text (to match stylized
+        Japanese narration that has an outer glow) — opt-in, for rare lines."""
+        if glow:
+            return self._draw_with_glow(image, rect, text, color, italic, rotation, scale)
         if self.uppercase:
             text = text.upper()
         text = self._normalize_text(text)
