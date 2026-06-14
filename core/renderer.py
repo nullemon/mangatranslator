@@ -438,7 +438,10 @@ class TextRenderer:
     def _optimal_size(
         self, text: str, max_w: int, max_h: int, draw: ImageDraw.ImageDraw
     ) -> int:
-        upper = min(max_w, max_h, 150)
+        # Cap high enough that a short line in a big bubble/box can actually get
+        # large (the old 150 cap made titles & one-word lines look tiny). The
+        # binary search below still guarantees it fits the width and height.
+        upper = min(max_w, max_h, 400)
         upper = max(upper, self.min_font_size)
 
         best = self.min_font_size

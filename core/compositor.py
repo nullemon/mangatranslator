@@ -160,11 +160,13 @@ class Compositor:
             if abs(rotation) > 45:
                 rotation = 0
 
-            # Manually added text, OR a free-text box the user resized by hand:
-            # erase whatever's inside and fit the translation to EXACTLY the box
-            # they drew (no auto-refine that would shrink it back). This is what
-            # lets a too-small box on giant vertical title text be fixed by hand.
-            if it.get("manual") or (it.get("manual_box") and it.get("in_bubble") is False):
+            # Manually added text, OR any box the user resized by hand: erase
+            # whatever's inside and fit the translation to EXACTLY that box, with
+            # no auto-refine and no bubble-mask. This covers giant title text the
+            # detector wrongly treats as a bubble (so the translation lands in a
+            # tiny pocket inside the lettering instead of replacing the whole
+            # thing) — resizing the box now fixes it whatever its classification.
+            if it.get("manual") or it.get("manual_box"):
                 bx = max(0, min(bx, w - 1))
                 by = max(0, min(by, h - 1))
                 bw = min(bw, w - bx)
@@ -821,4 +823,16 @@ class Compositor:
                     l, r, t, b = nl, nr, nt, nb
                     grew = True
 
-        return (px - l, py - t, l + r, t + b)
+        # The strictly-inscribed rectangle only covers ~70% of a round/oval
+        # balloon, which makes short lines look tiny with lots of empty space.
+        # Grow it partway toward the balloon's bounding box so the text fills the
+        # bubble like real lettering (a little reach toward the curved edges is
+        # fine — text rarely fills the very corners).
+        ix, iy, iw, ih = px - l, py - t, l + r, t + b
+        bx, by, bw, bh = cv2.boundingRect(mask)
+        g = 0.45
+        nx = int(round(ix - (ix - bx) * g))
+        ny = int(round(iy - (iy - by) * g))
+        nx2 = int(round((ix + iw) + ((bx + bw) - (ix + iw)) * g))
+        ny2 = int(round((iy + ih) + ((by + bh) - (iy + ih)) * g))
+        return (nx, ny, max(nx2 - nx, 8), max(ny2 - ny, 8))
