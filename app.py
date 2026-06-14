@@ -123,6 +123,43 @@ def _git_commit() -> str:
 _SERVER_COMMIT = _git_commit()
 print(f"[app] ===== MangaTranslator server starting — commit {_SERVER_COMMIT} =====")
 
+LAST_TRANSLATE_TASK = None  # most recent /api/translate task, for /api/debug
+
+
+def _debug_dump(tid):
+    """Human-readable dump of what was detected on a page — text + boxes — so a
+    detection problem can be diagnosed by pasting the output, no screenshots."""
+    t = tasks.get(tid) or {}
+    r = t.get("result") or {}
+    items = r.get("items", [])
+    head = [
+        f"build {_SERVER_COMMIT}   task {tid}",
+        f"src={t.get('source_lang')} -> {t.get('target_lang')}   "
+        f"smart={t.get('smart_mode')}   regions={len(items)}",
+        "-" * 70,
+    ]
+    rows = []
+    for it in items:
+        o = (it.get("original") or "").replace("\n", " ")[:22]
+        tr = (it.get("translation") or "").replace("\n", " ")[:38]
+        rows.append(
+            f"#{it.get('id'):>3} {str(it.get('type','')):9} "
+            f"bubble={str(it.get('in_bubble'))[0]} placed={str(it.get('placed'))[0]} "
+            f"bbox={it.get('bbox')}  {o!r} -> {tr!r}")
+    if not items:
+        rows.append("(no regions — nothing was detected/translated on this page)")
+    return Response("\n".join(head + rows), media_type="text/plain")
+
+
+@app.get("/api/debug")
+async def debug_last():
+    return _debug_dump(LAST_TRANSLATE_TASK)
+
+
+@app.get("/api/debug/{task_id}")
+async def debug_task(task_id: str):
+    return _debug_dump(task_id)
+
 
 @app.get("/api/health")
 async def health(refresh: bool = False):
@@ -165,6 +202,8 @@ async def translate(
         raise HTTPException(400, "Upload an image file")
 
     task_id = str(uuid.uuid4())
+    global LAST_TRANSLATE_TASK
+    LAST_TRANSLATE_TASK = task_id
     ext = Path(file.filename or "img.png").suffix or ".png"
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}{ext}"
@@ -193,6 +232,8 @@ async def translate(
         "name": file.filename or "page.png",
         "mode": "translate",
         "source_lang": source_lang,
+        "target_lang": target_lang,
+        "smart_mode": smart_mode == "true",
         "translate_sfx": translate_sfx == "true",
         "max_quality": max_quality == "true",
         "remove_watermark": remove_watermark == "true",
