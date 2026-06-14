@@ -214,7 +214,10 @@ class Compositor:
                         pad = max(3, min(bw, bh) // 12)
                         rect = (bx + pad, by + pad,
                                 max(bw - 2 * pad, 8), max(bh - 2 * pad, 8))
-                it["bbox"] = [int(v) for v in bb]
+                # Store the TIGHT text rect as the region's box (not the ballooned
+                # refine box) so the editor handle hugs the words — "same size as
+                # the text or a touch bigger", not a giant rectangle.
+                it["bbox"] = [int(v) for v in rect]
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
                                self._item_scale(it)))
