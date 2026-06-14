@@ -731,7 +731,7 @@ class TranslationPipeline:
             update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
             if id_to_text:
                 try:
-                    out = self.translator.translate_texts(id_to_text, self.target_lang)
+                    out = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
                     # keep the OCR'd original text for the editor view
                     for rid, jp in id_to_text.items():
                         out.setdefault(rid, {})
@@ -950,7 +950,7 @@ class TranslationPipeline:
 
         update(2, f"Translating {len(id_to_text)} extra text blocks...", 56)
         try:
-            translations = self.translator.translate_texts(id_to_text, self.target_lang)
+            translations = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
         except Exception as e:
             print(f"[pipeline] extra block translation failed: {e}")
             return []
@@ -1007,7 +1007,7 @@ class TranslationPipeline:
 
         update(2, f"Translating {len(id_to_text)} free text regions...", 55)
         try:
-            translations = self.translator.translate_texts(id_to_text, self.target_lang)
+            translations = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
         except Exception as e:
             print(f"[pipeline] free-text translation failed: {e}")
             return []
@@ -1131,7 +1131,7 @@ class TranslationPipeline:
                 continue
             tr = ""
             try:
-                out = self.translator.translate_texts({reg.id: jp}, self.target_lang)
+                out = self.translator.translate_texts({reg.id: jp}, self.target_lang, image=image)
                 tr = ((out.get(reg.id) or {}).get("translation") or "").strip()
             except Exception as e:
                 print(f"[pipeline] missed-bubble translate failed: {e}")

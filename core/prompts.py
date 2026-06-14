@@ -226,13 +226,19 @@ Return ONLY the JSON array.{_style_block(style)}"""
 
 def text_translate_prompt(target_lang: str, style: str = "",
                           source_lang: str = "Japanese",
-                          translate_sfx: bool = False) -> str:
+                          translate_sfx: bool = False,
+                          with_image: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
+    img_line = (
+        "\nYou are ALSO shown the manga page image. READ THE PANEL — the "
+        "characters, their expressions and the action — and translate to fit "
+        "what is actually happening, not a literal word-for-word of the text.\n"
+        if with_image else "")
     return f"""You are an expert manga translator localizing for an official
 {target_lang} release. Below is a JSON object mapping each speech-bubble id to
 the {src} text that was read from that bubble (by OCR). Translate every
 entry into natural, punchy {target_lang}.
-{_manga_context(target_lang)}
+{img_line}{_manga_context(target_lang)}
 The ids are in reading order; treat them as one flowing conversation.
 
 Return ONLY a JSON array — no markdown fences, no commentary:

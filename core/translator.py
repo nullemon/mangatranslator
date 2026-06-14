@@ -102,11 +102,17 @@ class ClaudeTranslator:
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         return prompts.extract_json_array(text)
 
-    def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
+    def translate_texts(self, id_to_text: dict, target_lang="English",
+                        image=None) -> Dict[int, dict]:
         prompt = prompts.text_translate_prompt(
-            target_lang, self.style, self.source_lang, self.translate_sfx)
+            target_lang, self.style, self.source_lang, self.translate_sfx,
+            with_image=image is not None)
         payload = json.dumps(id_to_text, ensure_ascii=False)
-        text = self._ask([{"type": "text", "text": prompt + "\n\n" + payload}])
+        content = []
+        if image is not None:
+            content.append(self._image_block(image))  # panel context for the AI
+        content.append({"type": "text", "text": prompt + "\n\n" + payload})
+        text = self._ask(content)
         return _to_region_dict(prompts.extract_json_array(text))
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
@@ -180,11 +186,17 @@ class GeminiTranslator:
         text = self._ask([{"text": prompt}, self._image_part(image)])
         return prompts.extract_json_array(text)
 
-    def translate_texts(self, id_to_text: dict, target_lang="English") -> Dict[int, dict]:
+    def translate_texts(self, id_to_text: dict, target_lang="English",
+                        image=None) -> Dict[int, dict]:
         prompt = prompts.text_translate_prompt(
-            target_lang, self.style, self.source_lang, self.translate_sfx)
+            target_lang, self.style, self.source_lang, self.translate_sfx,
+            with_image=image is not None)
         payload = json.dumps(id_to_text, ensure_ascii=False)
-        text = self._ask([{"text": prompt + "\n\n" + payload}])
+        parts = []
+        if image is not None:
+            parts.append(self._image_part(image))  # panel context for the AI
+        parts.append({"text": prompt + "\n\n" + payload})
+        text = self._ask(parts)
         return _to_region_dict(prompts.extract_json_array(text))
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:

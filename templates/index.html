@@ -157,6 +157,14 @@
         </label>
         <span class="toggle-hint">Drop the Watermark text above into the spot the site watermark was erased from (instead of stamping it across the page).</span>
       </div>
+      <div class="setting-group">
+        <label for="transStyle">Translation Approach</label>
+        <select id="transStyle">
+          <option value="natural">Natural — read the panel, localize (recommended)</option>
+          <option value="literal">Literal — faithful, close to original wording</option>
+          <option value="liberal">Liberal — punchy, rewritten for flow</option>
+        </select>
+      </div>
       <div class="setting-group prompt-group" style="grid-column:1/-1;flex-basis:100%;width:100%">
         <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
         <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>

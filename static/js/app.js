@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const translateSfx   = document.getElementById("translateSfx");
   const maxQuality     = document.getElementById("maxQuality");
+  const transStyle     = document.getElementById("transStyle");
   const removeWatermark= document.getElementById("removeWatermark");
   const replaceWatermark=document.getElementById("replaceWatermark");
   const hdUpscale      = document.getElementById("hdUpscale");
@@ -595,9 +596,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("font", fontSelect.value);
       f.append("text_case", textCase ? textCase.value : "upper");
       f.append("finish", pageFinish ? pageFinish.value : "clean");
-      if (stylePrompt && stylePrompt.value.trim()) {
-        f.append("style_prompt", stylePrompt.value.trim());
-      }
+      const st = styleText();
+      if (st) f.append("style_prompt", st);
       f.append("enhance", needsScan(workflow) ? "true" : "false");
       if (needsScan(workflow)) {
         f.append("enhance_provider", enhanceProvider.value);
@@ -1019,6 +1019,24 @@ document.addEventListener("DOMContentLoaded", () => {
   toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
   editApply.addEventListener("click", () => applyChanges(editApply));
 
+  const STYLE_PRESETS = {
+    natural: "",
+    literal: "Translate faithfully and accurately — stay close to the original "
+      + "wording and meaning; prefer fidelity over flourish.",
+    liberal: "Localize liberally — rephrase freely so it reads like it was "
+      + "originally written in the target language; prioritize natural flow and impact.",
+  };
+  function styleText() {
+    const preset = STYLE_PRESETS[transStyle ? transStyle.value : "natural"] || "";
+    const user = stylePrompt && stylePrompt.value.trim() ? stylePrompt.value.trim() : "";
+    return [preset, user].filter(Boolean).join("\n");
+  }
+  if (transStyle) {
+    transStyle.value = localStorage.getItem("manga_trans_style") || "natural";
+    transStyle.addEventListener("change", () =>
+      localStorage.setItem("manga_trans_style", transStyle.value));
+  }
+
   const rescanBtn = document.getElementById("rescanBtn");
   if (rescanBtn) rescanBtn.addEventListener("click", async () => {
     const page = getActive();
@@ -1035,7 +1053,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           api_key: key, target_lang: targetLang.value,
           provider: engineSelect.value, model: modelSelect.value,
-          style_prompt: stylePrompt ? stylePrompt.value.trim() : "",
+          style_prompt: styleText(),
         }),
       });
       const data = await res.json();
