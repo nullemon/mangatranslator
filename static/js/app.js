@@ -130,6 +130,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const h = await fetch("/api/health?refresh=true").then(r => r.json());
         const on = v => v ? "✓" : "✗";
         systemStatus.innerHTML =
+          `<b>build ${h.server_commit || "?"}</b> · ` +
           `GPU:${on(h.cuda)}${h.gpu ? " (" + h.gpu + ")" : ""} · ` +
           `seg:${on(h.balloon_seg_yolo)} · ocr:${on(h.manga_ocr)} · ` +
           `lama:${on(h.lama_inpaint)} · text-seg:${on(h.weights && h.weights.comic_text_detector)} · ` +

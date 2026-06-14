@@ -107,14 +107,32 @@ def _asset_version() -> str:
 _HEALTH_CACHE = {}
 
 
+def _git_commit() -> str:
+    """Short commit the server is running, so the UI/logs can prove whether the
+    backend was actually restarted on the latest code (a frequent source of
+    'the fix didn't work' — the browser updated but app.py wasn't restarted)."""
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL).strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+_SERVER_COMMIT = _git_commit()
+print(f"[app] ===== MangaTranslator server starting — commit {_SERVER_COMMIT} =====")
+
+
 @app.get("/api/health")
 async def health(refresh: bool = False):
-    """Which detection / cleanup / GPU / RTL components are available. Cheap
-    (no heavy model loads) and cached. curl it and share to debug a setup:
+    """Which detection / cleanup / GPU / RTL components are available, plus the
+    server's git commit. Cheap (no heavy model loads) and cached. curl + share:
         curl -s localhost:8000/api/health | python3 -m json.tool"""
     if refresh or not _HEALTH_CACHE:
         loop = asyncio.get_event_loop()
         _HEALTH_CACHE.update(await loop.run_in_executor(None, probe_components))
+    _HEALTH_CACHE["server_commit"] = _SERVER_COMMIT
     return _HEALTH_CACHE
 
 
