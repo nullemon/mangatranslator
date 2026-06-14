@@ -1013,6 +1013,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resize: "Drag a box's handles to resize/reshape it (or drag its middle to move it) so the text fits, then Apply & Re-render.",
     edit: "Click any translation to fix its text.",
     cover: "Drag a box over a watermark or leftover text to erase it, then Apply & Re-render.",
+    lasso: "Draw a free-form outline around anything (weird shapes) — it's content-aware erased. Then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
   };
 
@@ -1117,6 +1118,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Existing cover regions — always visible, click to remove.
     page.covers.forEach((cb, i) => {
+      if (cb && cb.poly) {   // free-form lasso erase
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        const pg = document.createElementNS(NS, "polygon");
+        pg.setAttribute("points", cb.poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
+        pg.setAttribute("fill", "rgba(220,38,38,.18)");
+        pg.setAttribute("stroke", "#dc2626");
+        pg.setAttribute("stroke-width", "0.5");
+        svg.appendChild(pg);
+        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        moveLayer.appendChild(svg);
+        return;
+      }
       const box = makeBox(cb[0], cb[1], cb[2], cb[3], W, H, "cover-box");
       box.innerHTML = `<span class="ov-tag">erase ✕</span>`;
       box.title = "Click to remove this cover";
@@ -1366,6 +1383,52 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     moveLayer.addEventListener("pointerup", finish);
     moveLayer.addEventListener("pointercancel", finish);
+  })();
+
+  /* free-form lasso erase surface */
+  (function initLasso() {
+    const NS = "http://www.w3.org/2000/svg";
+    let drawing = false, pts = [], svg = null, poly = null;
+    moveLayer.addEventListener("pointerdown", e => {
+      if (tool !== "lasso") return;
+      if (e.target !== moveLayer) return;
+      const page = getActive(); if (!page || !curDims()) return;
+      drawing = true; pts = [];
+      svg = document.createElementNS(NS, "svg");
+      svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6";
+      svg.setAttribute("viewBox", "0 0 100 100");
+      svg.setAttribute("preserveAspectRatio", "none");
+      poly = document.createElementNS(NS, "polyline");
+      poly.setAttribute("fill", "rgba(220,38,38,.18)");
+      poly.setAttribute("stroke", "#dc2626");
+      poly.setAttribute("stroke-width", "0.5");
+      svg.appendChild(poly); moveLayer.appendChild(svg);
+      const r = moveLayer.getBoundingClientRect();
+      pts.push([(e.clientX - r.left) / r.width * 100, (e.clientY - r.top) / r.height * 100]);
+      try { moveLayer.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    moveLayer.addEventListener("pointermove", e => {
+      if (!drawing) return;
+      const r = moveLayer.getBoundingClientRect();
+      pts.push([(e.clientX - r.left) / r.width * 100, (e.clientY - r.top) / r.height * 100]);
+      poly.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+    });
+    const finishLasso = e => {
+      if (!drawing) return;
+      drawing = false;
+      try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (svg) { svg.remove(); svg = null; }
+      const page = getActive(), dims = curDims();
+      if (!page || !dims || pts.length < 3) { pts = []; return; }
+      const [W, H] = dims;
+      const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
+      pts = [];
+      page.covers = page.covers || [];
+      page.covers.push({ poly: polyImg });
+      buildOverlay();
+    };
+    moveLayer.addEventListener("pointerup", finishLasso);
+    moveLayer.addEventListener("pointercancel", finishLasso);
   })();
 
   async function autoTranslate(page, bbox) {

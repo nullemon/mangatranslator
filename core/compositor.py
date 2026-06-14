@@ -97,6 +97,13 @@ class Compositor:
         # Manual cover/erase regions the user drew to wipe leftover or
         # untranslated text. Erase them before placing anything else.
         for cb in (covers or []):
+            # Free-form lasso: {"poly": [[x,y], ...]} — content-aware heal the
+            # whole outlined shape (for weird-shaped leftovers the box can't hug).
+            if isinstance(cb, dict) and cb.get("poly"):
+                touched = self._inpaint_poly(result, cb["poly"])
+                if touched:
+                    edited_rects.append(touched)
+                continue
             try:
                 cx, cy, cw, ch = [int(v) for v in cb]
             except Exception:
@@ -374,6 +381,31 @@ class Compositor:
         return cv2.morphologyEx(
             mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         )
+
+    def _inpaint_poly(self, result, pts):
+        """Content-aware fill an arbitrary free-form (lasso) region — the whole
+        outlined shape is reconstructed from its surroundings (LaMa, or cv2
+        fallback). Returns the touched bbox or None."""
+        H, W = result.shape[:2]
+        try:
+            poly = np.array([[int(p[0]), int(p[1])] for p in pts], np.int32)
+        except Exception:
+            return None
+        if len(poly) < 3:
+            return None
+        mask = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(mask, [poly], 255)
+        x, y, w, h = cv2.boundingRect(poly)
+        if w < 3 or h < 3:
+            return None
+        if self.lama is not None and self.lama.ok:
+            out = self.lama.inpaint(result, mask)
+            if out is not None:
+                result[:] = out
+                return (x, y, w, h)
+        inp = cv2.inpaint(result, mask, 5, cv2.INPAINT_TELEA)
+        result[:] = inp
+        return (x, y, w, h)
 
     def _inpaint_text(self, result, x, y, w, h, contain=False):
         """Remove text from a free-text region. Builds the stroke mask from where
