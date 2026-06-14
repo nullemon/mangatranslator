@@ -1156,6 +1156,47 @@ class TranslationPipeline:
             it["in_bubble"] = False
             items.append(it)
 
+        # Also run the dedicated free-text / text-block detectors (the
+        # manga-trained block model is far better at giant vertical title & SFX
+        # lettering than the LLM's loose box). Merge anything that doesn't
+        # overlap a region we already have — this is what stops a big title from
+        # being missed or mistaken for a bubble in smart mode.
+        try:
+            extra = self._detect_free_text(image, seg_regions, update)
+        except Exception as e:
+            print(f"[pipeline] smart-mode free-text pass failed: {e}")
+            extra = []
+        if extra:
+            next_id = max([it["id"] for it in items]
+                          + [r.id for r in seg_regions] + [0]) + 1
+            added = 0
+            for it in extra:
+                nb = list(it["bbox"])
+                a_new = nb[2] * nb[3]
+                hit = next((ex for ex in items
+                            if _boxes_overlap(nb, list(ex["bbox"]))), None)
+                if hit is not None:
+                    a_ex = hit["bbox"][2] * hit["bbox"][3]
+                    # The block detector found a MUCH bigger region here — a giant
+                    # title/SFX the LLM under-boxed or mistook for a bubble. Adopt
+                    # the big box and erase it as free text (keep the better
+                    # wording). Normal bubbles (block box is smaller) are kept.
+                    if a_new > 1.6 * a_ex:
+                        hit["bbox"] = [int(v) for v in it["bbox"]]
+                        hit["in_bubble"] = False
+                        hit["rotation"] = it.get("rotation", hit.get("rotation", 0))
+                        if not (hit.get("translation") or "").strip():
+                            hit["translation"] = it.get("translation", "")
+                        masks.pop(hit["id"], None)
+                        added += 1
+                    continue
+                it["id"] = next_id
+                next_id += 1
+                items.append(it)
+                added += 1
+            if added:
+                update(2, f"Added/expanded {added} text regions (block detector)", 56)
+
         update(2, f"Placed {len(items)} regions ({len(masks)} masked)", 50)
         return items, "", masks
 
