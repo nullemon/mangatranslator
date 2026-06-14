@@ -107,7 +107,7 @@ class Compositor:
                     self._fill_caption(result, cap)
                     edited_rects.append((cap[0], cap[1], cap[2], cap[3]))
                 else:
-                    touched = self._inpaint_text(result, cx, cy, cw, ch)
+                    touched = self._inpaint_text(result, cx, cy, cw, ch, contain=True)
                     edited_rects.append(touched or (cx, cy, cw, ch))
 
         placements = []     # (rect, text, color)
@@ -134,7 +134,7 @@ class Compositor:
                     wx, wy, ww, wh = self._clamp_rect([int(v) for v in wbox], w, h)
                     if ww >= 6 and wh >= 6:
                         cap, bb = self._plan_free_region(gray, wx, wy, ww, wh, refine=True)
-                        rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
+                        rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
                         edited_rects.append(tuple(int(v) for v in touched))
                         if self.replace_watermark and self.watermark_text:
                             placements.append((rect, self.watermark_text,
@@ -176,7 +176,7 @@ class Compositor:
                 # A bordered caption box gets a clean solid fill; text drawn over
                 # bare artwork has just its strokes inpainted out (no slab).
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
-                rect, dark, touched = self._apply_free_region(result, gray, cap, bb)
+                rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
@@ -375,17 +375,18 @@ class Compositor:
             mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         )
 
-    def _inpaint_text(self, result, x, y, w, h):
+    def _inpaint_text(self, result, x, y, w, h, contain=False):
         """Remove text from a free-text region. Builds the stroke mask from where
         the image deviates from its smooth background, so faint / low-contrast
         narration of either polarity is caught and fully covered, then inpaints.
 
-        The region is padded outward so characters that extend beyond the AI
-        bounding box are also cleaned. Returns the rect actually touched
-        (x, y, w, h) so the surgical restore keeps every cleaned pixel, or
-        None when the region is empty."""
+        Normally the region is padded outward so characters that extend past the
+        AI box are also cleaned. When `contain` is set (a box the USER drew/
+        resized) NO outward padding is used — the edit stays strictly inside the
+        box, so it never bleeds into surrounding art. Returns the rect actually
+        touched (x, y, w, h), or None when the region is empty."""
         H, W = result.shape[:2]
-        pad = max(4, min(w, h) // 8)
+        pad = 0 if contain else max(4, min(w, h) // 8)
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         if x1 <= x0 or y1 <= y0:
@@ -651,8 +652,9 @@ class Compositor:
             return None, self._refine_free_bbox(gray, x, y, w, h)
         return None, (x, y, w, h)
 
-    def _apply_free_region(self, result, gray, cap, bbox):
+    def _apply_free_region(self, result, gray, cap, bbox, contain=False):
         """Clear a planned free region and return (text_rect, dark, touched).
+        `contain` keeps the erase strictly inside the box (user-drawn boxes).
 
         A LIGHT caption box (framed white interior) gets a solid clean white
         fill — that's how official releases look and the paper really is flat.
@@ -669,12 +671,12 @@ class Compositor:
             return rect, False, (cap[0], cap[1], cap[2], cap[3])
         if cap is not None:
             ix, iy, iw, ih, _ = cap
-            touched = self._inpaint_text(result, ix, iy, iw, ih) or (ix, iy, iw, ih)
+            touched = self._inpaint_text(result, ix, iy, iw, ih, contain=contain) or (ix, iy, iw, ih)
             pad = max(3, min(iw, ih) // 12)
             rect = (ix + pad, iy + pad, max(iw - 2 * pad, 8), max(ih - 2 * pad, 8))
             return rect, True, touched
         rx, ry, rw, rh = [int(v) for v in bbox]
-        touched = self._inpaint_text(result, rx, ry, rw, rh) or (rx, ry, rw, rh)
+        touched = self._inpaint_text(result, rx, ry, rw, rh, contain=contain) or (rx, ry, rw, rh)
         dark = self._is_dark_region(gray, rx, ry, rw, rh)
         pad = max(2, min(rw, rh) // 16)
         rect = (rx + pad, ry + pad, max(rw - 2 * pad, 8), max(rh - 2 * pad, 8))
