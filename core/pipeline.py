@@ -525,6 +525,7 @@ class TranslationPipeline:
         watermark_text: str = "",
         clean_only: bool = False,
         isolate_page: bool = False,
+        credit: str = "",
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
@@ -533,6 +534,8 @@ class TranslationPipeline:
         self.clean_only = bool(clean_only)
         # Isolate page (beta): white-out + crop the background around a photo.
         self.isolate_page = bool(isolate_page)
+        # Credit / TL name dropped in the margin (movable per page in the editor).
+        self.credit = (credit or "").strip()
         # Maximum quality: process at full resolution (no working-size downscale)
         # and lean on the whole GPU stack. OFF by default — opt-in per run.
         self.max_quality = bool(max_quality)
@@ -586,6 +589,15 @@ class TranslationPipeline:
 
         self.components = self._component_status()
         self._log_component_banner()
+
+    def _credit_item(self, w: int, h: int, next_id: int) -> dict:
+        """A small TL/scanlation credit in the bottom-left margin, drawn as an
+        overlay (no erase) and movable/editable per page in the editor."""
+        cw, ch = int(w * 0.32), max(int(h * 0.035), 18)
+        cx, cy = int(w * 0.02), int(h - ch - h * 0.02)
+        return {"id": next_id, "bbox": [cx, cy, cw, ch], "original": "",
+                "translation": self.credit, "type": "credit", "in_bubble": False,
+                "credit": True, "dark": False, "rotation": 0}
 
     def _component_status(self) -> Dict[str, Any]:
         """A snapshot of which detection / cleanup / upscale stages actually
@@ -728,6 +740,10 @@ class TranslationPipeline:
         else:
             items, ann_path, masks = self._standard_detect(image, output_path, update)
         self.last_masks = masks
+
+        if self.credit:
+            nid = max([it["id"] for it in items] + [0]) + 1
+            items.append(self._credit_item(image.shape[1], image.shape[0], nid))
 
         if not items:
             out = scan_finish(image) if self.finish in ("clean", "api") else image

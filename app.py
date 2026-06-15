@@ -229,6 +229,7 @@ async def translate(
     clean_only: str = Form("false"),
     isolate_page: str = Form("false"),
     compress: str = Form("false"),
+    credit: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -293,6 +294,7 @@ async def translate(
             clean_only=is_clean,
             isolate_page=(isolate_page == "true"),
             compress=(compress == "true"),
+            credit=credit.strip(),
         )
     )
 
@@ -327,6 +329,7 @@ async def _run(
     clean_only: bool = False,
     isolate_page: bool = False,
     compress: bool = False,
+    credit: str = "",
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -421,6 +424,7 @@ async def _run(
             watermark_text=watermark,
             clean_only=clean_only,
             isolate_page=isolate_page,
+            credit=credit,
         )
 
         def on_progress(update):

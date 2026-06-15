@@ -67,11 +67,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const moveLayer     = document.getElementById("moveLayer");
   const toolBtns      = document.querySelectorAll(".tool-btn");
   const watermarkInput = document.getElementById("watermark");
+  const creditInput = document.getElementById("credit");
 
   if (watermarkInput) {
     watermarkInput.value = localStorage.getItem("manga_watermark") || "";
     watermarkInput.addEventListener("input", () =>
       localStorage.setItem("manga_watermark", watermarkInput.value));
+  }
+  if (creditInput) {
+    creditInput.value = localStorage.getItem("manga_credit") || "";
+    creditInput.addEventListener("input", () =>
+      localStorage.setItem("manga_credit", creditInput.value));
   }
 
   const stylePrompt = document.getElementById("stylePrompt");
@@ -641,6 +647,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
+      }
+      if (creditInput && creditInput.value.trim()) {
+        f.append("credit", creditInput.value.trim());
       }
       return { url: "/api/translate", form: f };
     }

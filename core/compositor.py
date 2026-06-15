@@ -173,6 +173,22 @@ class Compositor:
             it["placed"] = False
             kind = (it.get("type") or "").lower().replace(" ", "_")
 
+            # Credit / TL name: small clean text in the margin/gutter — NO erase
+            # (it sits in white space or over art), just an outlined overlay you
+            # can drag per page. Drawn before everything so it's the base layer.
+            if it.get("credit") or kind == "credit":
+                ctext = (it.get("translation") or "").strip()
+                cbox = it.get("bbox")
+                if ctext and cbox:
+                    cx, cy, cw, ch = self._clamp_rect([int(v) for v in cbox], w, h)
+                    if cw >= 8 and ch >= 8:
+                        dark = self._is_dark_region(gray, cx, cy, cw, ch)
+                        color = (255, 255, 255) if dark else (0, 0, 0)
+                        placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
+                                           color, False, 0, self._item_scale(it), False))
+                        it["placed"] = True
+                continue
+
             # Site watermark / URL: erase it from the art (no translation). If the
             # user opted to replace it, drop their own watermark in the same spot.
             if it.get("erase") or kind == "watermark":
