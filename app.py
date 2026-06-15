@@ -1000,25 +1000,32 @@ async def ocr_translate(task_id: str, request: Request):
             return {"original": "", "translation": ""}
 
         crop = img[y0:y1, x0:x1]
-
-        original = ""
-        ocr = _get_ocr()
-        if ocr and ocr.ok:
-            padded = cv2.copyMakeBorder(
-                crop, 12, 12, 12, 12,
-                cv2.BORDER_CONSTANT, value=(255, 255, 255))
-            original = ocr.read(padded)
-
-        if not original:
-            return {"original": "", "translation": ""}
-
         translator = make_translator(provider, api_key, model, style_prompt,
                                      source_lang=t.get("source_lang", "Japanese"),
                                      translate_sfx=bool(t.get("translate_sfx", False)))
-        out = translator.translate_texts({"0": original}, target_lang)
+
+        # Vision read+translate — works for ANY language (Japanese, Arabic, …),
+        # so weird-shaped / non-Japanese regions translate too.
+        try:
+            res = translator.translate_crop(crop, target_lang)
+            if (res.get("translation") or "").strip():
+                return {"original": res.get("original", ""),
+                        "translation": res.get("translation", "")}
+        except Exception as e:
+            print(f"[ocr-translate] vision crop failed: {e}")
+
+        # Fallback: local Japanese OCR + text translate.
+        original = ""
+        ocr = _get_ocr()
+        if ocr and ocr.ok:
+            padded = cv2.copyMakeBorder(crop, 12, 12, 12, 12,
+                                        cv2.BORDER_CONSTANT, value=(255, 255, 255))
+            original = ocr.read(padded)
+        if not original:
+            return {"original": "", "translation": ""}
+        out = translator.translate_texts({"0": original}, target_lang, image=crop)
         entry = out.get(0) or out.get("0") or {}
-        translation = entry.get("translation", original)
-        return {"original": original, "translation": translation}
+        return {"original": original, "translation": entry.get("translation", original)}
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, work)

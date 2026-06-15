@@ -1073,7 +1073,7 @@ document.addEventListener("DOMContentLoaded", () => {
     edit: "Click any translation to fix its text.",
     cover: "Drag a box over a watermark or leftover text to erase it, then Apply & Re-render.",
     lasso: "Draw a free-form outline around anything (weird shapes) — it's content-aware erased. Then Apply & Re-render.",
-    "lasso-add": "Beta: draw a free-form shape over missed text — it's OCR'd and auto-translated. Edit, then Apply & Re-render.",
+    "lasso-add": "Draw a free-form shape over weird-shaped or missed text — it's read & translated. Edit, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
   };
 
@@ -1610,7 +1610,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const suggested = (data.translation || "").trim();
     const label = suggested
       ? "Edit translation (read: " + data.original + "):"
-      : "No Japanese detected here — type the English text:";
+      : "No text detected here — type the translation:";
     const txt = prompt(label, suggested);
     if (txt && txt.trim()) {
       page.added = page.added || [];

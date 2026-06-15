@@ -266,6 +266,21 @@ Rules:
 - Return ONLY the JSON array.{_style_block(style)}"""
 
 
+def crop_translate_prompt(target_lang: str, source_lang: str = "Japanese",
+                          style: str = "") -> str:
+    """Read + translate the text in a single cropped region (the editor's Add /
+    Lasso-add tool) — vision-based so it works for any source language."""
+    src = _source_label(source_lang, target_lang)
+    return f"""You are an expert manga translator. This image is a CROPPED region
+of a manga page that contains {src} text. Read ALL the text in it and translate
+it into natural, idiomatic {target_lang} — read the picture for context.
+
+Return ONLY a JSON array (no markdown), exactly one object:
+[{{"original": "<the source text>", "translation": "{target_lang.upper()} TEXT"}}]
+
+Use UPPERCASE for the translation. If there is no readable text, return [].{_style_block(style)}"""
+
+
 def extract_json_array(text: str) -> list:
     """Robustly pull a JSON array out of a model response that may include
     markdown fences or stray prose."""

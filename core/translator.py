@@ -124,6 +124,16 @@ class ClaudeTranslator:
         except ValueError:
             return []
 
+    def translate_crop(self, image, target_lang="English") -> dict:
+        """Vision read + translate one cropped region (any language)."""
+        prompt = prompts.crop_translate_prompt(target_lang, self.source_lang, self.style)
+        text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
+        try:
+            arr = prompts.extract_json_array(text)
+        except ValueError:
+            arr = []
+        return arr[0] if arr else {"original": "", "translation": ""}
+
 
 class GeminiTranslator:
     """Translation backend powered by Google Gemini (vision), via REST."""
@@ -207,6 +217,16 @@ class GeminiTranslator:
             return prompts.extract_json_array(text)
         except ValueError:
             return []
+
+    def translate_crop(self, image, target_lang="English") -> dict:
+        """Vision read + translate one cropped region (any language)."""
+        prompt = prompts.crop_translate_prompt(target_lang, self.source_lang, self.style)
+        text = self._ask([{"text": prompt}, self._image_part(image)])
+        try:
+            arr = prompts.extract_json_array(text)
+        except ValueError:
+            arr = []
+        return arr[0] if arr else {"original": "", "translation": ""}
 
     def _err(self, resp: httpx.Response) -> str:
         try:
