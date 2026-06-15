@@ -42,6 +42,35 @@ from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
 
+def compress_output(path: str, target_kb: int = 3072) -> str:
+    """Re-encode a finished page as a tuned JPEG so big outputs (a 20MB PNG)
+    come down to ~2-4MB. Steps quality down until under target. Returns the new
+    .jpg path (and removes the original) or the original path on failure."""
+    img = cv2.imread(path)
+    if img is None:
+        return path
+    jpg = os.path.splitext(path)[0] + ".jpg"
+    q, last = 92, None
+    while q >= 40:
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, q])
+        if not ok:
+            break
+        last = buf
+        if len(buf) <= target_kb * 1024:
+            break
+        q -= 8
+    if last is None:
+        return path
+    with open(jpg, "wb") as f:
+        f.write(last.tobytes())
+    if jpg != path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return jpg
+
+
 def _stamp_watermark(image_path: str, text: str):
     """Render a repeating diagonal watermark at low opacity."""
     img = cv2.imread(image_path)
@@ -199,6 +228,7 @@ async def translate(
     replace_watermark: str = Form("false"),
     clean_only: str = Form("false"),
     isolate_page: str = Form("false"),
+    compress: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -262,6 +292,7 @@ async def translate(
             replace_watermark=(replace_watermark == "true"),
             clean_only=is_clean,
             isolate_page=(isolate_page == "true"),
+            compress=(compress == "true"),
         )
     )
 
@@ -295,6 +326,7 @@ async def _run(
     replace_watermark: bool = False,
     clean_only: bool = False,
     isolate_page: bool = False,
+    compress: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -414,6 +446,15 @@ async def _run(
         # instead of tiled across the whole page.
         if watermark and not replace_watermark:
             _stamp_watermark(output_path, watermark)
+
+        # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
+        if compress:
+            try:
+                newp = await loop.run_in_executor(None, lambda: compress_output(output_path))
+                if newp != output_path and isinstance(result, dict):
+                    result["output_path"] = newp
+            except Exception as e:
+                print(f"[run] output compress failed: {e}")
 
         update = {
             "status": "done",
@@ -642,7 +683,8 @@ async def result(task_id: str):
     p = t["result"]["output_path"]
     if not os.path.exists(p):
         raise HTTPException(404)
-    return FileResponse(p, media_type="image/png", headers=_NO_CACHE)
+    mt = "image/jpeg" if p.lower().endswith((".jpg", ".jpeg")) else "image/png"
+    return FileResponse(p, media_type=mt, headers=_NO_CACHE)
 
 
 @app.get("/api/original/{task_id}")
