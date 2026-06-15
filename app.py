@@ -708,7 +708,9 @@ async def rerender(task_id: str, request: Request):
         raise HTTPException(404, "Task not found")
     t = tasks[task_id]
     r = t.get("result") or {}
-    base = r.get("base_path", "")
+    # For a Clean page, re-render builds on the already-cleaned base (so erasing
+    # a leftover doesn't bring the removed text back); otherwise the normal base.
+    base = r.get("clean_base_path") or r.get("base_path", "")
     if not base or not os.path.exists(base):
         raise HTTPException(400, "This page can't be re-rendered")
 
