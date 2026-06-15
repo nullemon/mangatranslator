@@ -198,6 +198,7 @@ async def translate(
     remove_watermark: str = Form("true"),
     replace_watermark: str = Form("false"),
     clean_only: str = Form("false"),
+    isolate_page: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -260,6 +261,7 @@ async def translate(
             remove_watermark=(remove_watermark == "true"),
             replace_watermark=(replace_watermark == "true"),
             clean_only=is_clean,
+            isolate_page=(isolate_page == "true"),
         )
     )
 
@@ -292,6 +294,7 @@ async def _run(
     remove_watermark: bool = True,
     replace_watermark: bool = False,
     clean_only: bool = False,
+    isolate_page: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -385,6 +388,7 @@ async def _run(
             replace_watermark=replace_watermark,
             watermark_text=watermark,
             clean_only=clean_only,
+            isolate_page=isolate_page,
         )
 
         def on_progress(update):

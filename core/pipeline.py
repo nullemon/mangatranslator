@@ -103,6 +103,47 @@ def _order_corners(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def isolate_page(image: np.ndarray) -> np.ndarray:
+    """Beta: remove the background around a photographed page (table, floor,
+    the adjacent page/spine showing on a side). Finds the page content as
+    everything that differs from the photo's border tone, takes its convex
+    hull, paints everything OUTSIDE the hull white, and crops to it. Best-effort
+    for phone photos of physical books; returns the image unchanged if it can't
+    confidently find a page (so it never wrecks a clean scan)."""
+    h, w = image.shape[:2]
+    page_area = h * w
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
+    bg = int(round(float(np.median(border))))
+    diff = cv2.absdiff(blurred, np.full_like(blurred, bg))
+    _, mask = cv2.threshold(diff, 24, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    k = max(9, (min(h, w) // 30) | 1)   # connect the page content into one blob
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)), iterations=2)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    sig = [c for c in contours if cv2.contourArea(c) > page_area * 0.01]
+    if not sig:
+        return image
+    hull = cv2.convexHull(np.vstack(sig))
+    bx, by, bw, bh = cv2.boundingRect(hull)
+    # Safety: only act when we found a believable page (a big chunk of the frame
+    # that doesn't already fill it — i.e. there IS background to remove).
+    if bw * bh < page_area * 0.20:
+        return image
+    if bw >= w * 0.97 and bh >= h * 0.97:
+        return image  # already edge-to-edge, nothing around it
+    hull_mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(hull_mask, hull, 255)
+    # feather the edge a touch so the cut isn't a hard jagged line
+    hull_mask = cv2.erode(hull_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    out = image.copy()
+    out[hull_mask == 0] = (255, 255, 255)     # background → white
+    return out[by:by + bh, bx:bx + bw]        # crop to the page
+
+
 def auto_crop_page(image: np.ndarray) -> np.ndarray:
     """Detect the manga page in a photo and warp it flat (deskew + crop).
 
@@ -470,12 +511,15 @@ class TranslationPipeline:
         replace_watermark: bool = False,
         watermark_text: str = "",
         clean_only: bool = False,
+        isolate_page: bool = False,
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
         # Clean-only: just erase ALL text (no translation), for a usable raw.
         self.clean_only = bool(clean_only)
+        # Isolate page (beta): white-out + crop the background around a photo.
+        self.isolate_page = bool(isolate_page)
         # Maximum quality: process at full resolution (no working-size downscale)
         # and lean on the whole GPU stack. OFF by default — opt-in per run.
         self.max_quality = bool(max_quality)
@@ -601,6 +645,12 @@ class TranslationPipeline:
 
         update(0, "Preprocessing image...", 2)
         image = auto_crop_page(image)
+        if self.isolate_page:
+            update(0, "Isolating page (removing background)...", 3)
+            try:
+                image = isolate_page(image)
+            except Exception as e:
+                print(f"[pipeline] isolate-page failed, continuing: {e}")
 
         # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
         # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts

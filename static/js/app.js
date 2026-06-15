@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const translateSfx   = document.getElementById("translateSfx");
   const maxQuality     = document.getElementById("maxQuality");
+  const isolatePage    = document.getElementById("isolatePage");
   const transStyle     = document.getElementById("transStyle");
   const removeWatermark= document.getElementById("removeWatermark");
   const replaceWatermark=document.getElementById("replaceWatermark");
@@ -107,6 +108,12 @@ document.addEventListener("DOMContentLoaded", () => {
     maxQuality.checked = localStorage.getItem("manga_max_quality") === "1";
     maxQuality.addEventListener("change", () =>
       localStorage.setItem("manga_max_quality", maxQuality.checked ? "1" : "0"));
+  }
+
+  if (isolatePage) {
+    isolatePage.checked = localStorage.getItem("manga_isolate_page") === "1";
+    isolatePage.addEventListener("change", () =>
+      localStorage.setItem("manga_isolate_page", isolatePage.checked ? "1" : "0"));
   }
 
   if (removeWatermark) {
@@ -588,6 +595,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("font", fontSelect.value);
       f.append("finish", pageFinish ? pageFinish.value : "clean");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
+      f.append("isolate_page", isolatePage && isolatePage.checked ? "true" : "false");
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
       }
@@ -602,6 +610,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
+      f.append("isolate_page", isolatePage && isolatePage.checked ? "true" : "false");
       f.append("remove_watermark", removeWatermark && removeWatermark.checked ? "true" : "false");
       f.append("replace_watermark", replaceWatermark && replaceWatermark.checked ? "true" : "false");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
