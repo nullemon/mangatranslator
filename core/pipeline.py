@@ -469,10 +469,13 @@ class TranslationPipeline:
         remove_watermark: bool = True,
         replace_watermark: bool = False,
         watermark_text: str = "",
+        clean_only: bool = False,
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Clean-only: just erase ALL text (no translation), for a usable raw.
+        self.clean_only = bool(clean_only)
         # Maximum quality: process at full resolution (no working-size downscale)
         # and lean on the whole GPU stack. OFF by default — opt-in per run.
         self.max_quality = bool(max_quality)
@@ -620,6 +623,19 @@ class TranslationPipeline:
 
         base_path = self._base_path(output_path)
         cv2.imwrite(base_path, image)
+
+        # Clean-only: remove ALL text and stop — no detection-LLM, no
+        # translation (so no API key needed). Page Finish still decides raw
+        # (untouched) vs scan-like (clean).
+        if self.clean_only:
+            update(3, "Cleaning all text from the page...", 55)
+            result = self.compositor.clean(image)
+            if self.finish in ("clean", "api"):
+                update(4, "Applying clean-scan finish...", 90)
+                result = scan_finish(result)
+            cv2.imwrite(output_path, result)
+            update(5, "Cleaned!", 100)
+            return self._result(output_path, base_path, [], "")
 
         self.last_masks = {}
         if self.use_smart_detection:

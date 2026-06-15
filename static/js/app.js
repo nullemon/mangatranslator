@@ -239,7 +239,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
-  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale";
+  const isClean = wf => wf === "clean";
+  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean";
   const isUpscaleOnly = wf => wf === "upscale-only";
 
   /* ══ THEME ══ */
@@ -581,6 +582,17 @@ document.addEventListener("DOMContentLoaded", () => {
   function buildRequest(file) {
     const f = new FormData();
     f.append("file", file);
+    if (isClean(workflow)) {
+      // Clean only: erase all text, no translation (no API key needed).
+      f.append("clean_only", "true");
+      f.append("font", fontSelect.value);
+      f.append("finish", pageFinish ? pageFinish.value : "clean");
+      f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
+      if (watermarkInput && watermarkInput.value.trim()) {
+        f.append("watermark", watermarkInput.value.trim());
+      }
+      return { url: "/api/translate", form: f };
+    }
     if (needsTranslate(workflow)) {
       f.append("api_key", apiKeyInput.value.trim());
       f.append("target_lang", targetLang.value);

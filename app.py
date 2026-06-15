@@ -176,7 +176,7 @@ async def health(refresh: bool = False):
 @app.post("/api/translate")
 async def translate(
     file: UploadFile = File(...),
-    api_key: str = Form(...),
+    api_key: str = Form(""),
     target_lang: str = Form("English"),
     provider: str = Form("claude"),
     model: str = Form(""),
@@ -197,9 +197,13 @@ async def translate(
     max_quality: str = Form("false"),
     remove_watermark: str = Form("true"),
     replace_watermark: str = Form("false"),
+    clean_only: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
+    is_clean = clean_only == "true"
+    if not is_clean and not api_key:
+        raise HTTPException(400, "api_key is required to translate")
 
     task_id = str(uuid.uuid4())
     global LAST_TRANSLATE_TASK
@@ -255,6 +259,7 @@ async def translate(
             max_quality=(max_quality == "true"),
             remove_watermark=(remove_watermark == "true"),
             replace_watermark=(replace_watermark == "true"),
+            clean_only=is_clean,
         )
     )
 
@@ -286,6 +291,7 @@ async def _run(
     max_quality: bool = False,
     remove_watermark: bool = True,
     replace_watermark: bool = False,
+    clean_only: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -378,6 +384,7 @@ async def _run(
             remove_watermark=remove_watermark,
             replace_watermark=replace_watermark,
             watermark_text=watermark,
+            clean_only=clean_only,
         )
 
         def on_progress(update):
