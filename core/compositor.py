@@ -71,24 +71,32 @@ class Compositor:
         """Per-region soft-glow style (editor toggle), for stylized lines."""
         return bool(it.get("glow"))
 
-    def clean(self, image: np.ndarray) -> np.ndarray:
+    def clean(self, image: np.ndarray, bubble_masks=None) -> np.ndarray:
         """Remove ALL text from the page (no translation): inpaint every text
         stroke the GPU detector marks, content-aware, so bubbles go blank-white
         and free text over art is healed — a clean raw to use as you please.
-        Only the text pixels change; the art is preserved."""
+        Only the text pixels change; the art is preserved.
+
+        `bubble_masks` (detected speech-balloon interiors) are added to the
+        erase mask, so text INSIDE a bubble that the stroke detector misses is
+        still cleared — the balloon interior is uniform anyway, so inpainting it
+        just yields clean white."""
         result = image.copy()
-        if self.text_seg is None or not self.text_seg.ok:
-            print("[compositor] clean: text segmenter unavailable — page unchanged")
-            return result
-        try:
-            mask = self.text_seg.mask(image)
-        except Exception as e:
-            print(f"[compositor] clean: text-seg mask failed: {e}")
+        h, w = image.shape[:2]
+        mask = np.zeros((h, w), np.uint8)
+        if self.text_seg is not None and self.text_seg.ok:
+            try:
+                mask = cv2.bitwise_or(mask, self.text_seg.mask(image))
+            except Exception as e:
+                print(f"[compositor] clean: text-seg mask failed: {e}")
+        for bm in (bubble_masks or []):
+            if bm is not None and bm.shape[:2] == (h, w):
+                mask = cv2.bitwise_or(mask, (bm > 0).astype(np.uint8) * 255)
+        if cv2.countNonZero(mask) == 0:
+            print("[compositor] clean: no text detected — page unchanged")
             return result
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.dilate(mask, k, iterations=2)   # cover antialiased halos
-        if cv2.countNonZero(mask) == 0:
-            return result
         if self.lama is not None and self.lama.ok:
             out = self.lama.inpaint(result, mask)
             if out is not None:

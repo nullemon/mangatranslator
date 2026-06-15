@@ -679,7 +679,17 @@ class TranslationPipeline:
         # (untouched) vs scan-like (clean).
         if self.clean_only:
             update(3, "Cleaning all text from the page...", 55)
-            result = self.compositor.clean(image)
+            # Also wipe detected speech-bubble interiors, so in-bubble text the
+            # stroke detector misses is cleared too.
+            bubble_masks = []
+            try:
+                for r in self.detector.detect(image):
+                    m = getattr(r, "mask", None)
+                    if m is not None:
+                        bubble_masks.append(m)
+            except Exception as e:
+                print(f"[pipeline] clean: bubble detect failed: {e}")
+            result = self.compositor.clean(image, bubble_masks)
             if self.finish in ("clean", "api"):
                 update(4, "Applying clean-scan finish...", 90)
                 result = scan_finish(result)
