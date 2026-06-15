@@ -71,7 +71,7 @@ class Compositor:
         """Per-region soft-glow style (editor toggle), for stylized lines."""
         return bool(it.get("glow"))
 
-    def clean(self, image: np.ndarray, bubble_masks=None) -> np.ndarray:
+    def clean(self, image: np.ndarray, bubble_masks=None, det_image=None) -> np.ndarray:
         """Remove ALL text from the page (no translation): inpaint every text
         stroke the GPU detector marks, content-aware, so bubbles go blank-white
         and free text over art is healed — a clean raw to use as you please.
@@ -83,10 +83,13 @@ class Compositor:
         just yields clean white."""
         result = image.copy()
         h, w = image.shape[:2]
+        # Detect text on a (possibly contrast-boosted) copy so faint raws read
+        # well, but ERASE from the original pixels.
+        src = det_image if det_image is not None and det_image.shape[:2] == (h, w) else image
         mask = np.zeros((h, w), np.uint8)
         if self.text_seg is not None and self.text_seg.ok:
             try:
-                mask = cv2.bitwise_or(mask, self.text_seg.mask(image))
+                mask = cv2.bitwise_or(mask, self.text_seg.mask(src))
             except Exception as e:
                 print(f"[compositor] clean: text-seg mask failed: {e}")
         for bm in (bubble_masks or []):

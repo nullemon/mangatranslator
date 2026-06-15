@@ -103,6 +103,19 @@ def _order_corners(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def boost_for_detection(image: np.ndarray) -> np.ndarray:
+    """Local-contrast boost (CLAHE on L) used ONLY to help the detectors read a
+    faint, washed-out raw — the erase/clean is still applied to the original
+    pixels, so this never alters the output, just what the models can see."""
+    try:
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(l)
+        return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+    except Exception:
+        return image
+
+
 def isolate_page(image: np.ndarray) -> np.ndarray:
     """Beta: remove the background around a photographed page (table, floor,
     the adjacent page/spine showing on a side). Finds the page content as
@@ -679,17 +692,19 @@ class TranslationPipeline:
         # (untouched) vs scan-like (clean).
         if self.clean_only:
             update(3, "Cleaning all text from the page...", 55)
-            # Also wipe detected speech-bubble interiors, so in-bubble text the
-            # stroke detector misses is cleared too.
+            # Detect on a contrast-boosted copy (helps faint/low-contrast raws);
+            # erase from the original. Also wipe detected speech-bubble interiors
+            # so in-bubble text the stroke detector misses is cleared too.
+            det = boost_for_detection(image)
             bubble_masks = []
             try:
-                for r in self.detector.detect(image):
+                for r in self.detector.detect(det):
                     m = getattr(r, "mask", None)
                     if m is not None:
                         bubble_masks.append(m)
             except Exception as e:
                 print(f"[pipeline] clean: bubble detect failed: {e}")
-            result = self.compositor.clean(image, bubble_masks)
+            result = self.compositor.clean(image, bubble_masks, det_image=det)
             if self.finish in ("clean", "api"):
                 update(4, "Applying clean-scan finish...", 90)
                 result = scan_finish(result)
