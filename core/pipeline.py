@@ -704,11 +704,17 @@ class TranslationPipeline:
                         bubble_masks.append(m)
             except Exception as e:
                 print(f"[pipeline] clean: bubble detect failed: {e}")
-            result = self.compositor.clean(image, bubble_masks, det_image=det)
+            cleaned = self.compositor.clean(image, bubble_masks, det_image=det)
+            # The base re-render builds on must be the CLEANED page — otherwise
+            # erasing one leftover with the Erase tool rebuilds from the original
+            # and ALL the removed text comes back. Save cleaned (pre-finish) as
+            # the base; the finish is re-applied on re-render.
+            cv2.imwrite(base_path, cleaned)
+            out = cleaned
             if self.finish in ("clean", "api"):
                 update(4, "Applying clean-scan finish...", 90)
-                result = scan_finish(result)
-            cv2.imwrite(output_path, result)
+                out = scan_finish(cleaned)
+            cv2.imwrite(output_path, out)
             update(5, "Cleaned!", 100)
             return self._result(output_path, base_path, [], "")
 
