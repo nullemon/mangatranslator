@@ -1726,6 +1726,39 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  const reuseBtn = document.getElementById("reuseBtn");
+  if (reuseBtn) reuseBtn.addEventListener("click", async () => {
+    const p = getActive();
+    if (!p || p.status !== "done") return;
+    reuseBtn.disabled = true; reuseBtn.textContent = "Loading…";
+    try {
+      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}`);
+      const blob = await res.blob();
+      const name = "edited_" + (p.name || "page.png");
+      const file = new File([blob], name, { type: blob.type || "image/png" });
+      // Start a fresh single-page session from this result, back at the picker.
+      pages.forEach(pg => { try { URL.revokeObjectURL(pg.thumb); } catch (_) {} });
+      const thumb = URL.createObjectURL(blob);
+      pages = [{
+        uid: (p.uid || 0), name, file, size: blob.size, thumb,
+        taskId: null, status: "pending", progress: 0, step: 0, message: "", result: null,
+        items: [], excluded: new Set(), erased: new Set(), glows: new Set(),
+        offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+      }];
+      activeUid = pages[0].uid;
+      previewImg.src = thumb;
+      if (fileName) fileName.textContent = name;
+      if (fileSize) fileSize.textContent = formatBytes(blob.size);
+      previewRow.style.display = "flex";
+      dropZone.style.display = "none";
+      showSection("upload");
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      reuseBtn.disabled = false; reuseBtn.textContent = "↺ Use Result as Input";
+    }
+  });
+
   newBtn.addEventListener("click", resetAll);
   retryBtn.addEventListener("click", () => showSection(pages.length ? "result" : "upload"));
 
