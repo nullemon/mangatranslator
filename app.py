@@ -671,7 +671,8 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
 async def end_card(
     scanlation: str = Form("BorutoTBV Scanlations"),
     discord: str = Form("discord.gg/borutotbv"),
-    theme: str = Form("dark"),
+    style: str = Form("ornate"),
+    theme: str = Form(""),
     heading: str = Form("THANK YOU FOR READING"),
     width: int = Form(1200),
     height: int = Form(1700),
@@ -683,7 +684,7 @@ async def end_card(
     output_path = f"output/{task_id}_end.png"
     try:
         img = make_end_card(
-            scanlation=scanlation, discord=discord, theme=theme,
+            scanlation=scanlation, discord=discord, style=style, theme=theme,
             heading=heading, width=width, height=height,
         )
         cv2.imwrite(output_path, img)
