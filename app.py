@@ -671,8 +671,9 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
 async def end_card(
     scanlation: str = Form("BorutoTBV Scanlations"),
     discord: str = Form("discord.gg/borutotbv"),
-    style: str = Form("ornate"),
+    style: str = Form("royal"),
     theme: str = Form(""),
+    accent: str = Form(""),
     heading: str = Form("THANK YOU FOR READING"),
     width: int = Form(1200),
     height: int = Form(1700),
@@ -685,7 +686,7 @@ async def end_card(
     try:
         img = make_end_card(
             scanlation=scanlation, discord=discord, style=style, theme=theme,
-            heading=heading, width=width, height=height,
+            accent=accent, heading=heading, width=width, height=height,
         )
         cv2.imwrite(output_path, img)
     except Exception as e:

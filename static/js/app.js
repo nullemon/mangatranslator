@@ -1775,14 +1775,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const endScan    = document.getElementById("endScan");
   const endDiscord = document.getElementById("endDiscord");
   const endTheme   = document.getElementById("endTheme");
+  const endUseColor = document.getElementById("endUseColor");
+  const endColor   = document.getElementById("endColor");
   const endCardBtn = document.getElementById("endCardBtn");
   if (endScan) {
     endScan.value    = localStorage.getItem("manga_end_scan")    || "";
     endDiscord.value = localStorage.getItem("manga_end_discord") || "";
-    endTheme.value   = localStorage.getItem("manga_end_style")   || "ornate";
+    endTheme.value   = localStorage.getItem("manga_end_style")   || "royal";
+    if (endColor)    endColor.value = localStorage.getItem("manga_end_color") || "#d4af5a";
+    if (endUseColor) endUseColor.checked = localStorage.getItem("manga_end_usecolor") === "1";
     endScan.addEventListener("input",    () => localStorage.setItem("manga_end_scan", endScan.value));
     endDiscord.addEventListener("input", () => localStorage.setItem("manga_end_discord", endDiscord.value));
     endTheme.addEventListener("change",  () => localStorage.setItem("manga_end_style", endTheme.value));
+    if (endColor)    endColor.addEventListener("input", () => localStorage.setItem("manga_end_color", endColor.value));
+    if (endUseColor) endUseColor.addEventListener("change", () => localStorage.setItem("manga_end_usecolor", endUseColor.checked ? "1" : "0"));
   }
   if (endCardBtn) endCardBtn.addEventListener("click", async () => {
     endCardBtn.disabled = true;
@@ -1792,7 +1798,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const f = new FormData();
       f.append("scanlation", (endScan && endScan.value.trim()) || "BorutoTBV Scanlations");
       f.append("discord", (endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv");
-      f.append("style", endTheme ? endTheme.value : "ornate");
+      f.append("style", endTheme ? endTheme.value : "royal");
+      if (endUseColor && endUseColor.checked && endColor) f.append("accent", endColor.value);
       // Match the chapter's page size so it blends in (fall back to a portrait default).
       const ref = pages.find(p => p.status === "done") || pages[0];
       const dim = await pageDimensions(ref);

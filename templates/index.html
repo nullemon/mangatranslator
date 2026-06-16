@@ -166,14 +166,21 @@
         <input type="text" id="endScan" placeholder="Scanlation name" maxlength="60">
         <input type="text" id="endDiscord" placeholder="discord.gg/yourserver" maxlength="80" style="margin-top:6px">
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-          <select id="endTheme" style="flex:0 0 auto">
-            <option value="ornate">✦ Ornate (gold)</option>
+          <select id="endTheme" style="flex:1">
+            <option value="royal">👑 Royal (gold)</option>
+            <option value="naruto">🍥 Ninja orange</option>
+            <option value="onepiece">🏴‍☠️ Pirate poster</option>
+            <option value="ragnarok">⚔️ Gods &amp; gold</option>
+            <option value="bluelock">⚽ Striker blue</option>
             <option value="neon">⚡ Neon glow</option>
-            <option value="halftone">◍ Manga halftone</option>
-            <option value="blurple">◆ Discord blurple</option>
             <option value="minimal">▢ Minimal</option>
           </select>
-          <button class="btn btn-primary btn-sm" id="endCardBtn" type="button" style="flex:1">+ Make End Page</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <label class="toggle" style="margin:0"><input type="checkbox" id="endUseColor"><span class="toggle-slider"></span></label>
+          <span class="toggle-hint" style="margin:0;flex:1">Custom accent color</span>
+          <input type="color" id="endColor" value="#d4af5a" style="width:42px;height:30px;padding:0;border:none;background:none;cursor:pointer">
+          <button class="btn btn-primary btn-sm" id="endCardBtn" type="button">+ Make End Page</button>
         </div>
         <span class="toggle-hint">Adds a neat final page (heading + your name + Discord) in your chosen style. It joins the page strip and the ZIP export.</span>
       </div>

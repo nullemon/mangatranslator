@@ -1,0 +1,15 @@
+Bundled display fonts (all SIL Open Font License 1.1), from Google Fonts:
+
+  Anton            - ofl/anton            (Vernon Adams / Anton Project Authors)
+  Bebas Neue       - ofl/bebasneue        (Ryoichi Tsunekawa / Dharma Type)
+  Pirata One       - ofl/pirataone        (Rodrigo Fuenzalida, Nicolas Massi)
+  Reggae One       - ofl/reggaeone        (Mediengestaltung HTWG / TypeType)
+  Cinzel           - ofl/cinzel           (Natanael Gama)
+  Cinzel Decorative- ofl/cinzeldecorative (Natanael Gama)
+  Orbitron         - ofl/orbitron         (Matt McInerney)
+  Marcellus        - ofl/marcellus        (Astigmatic)
+
+Each is © its respective authors and licensed under SIL OFL 1.1
+(https://scripts.sil.org/OFL). Used here only to render text onto generated
+end-card images. Series-themed styles are original designs inspired by color
+and motif; they do not reproduce any trademarked logo or copyrighted artwork.
