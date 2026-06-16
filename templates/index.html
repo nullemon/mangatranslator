@@ -161,6 +161,19 @@
         <label for="credit">Credit / TL name <span class="muted">(in the margin, movable)</span></label>
         <input type="text" id="credit" placeholder="e.g. TL: YourScans" maxlength="80">
       </div>
+      <div class="setting-group">
+        <label for="endScan">End page <span class="muted">(one-click "thanks for reading" last page)</span></label>
+        <input type="text" id="endScan" placeholder="Scanlation name" maxlength="60">
+        <input type="text" id="endDiscord" placeholder="discord.gg/yourserver" maxlength="80" style="margin-top:6px">
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <select id="endTheme" style="flex:0 0 auto">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="endCardBtn" type="button" style="flex:1">+ Make End Page</button>
+        </div>
+        <span class="toggle-hint">Adds a neat final page (heading + your name + Discord). It joins the page strip and the ZIP export.</span>
+      </div>
       <div class="setting-group toggle-group">
         <label for="removeWatermark">Remove Site Watermarks</label>
         <label class="toggle">

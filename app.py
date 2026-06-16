@@ -667,6 +667,44 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
             )
 
 
+@app.post("/api/endcard")
+async def end_card(
+    scanlation: str = Form("BorutoTBV Scanlations"),
+    discord: str = Form("discord.gg/borutotbv"),
+    theme: str = Form("dark"),
+    heading: str = Form("THANK YOU FOR READING"),
+    width: int = Form(1200),
+    height: int = Form(1700),
+):
+    """Generate a one-click 'thank you for reading' end page for a chapter —
+    scanlation name + Discord call-to-action, no upload or API key needed."""
+    from core.endcard import make_end_card
+    task_id = str(uuid.uuid4())
+    output_path = f"output/{task_id}_end.png"
+    try:
+        img = make_end_card(
+            scanlation=scanlation, discord=discord, theme=theme,
+            heading=heading, width=width, height=height,
+        )
+        cv2.imwrite(output_path, img)
+    except Exception as e:
+        raise HTTPException(500, f"Could not build end page: {e}")
+
+    tasks[task_id] = {
+        "status": "done",
+        "step": 2,
+        "progress": 100,
+        "message": "End page ready!",
+        "name": "end-page.png",
+        "mode": "endcard",
+        "result": {"output_path": output_path, "base_path": output_path,
+                   "translations": {}, "items": []},
+        "output_url": f"/api/result/{task_id}",
+        "original_url": f"/api/original/{task_id}",
+    }
+    return {"task_id": task_id}
+
+
 @app.get("/api/status/{task_id}")
 async def status(task_id: str):
     if task_id not in tasks:

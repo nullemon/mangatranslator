@@ -1771,6 +1771,71 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  /* ══ END PAGE (one-click "thanks for reading" last page) ══ */
+  const endScan    = document.getElementById("endScan");
+  const endDiscord = document.getElementById("endDiscord");
+  const endTheme   = document.getElementById("endTheme");
+  const endCardBtn = document.getElementById("endCardBtn");
+  if (endScan) {
+    endScan.value    = localStorage.getItem("manga_end_scan")    || "";
+    endDiscord.value = localStorage.getItem("manga_end_discord") || "";
+    endTheme.value   = localStorage.getItem("manga_end_theme")   || "dark";
+    endScan.addEventListener("input",    () => localStorage.setItem("manga_end_scan", endScan.value));
+    endDiscord.addEventListener("input", () => localStorage.setItem("manga_end_discord", endDiscord.value));
+    endTheme.addEventListener("change",  () => localStorage.setItem("manga_end_theme", endTheme.value));
+  }
+  if (endCardBtn) endCardBtn.addEventListener("click", async () => {
+    endCardBtn.disabled = true;
+    const label = endCardBtn.textContent;
+    endCardBtn.textContent = "Making…";
+    try {
+      const f = new FormData();
+      f.append("scanlation", (endScan && endScan.value.trim()) || "BorutoTBV Scanlations");
+      f.append("discord", (endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv");
+      f.append("theme", endTheme ? endTheme.value : "dark");
+      // Match the chapter's page size so it blends in (fall back to a portrait default).
+      const ref = pages.find(p => p.status === "done") || pages[0];
+      const dim = await pageDimensions(ref);
+      if (dim) { f.append("width", dim.w); f.append("height", dim.h); }
+      const res = await fetch("/api/endcard", { method: "POST", body: f });
+      if (!res.ok) {
+        let msg = res.statusText; try { msg = (await res.json()).detail || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const taskId = (await res.json()).task_id;
+      const page = {
+        uid: ++uidCounter, name: "end-page.png", file: null, size: 0,
+        thumb: `/api/result/${taskId}`, taskId, status: "done", progress: 100,
+        step: 2, message: "End page ready!", result: { items: [] }, items: [],
+        excluded: new Set(), erased: new Set(), glows: new Set(),
+        offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+        isEndCard: true,
+      };
+      pages.push(page);                 // last page of the chapter
+      activeUid = page.uid;
+      showSection("result");
+      renderStrip(); updateBatch(); renderActivePage();
+    } catch (e) {
+      showError("Couldn't make the end page: " + e.message);
+    } finally {
+      endCardBtn.disabled = false; endCardBtn.textContent = label;
+    }
+  });
+
+  // Natural pixel size of a page's image (uploaded file or processed result).
+  function pageDimensions(page) {
+    return new Promise(resolve => {
+      if (!page) return resolve(null);
+      const src = (page.status === "done" && page.taskId)
+        ? `/api/result/${page.taskId}?t=${page.rev}` : page.thumb;
+      if (!src) return resolve(null);
+      const im = new Image();
+      im.onload  = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+      im.onerror = () => resolve(null);
+      im.src = src;
+    });
+  }
+
   newBtn.addEventListener("click", resetAll);
   retryBtn.addEventListener("click", () => showSection(pages.length ? "result" : "upload"));
 
