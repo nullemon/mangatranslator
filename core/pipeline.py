@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import random
 import re
 from typing import Callable, Optional, Dict, Any, List
 
@@ -591,10 +592,22 @@ class TranslationPipeline:
         self._log_component_banner()
 
     def _credit_item(self, w: int, h: int, next_id: int) -> dict:
-        """A small TL/scanlation credit in the bottom-left margin, drawn as an
-        overlay (no erase) and movable/editable per page in the editor."""
-        cw, ch = int(w * 0.32), max(int(h * 0.035), 18)
-        cx, cy = int(w * 0.02), int(h - ch - h * 0.02)
+        """A TL/scanlation credit drawn as an overlay (no erase), movable/editable
+        per page. Position is RANDOMIZED per page (biased to the edges/gutters,
+        away from the centre where faces/art sit) so thieves can't batch-crop it
+        off a fixed corner. The chosen spot is saved with the page, so re-render
+        is stable and you can still drag it if it lands awkwardly."""
+        cw, ch = int(w * 0.30), max(int(h * 0.033), 18)
+        mx, my = int(w * 0.02), int(h * 0.02)            # edge margin
+        # Anchor to a random edge band, then jitter ALONG that edge so it never
+        # repeats from page to page. Centre is deliberately excluded.
+        edge = random.choice(("top", "bottom", "left", "right"))
+        if edge in ("top", "bottom"):
+            cy = my if edge == "top" else int(h - ch - my)
+            cx = random.randint(mx, max(mx, w - cw - mx))
+        else:  # left / right: ride vertically up the gutter
+            cx = mx if edge == "left" else int(w - cw - mx)
+            cy = random.randint(my, max(my, h - ch - my))
         return {"id": next_id, "bbox": [cx, cy, cw, ch], "original": "",
                 "translation": self.credit, "type": "credit", "in_bubble": False,
                 "credit": True, "dark": False, "rotation": 0}
