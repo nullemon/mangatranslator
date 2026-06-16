@@ -617,6 +617,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
       }
+      if (creditInput && creditInput.value.trim()) {
+        f.append("credit", creditInput.value.trim());
+      }
       return { url: "/api/translate", form: f };
     }
     if (needsTranslate(workflow)) {

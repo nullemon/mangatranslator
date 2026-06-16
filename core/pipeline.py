@@ -724,13 +724,20 @@ class TranslationPipeline:
             # view still shows the page you uploaded.
             clean_base = self._suffix_path(output_path, "cleanbase")
             cv2.imwrite(clean_base, cleaned)
-            out = cleaned
+            # Stamp the TL/credit name on the cleaned page (if requested). Keep it
+            # OUT of clean_base so the Erase tool re-renders from a credit-free
+            # plate; the credit item rides along in the result so it stays
+            # movable/editable and gets re-drawn at its (possibly moved) spot.
+            items = []
+            if self.credit:
+                items.append(self._credit_item(image.shape[1], image.shape[0], 1))
+            out = self.compositor.compose(cleaned, items, {}) if items else cleaned
             if self.finish in ("clean", "api"):
                 update(4, "Applying clean-scan finish...", 90)
-                out = scan_finish(cleaned)
+                out = scan_finish(out)
             cv2.imwrite(output_path, out)
             update(5, "Cleaned!", 100)
-            res = self._result(output_path, base_path, [], "")
+            res = self._result(output_path, base_path, items, "")
             res["clean_base_path"] = clean_base
             return res
 
