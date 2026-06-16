@@ -213,6 +213,13 @@ def auto_crop_page(image: np.ndarray) -> np.ndarray:
             quad = approx.reshape(4, 2).astype(np.float32)
             break
 
+    # How rotated is the page overall? minAreaRect's angle is robust against a
+    # footer/credit nub poking out of one corner (which would otherwise fool the
+    # 4-corner fit into thinking the page is skewed). A clean digital scan reads
+    # ~0°, so we never warp/tilt it.
+    rang = cv2.minAreaRect(largest)[2]
+    skew = min(abs(rang), abs(abs(rang) - 90))
+
     if quad is not None:
         rect = _order_corners(quad)
         (tl, tr, br, bl) = rect
@@ -223,19 +230,28 @@ def auto_crop_page(image: np.ndarray) -> np.ndarray:
         out_w = int(max(wA, wB))
         out_h = int(max(hA, hB))
         # Only accept the warp when it actually spans the detected content — a
-        # quad smaller than the content box would slice text off an edge.
-        if (out_w >= w * 0.35 and out_h >= h * 0.35
+        # quad smaller than the content box would slice text off an edge — AND
+        # the page is meaningfully skewed (a real photo, not a flat scan).
+        if (skew >= 3.0
+                and out_w >= w * 0.35 and out_h >= h * 0.35
                 and out_w >= bw * 0.92 and out_h >= bh * 0.92):
             dst = np.array([[0, 0], [out_w - 1, 0],
                             [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
             M = cv2.getPerspectiveTransform(rect, dst)
             warped = cv2.warpPerspective(image, M, (out_w, out_h))
-            print(f"[pipeline] auto-crop+deskew: {w}x{h} -> {out_w}x{out_h}")
+            print(f"[pipeline] auto-crop+deskew ({skew:.1f}°): {w}x{h} -> {out_w}x{out_h}")
             return warped
 
-    # Fallback: axis-aligned crop of the content box, with a small safety pad.
+    # Fallback: axis-aligned crop of the content box — but ONLY when the margin
+    # around it is a clean, uniform background (a photographed page sitting on a
+    # desk), never the page's own white gutter. Without this guard a flat digital
+    # raw gets its margins (and the footer/credit strip) shaved off.
     if bw < w * 0.35 or bh < h * 0.35:
         return image
+    if bw >= w * 0.9 and bh >= h * 0.9:
+        return image  # content already fills the frame; nothing to crop
+    if float(np.std(border)) > 18.0:
+        return image  # busy/inked border = digital page edge, not a backdrop
     pad = max(3, int(min(w, h) * 0.005))
     bx, by = max(0, bx - pad), max(0, by - pad)
     bw = min(w - bx, bw + 2 * pad)
