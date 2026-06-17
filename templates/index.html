@@ -499,6 +499,9 @@
         <input type="text" id="trainName" placeholder="e.g. Boruto" maxlength="60">
         <label>Learn from already-translated chapters <span class="muted">(ZIP or images — uses your current engine &amp; API key)</span></label>
         <input type="file" id="trainFiles" accept="image/*,.zip" multiple>
+        <label class="train-check" style="flex-direction:row;align-items:center;gap:.5rem;margin-top:.5rem;cursor:pointer">
+          <input type="checkbox" id="trainAll"> <span>Study every page <span class="muted">(no 100-page cap — slower &amp; more thorough, costs more API calls)</span></span>
+        </label>
         <button class="btn btn-primary btn-sm" id="trainLearn" type="button" style="margin-top:8px">Learn from these pages</button>
         <div id="trainStatus" class="muted" style="font-size:.8rem;margin-top:6px"></div>
 

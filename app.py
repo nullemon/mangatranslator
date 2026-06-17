@@ -809,6 +809,7 @@ async def profile_learn(
     model: str = Form(""),
     target_lang: str = Form("English"),
     source_lang: str = Form("Japanese"),
+    study_all: str = Form("false"),
     files: list[UploadFile] = File(...),
 ):
     """Learn (or enrich) a series profile from already-translated chapter pages.
@@ -826,9 +827,10 @@ async def profile_learn(
     if not total:
         raise HTTPException(400, "No readable images found in the upload")
 
-    # Study more pages when more chapters are uploaded, but cap the cost: up to
-    # 32 pages spread evenly across the whole upload, in batches of 8 per call.
-    n_study = min(max(8, total // 4), 32)
+    # Study a spread across the whole upload. By default cap at 100 pages to keep
+    # the cost sane; "study_all" removes the cap and reads every page (slower,
+    # more thorough — best for understanding a big series).
+    n_study = total if study_all == "true" else min(total, 100)
     sample = _sample_evenly(refs, n_study)
     images = [im for im in (_decode_ref(r[1]) for r in sample) if im is not None]
     if not images:

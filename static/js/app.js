@@ -1114,7 +1114,9 @@ document.addEventListener("DOMContentLoaded", () => {
   function betaOn() { return !!(betaMode && betaMode.checked); }
   function applyBeta() { document.body.classList.toggle("beta", betaOn()); }
   if (betaMode) {
-    betaMode.checked = localStorage.getItem("manga_beta") === "1";
+    // Beta features are ON by default now — only off if the user explicitly turned them off.
+    const savedBeta = localStorage.getItem("manga_beta");
+    betaMode.checked = savedBeta === null ? true : savedBeta === "1";
     applyBeta();
     betaMode.addEventListener("change", () => {
       localStorage.setItem("manga_beta", betaMode.checked ? "1" : "0");
@@ -1781,6 +1783,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const trainProfileSel = document.getElementById("trainProfileSel");
   const trainName     = document.getElementById("trainName");
   const trainFiles    = document.getElementById("trainFiles");
+  const trainAll      = document.getElementById("trainAll");
   const trainLearn    = document.getElementById("trainLearn");
   const trainStatus   = document.getElementById("trainStatus");
   const trainResult   = document.getElementById("trainResult");
@@ -1878,9 +1881,12 @@ document.addEventListener("DOMContentLoaded", () => {
     f.append("model", modelSelect.value);
     f.append("target_lang", targetLang.value);
     f.append("source_lang", sourceLang ? sourceLang.value : "Japanese");
+    f.append("study_all", trainAll && trainAll.checked ? "true" : "false");
     [...trainFiles.files].forEach(file => f.append("files", file));
     trainLearn.disabled = true;
-    trainStatus.textContent = "Studying your chapters with the AI… (this can take 30–60s)";
+    trainStatus.textContent = (trainAll && trainAll.checked)
+      ? "Studying EVERY page with the AI… (this can take a few minutes for many chapters)"
+      : "Studying your chapters with the AI… (this can take 30–60s)";
     try {
       const res = await fetch("/api/profile/learn", { method: "POST", body: f });
       if (!res.ok) { let m = res.statusText; try { m = (await res.json()).detail || m; } catch (_) {} throw new Error(m); }
