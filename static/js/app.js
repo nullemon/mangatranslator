@@ -1969,6 +1969,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("scanlation", (endScan && endScan.value.trim()) || "BorutoTBV Scanlations");
       // Discord is omitted entirely when the toggle is off (clean page).
       const showDiscord = !endShowDiscord || endShowDiscord.checked;
+      f.append("show_discord", showDiscord ? "true" : "false");
       f.append("discord", showDiscord ? ((endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv") : "");
       if (endMessage && endMessage.value.trim()) f.append("footer", endMessage.value.trim());
       f.append("style", endTheme ? endTheme.value : "royal");

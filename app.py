@@ -682,6 +682,7 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
 async def end_card(
     scanlation: str = Form("BorutoTBV Scanlations"),
     discord: str = Form("discord.gg/borutotbv"),
+    show_discord: str = Form("true"),
     style: str = Form("royal"),
     theme: str = Form(""),
     accent: str = Form(""),
@@ -695,6 +696,10 @@ async def end_card(
     Discord is optional (leave blank to omit it); heading/kicker/footer let the
     user put a custom message. No upload or API key needed."""
     from core.endcard import make_end_card
+    # Explicit opt-out wins regardless of what's typed in the discord field, so
+    # "hide Discord" always produces a clean page.
+    if show_discord.strip().lower() not in ("true", "1", "yes", "on"):
+        discord = ""
     task_id = str(uuid.uuid4())
     output_path = f"output/{task_id}_end.png"
     try:
