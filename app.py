@@ -230,12 +230,23 @@ async def translate(
     isolate_page: str = Form("false"),
     compress: str = Form("false"),
     credit: str = Form(""),
+    profile: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
     is_clean = clean_only == "true"
     if not is_clean and not api_key:
         raise HTTPException(400, "api_key is required to translate")
+
+    # Trained series profile: fold the learned glossary + house style into the
+    # style instructions so this chapter matches the team's established style.
+    style_prompt = style_prompt or ""
+    if profile.strip():
+        from core import profiles as _profiles
+        _prof = _profiles.load(profile.strip())
+        if _prof:
+            block = _profiles.prompt_block(_prof)
+            style_prompt = (block + "\n\n" + style_prompt).strip() if style_prompt.strip() else block
 
     task_id = str(uuid.uuid4())
     global LAST_TRANSLATE_TASK
@@ -705,6 +716,119 @@ async def end_card(
         "original_url": f"/api/original/{task_id}",
     }
     return {"task_id": task_id}
+
+
+def _images_from_uploads(blobs):
+    """Decode a list of (filename, bytes) into BGR images, expanding any ZIPs.
+    Returns images sorted by name so chapter/page order is preserved."""
+    named = []
+    for name, data in blobs:
+        low = (name or "").lower()
+        if low.endswith(".zip") or data[:2] == b"PK":
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                    for zi in sorted(zf.namelist()):
+                        if zi.endswith("/") or "__MACOSX" in zi:
+                            continue
+                        if zi.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                            named.append((zi, zf.read(zi)))
+            except Exception as e:
+                print(f"[profile] bad zip {name}: {e}")
+            continue
+        named.append((name, data))
+
+    named.sort(key=lambda kv: kv[0])
+    images = []
+    for _, data in named:
+        arr = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is not None:
+            images.append(img)
+    return images
+
+
+def _sample_evenly(items, n):
+    if len(items) <= n:
+        return items
+    step = len(items) / float(n)
+    return [items[int(i * step)] for i in range(n)]
+
+
+@app.get("/api/profiles")
+async def profiles_list():
+    from core import profiles
+    return {"profiles": profiles.list_profiles()}
+
+
+@app.get("/api/profile/{slug}")
+async def profile_get(slug: str):
+    from core import profiles
+    p = profiles.load(slug)
+    if not p:
+        raise HTTPException(404, "Profile not found")
+    return p
+
+
+@app.post("/api/profile/{slug}")
+async def profile_save(slug: str, request: Request):
+    """Save an edited profile (the review step)."""
+    from core import profiles
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    saved = profiles.save(profiles.normalize(body))
+    return saved
+
+
+@app.delete("/api/profile/{slug}")
+async def profile_delete(slug: str):
+    from core import profiles
+    return {"deleted": profiles.delete(slug)}
+
+
+@app.post("/api/profile/learn")
+async def profile_learn(
+    name: str = Form(...),
+    provider: str = Form("claude"),
+    api_key: str = Form(""),
+    model: str = Form(""),
+    target_lang: str = Form("English"),
+    source_lang: str = Form("Japanese"),
+    files: list[UploadFile] = File(...),
+):
+    """Learn (or enrich) a series profile from already-translated chapter pages.
+    Accepts loose images and/or ZIPs of pages; samples a handful and has the
+    vision model distill a glossary + house style, then merges into the profile."""
+    if not api_key:
+        raise HTTPException(400, "api_key is required to learn a profile")
+    if not name.strip():
+        raise HTTPException(400, "A series name is required")
+
+    blobs = [(f.filename or "page.png", await f.read()) for f in files]
+    images = _images_from_uploads(blobs)
+    if not images:
+        raise HTTPException(400, "No readable images found in the upload")
+
+    sample = _sample_evenly(images, 8)
+    from core import profiles
+    from core.translator import make_translator
+
+    def work():
+        translator = make_translator(provider, api_key, model,
+                                     source_lang=source_lang)
+        learned = translator.analyze_pages(sample, target_lang)
+        existing = profiles.load(name)
+        merged = profiles.merge_learned(existing, learned, name,
+                                        added_sources=len(images))
+        return profiles.save(merged)
+
+    try:
+        loop = asyncio.get_event_loop()
+        prof = await loop.run_in_executor(None, work)
+    except Exception as e:
+        raise HTTPException(500, f"Learning failed: {e}")
+    return {"profile": prof, "pages_seen": len(images), "pages_studied": len(sample)}
 
 
 @app.get("/api/status/{task_id}")

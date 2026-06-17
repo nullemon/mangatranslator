@@ -281,6 +281,63 @@ Return ONLY a JSON array (no markdown), exactly one object:
 Use UPPERCASE for the translation. If there is no readable text, return [].{_style_block(style)}"""
 
 
+def learn_profile_prompt(target_lang: str = "English", source_lang: str = "Japanese") -> str:
+    """Ask the model to study several ALREADY-TRANSLATED pages from one series and
+    distill the group's house style into a reusable profile (glossary + rules)."""
+    src = _source_label(source_lang, target_lang)
+    return f"""You are a senior manga localization editor building a STYLE GUIDE for
+a scanlation team. You are shown several finished, already-translated {target_lang}
+pages from ONE ongoing series (translated from {src}). Study them as a body of
+work and reverse-engineer this team's house style so future chapters can be
+translated to match EXACTLY.
+
+Extract:
+1. A GLOSSARY of recurring proper nouns and series terms with the team's exact
+   {target_lang} rendering — character names, places, organizations, techniques /
+   special powers, signature catchphrases. Capture spelling/casing precisely.
+2. HONORIFICS policy — are -san/-kun/-sama/-sensei kept, dropped, or adapted?
+3. SOUND-EFFECTS policy — are SFX translated/typeset, or left in the art?
+4. A short STYLE GUIDE (3-6 sentences): tone, formality, how casual/forceful the
+   dialogue reads, punctuation/emphasis habits, and any recurring phrasing.
+
+Return ONLY a JSON object (no markdown fences, no commentary):
+{{
+  "glossary": [
+    {{"term": "<name as it appears / romaji>", "translation": "<exact {target_lang} rendering>", "notes": "<role/context, optional>"}}
+  ],
+  "honorifics": "<one-line policy>",
+  "sfx_policy": "<one-line policy>",
+  "style_guide": "<3-6 sentences capturing the house voice>"
+}}
+
+Rules:
+- Only include glossary entries you actually SEE evidence for on these pages.
+- Prefer the team's spelling even if unusual; do not 'correct' it.
+- Keep it concise and high-signal; no duplicates.
+- Return ONLY the JSON object."""
+
+
+def extract_json_object(text: str) -> dict:
+    """Pull a single JSON object out of a model response (fences/prose tolerant)."""
+    text = (text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    raise ValueError(f"Could not parse JSON object from model response: {text[:300]}")
+
+
 def extract_json_array(text: str) -> list:
     """Robustly pull a JSON array out of a model response that may include
     markdown fences or stray prose."""

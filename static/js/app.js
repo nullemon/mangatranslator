@@ -654,6 +654,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
       }
+      if (profileSelect && profileSelect.value) {
+        f.append("profile", profileSelect.value);
+      }
       return { url: "/api/translate", form: f };
     }
     if (isUpscaleOnly(workflow)) {
@@ -1769,6 +1772,161 @@ document.addEventListener("DOMContentLoaded", () => {
     } finally {
       reuseBtn.disabled = false; reuseBtn.textContent = "↺ Use Result as Input";
     }
+  });
+
+  /* ══ TRAINED SERIES STYLE PROFILES ══ */
+  const profileSelect = document.getElementById("profileSelect");
+  const trainBtn      = document.getElementById("trainBtn");
+  const trainModal    = document.getElementById("trainModal");
+  const trainProfileSel = document.getElementById("trainProfileSel");
+  const trainName     = document.getElementById("trainName");
+  const trainFiles    = document.getElementById("trainFiles");
+  const trainLearn    = document.getElementById("trainLearn");
+  const trainStatus   = document.getElementById("trainStatus");
+  const trainResult   = document.getElementById("trainResult");
+  const trainStyle    = document.getElementById("trainStyle");
+  const trainHon      = document.getElementById("trainHon");
+  const trainSfx      = document.getElementById("trainSfx");
+  const trainGloss    = document.getElementById("trainGloss");
+  const trainSave     = document.getElementById("trainSave");
+  const trainDelete   = document.getElementById("trainDelete");
+  const trainClose    = document.getElementById("trainClose");
+  const trainMeta     = document.getElementById("trainMeta");
+
+  function glossToText(g) {
+    return (g || []).map(it => `${it.term ? it.term + " = " : ""}${it.translation}` +
+      (it.notes ? `  # ${it.notes}` : "")).join("\n");
+  }
+  function textToGloss(t) {
+    return (t || "").split("\n").map(line => {
+      line = line.trim(); if (!line) return null;
+      let notes = ""; const h = line.split("#");
+      if (h.length > 1) { notes = h.slice(1).join("#").trim(); line = h[0].trim(); }
+      const m = line.split(/=|→/);
+      if (m.length >= 2) return { term: m[0].trim(), translation: m.slice(1).join("=").trim(), notes };
+      return { term: "", translation: line, notes };
+    }).filter(x => x && x.translation);
+  }
+
+  async function refreshProfiles(selectSlug) {
+    if (!profileSelect) return;
+    let list = [];
+    try { list = (await (await fetch("/api/profiles")).json()).profiles || []; } catch (_) {}
+    const cur = selectSlug || profileSelect.value || localStorage.getItem("manga_profile") || "";
+    profileSelect.innerHTML = '<option value="">None — generic translation</option>' +
+      list.map(p => `<option value="${esc(p.slug)}">${esc(p.name)} · ${p.terms} terms</option>`).join("");
+    profileSelect.value = list.some(p => p.slug === cur) ? cur : "";
+    localStorage.setItem("manga_profile", profileSelect.value);
+    if (trainProfileSel) {
+      trainProfileSel.innerHTML = '<option value="">＋ New series…</option>' +
+        list.map(p => `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join("");
+    }
+  }
+  if (profileSelect) {
+    profileSelect.addEventListener("change", () => localStorage.setItem("manga_profile", profileSelect.value));
+    refreshProfiles();
+  }
+
+  function fillProfile(p) {
+    trainName.value = p.name || "";
+    trainStyle.value = p.style_guide || "";
+    trainHon.value = p.honorifics || "";
+    trainSfx.value = p.sfx_policy || "";
+    trainGloss.value = glossToText(p.glossary);
+    trainMeta.textContent = `${(p.glossary || []).length} terms · learned from ${p.sources || 0} pages`;
+    trainResult.style.display = "";
+    trainDelete.style.display = p.slug ? "" : "none";
+  }
+  function buildProfileBody() {
+    return {
+      name: trainName.value.trim(),
+      style_guide: trainStyle.value.trim(),
+      honorifics: trainHon.value.trim(),
+      sfx_policy: trainSfx.value.trim(),
+      glossary: textToGloss(trainGloss.value),
+    };
+  }
+
+  if (trainBtn) trainBtn.addEventListener("click", async () => {
+    await refreshProfiles();
+    trainProfileSel.value = "";
+    trainName.value = ""; trainFiles.value = ""; trainStatus.textContent = "";
+    trainResult.style.display = "none"; trainDelete.style.display = "none";
+    trainModal.style.display = "flex";
+  });
+  if (trainClose) trainClose.addEventListener("click", () => { trainModal.style.display = "none"; });
+  if (trainModal) trainModal.addEventListener("click", e => { if (e.target === trainModal) trainModal.style.display = "none"; });
+
+  if (trainProfileSel) trainProfileSel.addEventListener("change", async () => {
+    const slug = trainProfileSel.value;
+    if (!slug) { trainName.value = ""; trainResult.style.display = "none"; trainDelete.style.display = "none"; return; }
+    try {
+      const p = await (await fetch(`/api/profile/${slug}`)).json();
+      fillProfile(p);
+    } catch (_) { trainStatus.textContent = "Couldn't load that profile."; }
+  });
+
+  if (trainLearn) trainLearn.addEventListener("click", async () => {
+    const name = trainName.value.trim();
+    if (!name) { trainStatus.textContent = "Enter a series name first."; trainName.focus(); return; }
+    if (!trainFiles.files.length) { trainStatus.textContent = "Pick a ZIP or some translated pages."; return; }
+    if (!apiKeyInput.value.trim()) { trainStatus.textContent = "Add your translation API key in settings first."; return; }
+    const f = new FormData();
+    f.append("name", name);
+    f.append("provider", engineSelect.value);
+    f.append("api_key", apiKeyInput.value.trim());
+    f.append("model", modelSelect.value);
+    f.append("target_lang", targetLang.value);
+    f.append("source_lang", sourceLang ? sourceLang.value : "Japanese");
+    [...trainFiles.files].forEach(file => f.append("files", file));
+    trainLearn.disabled = true;
+    trainStatus.textContent = "Studying your chapters with the AI… (this can take 30–60s)";
+    try {
+      const res = await fetch("/api/profile/learn", { method: "POST", body: f });
+      if (!res.ok) { let m = res.statusText; try { m = (await res.json()).detail || m; } catch (_) {} throw new Error(m); }
+      const data = await res.json();
+      fillProfile(data.profile);
+      trainStatus.textContent = `Learned from ${data.pages_studied} of ${data.pages_seen} pages. Review & edit below, then Save.`;
+      await refreshProfiles(data.profile.slug);
+    } catch (e) {
+      trainStatus.textContent = "Learning failed: " + e.message;
+    } finally {
+      trainLearn.disabled = false;
+    }
+  });
+
+  if (trainSave) trainSave.addEventListener("click", async () => {
+    const body = buildProfileBody();
+    if (!body.name) { trainStatus.textContent = "A series name is required."; return; }
+    trainSave.disabled = true;
+    try {
+      const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const res = await fetch(`/api/profile/${slug}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const saved = await res.json();
+      await refreshProfiles(saved.slug);
+      if (profileSelect) { profileSelect.value = saved.slug; localStorage.setItem("manga_profile", saved.slug); }
+      trainStatus.textContent = `Saved “${saved.name}”. It's now selected for translation.`;
+      trainDelete.style.display = "";
+    } catch (e) {
+      trainStatus.textContent = "Save failed: " + e.message;
+    } finally {
+      trainSave.disabled = false;
+    }
+  });
+
+  if (trainDelete) trainDelete.addEventListener("click", async () => {
+    const name = trainName.value.trim();
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!slug || !confirm(`Delete the “${name}” profile?`)) return;
+    try {
+      await fetch(`/api/profile/${slug}`, { method: "DELETE" });
+      await refreshProfiles("");
+      trainName.value = ""; trainResult.style.display = "none"; trainProfileSel.value = "";
+      trainStatus.textContent = "Profile deleted.";
+    } catch (e) { trainStatus.textContent = "Delete failed: " + e.message; }
   });
 
   /* ══ END PAGE (one-click "thanks for reading" last page) ══ */

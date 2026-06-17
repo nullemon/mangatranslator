@@ -216,6 +216,14 @@
         <label for="glossary">Glossary <span class="muted">(beta — names/terms kept consistent every page)</span></label>
         <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
       </div>
+      <div class="setting-group prompt-group" style="grid-column:1/-1;flex-basis:100%;width:100%">
+        <label for="profileSelect">🧠 Trained series style <span class="muted">(AI learns from chapters you upload, then matches that style)</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="profileSelect" style="flex:1"><option value="">None — generic translation</option></select>
+          <button class="btn btn-ghost btn-sm" id="trainBtn" type="button">Train / Manage…</button>
+        </div>
+        <span class="toggle-hint">Upload a few of your already-translated chapters once (ZIP or images). Pick the series here and new chapters translate in that exact style — names, tone, honorifics, SFX.</span>
+      </div>
       <div class="setting-group" style="grid-column:1/-1;flex-basis:100%;width:100%;flex-direction:row;align-items:center;gap:.6rem">
         <span class="muted" style="font-size:.78rem">All settings save automatically and restore on reload.</span>
         <button type="button" class="btn btn-ghost btn-sm" id="resetSettings" title="Clear saved defaults (keeps API keys)">Reset defaults</button>
@@ -475,6 +483,43 @@
   </div>
 
   <!-- CROP MODAL -->
+  <!-- TRAIN SERIES STYLE MODAL -->
+  <div class="train-modal" id="trainModal" style="display:none">
+    <div class="train-card">
+      <div class="train-head">
+        <h3 style="margin:0">🧠 Train a series style</h3>
+        <button class="btn btn-ghost btn-sm" id="trainClose" type="button">✕</button>
+      </div>
+      <div class="train-body">
+        <div class="train-row">
+          <select id="trainProfileSel" style="flex:1"><option value="">＋ New series…</option></select>
+          <button class="btn btn-ghost btn-sm" id="trainDelete" type="button" title="Delete this profile" style="display:none">Delete</button>
+        </div>
+        <label>Series name</label>
+        <input type="text" id="trainName" placeholder="e.g. Boruto" maxlength="60">
+        <label>Learn from already-translated chapters <span class="muted">(ZIP or images — uses your current engine &amp; API key)</span></label>
+        <input type="file" id="trainFiles" accept="image/*,.zip" multiple>
+        <button class="btn btn-primary btn-sm" id="trainLearn" type="button" style="margin-top:8px">Learn from these pages</button>
+        <div id="trainStatus" class="muted" style="font-size:.8rem;margin-top:6px"></div>
+
+        <div id="trainResult" style="display:none;margin-top:12px;border-top:1px solid var(--border,#2a2e3a);padding-top:12px">
+          <label>House voice / style guide</label>
+          <textarea id="trainStyle" rows="3" placeholder="Tone, formality, phrasing habits…"></textarea>
+          <div class="train-row">
+            <div style="flex:1"><label>Honorifics policy</label><input type="text" id="trainHon" placeholder="e.g. keep -san/-kun"></div>
+            <div style="flex:1"><label>SFX policy</label><input type="text" id="trainSfx" placeholder="e.g. leave SFX in art"></div>
+          </div>
+          <label>Glossary <span class="muted">(one per line: <code>term = English</code> — edit freely)</span></label>
+          <textarea id="trainGloss" rows="6" placeholder="カワキ = Kawaki&#10;うずまきボルト = Boruto Uzumaki&#10;螺旋丸 = Rasengan"></textarea>
+          <div class="train-row" style="justify-content:flex-end;margin-top:8px">
+            <span id="trainMeta" class="muted" style="font-size:.76rem;margin-right:auto"></span>
+            <button class="btn btn-primary btn-sm" id="trainSave" type="button">Save profile</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="crop-modal" id="cropModal" style="display:none">
     <div class="crop-toolbar">
       <span class="crop-hint">Click &amp; drag to select the area to keep</span>

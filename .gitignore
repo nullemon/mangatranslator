@@ -4,3 +4,6 @@ uploads/
 output/
 *.egg-info/
 .env
+
+# Learned series style profiles (user data)
+profiles/

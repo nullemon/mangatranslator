@@ -134,6 +134,13 @@ class ClaudeTranslator:
             arr = []
         return arr[0] if arr else {"original": "", "translation": ""}
 
+    def analyze_pages(self, images, target_lang="English") -> dict:
+        """Study several already-translated pages and distill a style profile."""
+        prompt = prompts.learn_profile_prompt(target_lang, self.source_lang)
+        content = [self._image_block(im) for im in images]
+        content.append({"type": "text", "text": prompt})
+        return prompts.extract_json_object(self._ask(content))
+
 
 class GeminiTranslator:
     """Translation backend powered by Google Gemini (vision), via REST."""
@@ -227,6 +234,12 @@ class GeminiTranslator:
         except ValueError:
             arr = []
         return arr[0] if arr else {"original": "", "translation": ""}
+
+    def analyze_pages(self, images, target_lang="English") -> dict:
+        """Study several already-translated pages and distill a style profile."""
+        prompt = prompts.learn_profile_prompt(target_lang, self.source_lang)
+        parts = [{"text": prompt}] + [self._image_part(im) for im in images]
+        return prompts.extract_json_object(self._ask(parts))
 
     def _err(self, resp: httpx.Response) -> str:
         try:

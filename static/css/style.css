@@ -431,6 +431,14 @@ body.beta .beta-only{display:revert !important}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ── Crop modal ── */
+.train-modal{position:fixed;inset:0;z-index:1001;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem}
+.train-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:min(560px,96vw);max-height:92vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+.train-head{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border)}
+.train-body{padding:1.1rem 1.25rem;display:flex;flex-direction:column;gap:.35rem}
+.train-body label{font-size:.82rem;color:var(--text-dim);margin-top:.5rem}
+.train-body input[type=text],.train-body select,.train-body textarea{width:100%;padding:.5rem .6rem;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font:inherit}
+.train-body textarea{resize:vertical}
+.train-row{display:flex;gap:.6rem;align-items:center}
 .crop-modal{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.85);display:flex;flex-direction:column}
 .crop-toolbar{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
 .crop-hint{flex:1;font-size:.85rem;color:var(--text-dim)}
