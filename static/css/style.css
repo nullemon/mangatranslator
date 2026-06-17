@@ -86,19 +86,28 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 
 /* ── Cards / panels ── */
 .settings-bar{
-  display:flex;flex-direction:column;gap:1.4rem;
+  display:flex;flex-direction:column;gap:.9rem;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--r-lg);padding:1.25rem 1.4rem;margin-bottom:1.25rem;
+  border-radius:var(--r-lg);padding:.7rem 1.1rem 1rem;margin-bottom:1rem;
   box-shadow:var(--shadow-sm);
 }
+/* Collapse / expand the whole panel to reclaim space above the workflow. */
+.settings-head{
+  display:flex;align-items:center;gap:.5rem;cursor:pointer;user-select:none;
+  background:none;border:none;color:var(--text-dim);padding:.15rem 0;width:100%;
+  font:inherit;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+}
+.settings-head .chev{transition:transform .18s;margin-left:auto;color:var(--text-faint)}
+.settings-bar.collapsed .settings-head .chev{transform:rotate(-90deg)}
+.settings-bar.collapsed>section,.settings-bar.collapsed>.settings-footer{display:none}
 /* Each labelled group of settings is its own responsive grid. */
 .settings-section{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:1rem 1.4rem;align-items:start;
+  gap:.55rem 1.1rem;align-items:start;
 }
 .section-title{
-  grid-column:1/-1;display:flex;align-items:center;gap:.7rem;margin:0;
-  font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  grid-column:1/-1;display:flex;align-items:center;gap:.7rem;margin:.1rem 0 0;
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.09em;font-weight:700;
   color:var(--text-dim);
 }
 .section-title::after{content:"";flex:1;height:1px;background:var(--border)}
@@ -107,22 +116,23 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .setting-group.full{grid-column:1/-1}
 .settings-footer{
   display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
-  border-top:1px solid var(--border);padding-top:1rem;
+  border-top:1px solid var(--border);padding-top:.7rem;
 }
-.settings-footer .muted{font-size:.78rem;margin-right:auto}
-/* End page: tidy two-up rows + a single controls strip. */
-.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.6rem}
-.endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.55rem;margin:.2rem 0 .5rem}
+.settings-footer .muted{font-size:.76rem;margin-right:auto}
+/* End page: tidy two-up rows + a single controls strip (hints stay inline). */
+.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.45rem}
+.endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem;margin:.1rem 0 .4rem}
+.endpage-controls .toggle-hint{width:auto;margin:0}
 @media(max-width:1080px){.settings-section{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.settings-section{grid-template-columns:1fr}.endpage-row{grid-template-columns:1fr}}
-.setting-group{display:flex;flex-direction:column;gap:.4rem;min-width:0}
+.setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .setting-group>label{
-  font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;
   color:var(--text-faint);font-weight:600;
 }
 .setting-group input,.setting-group select,.prompt-group textarea,#enhanceModel{
   background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-  padding:.55rem .7rem;border-radius:var(--r);font-size:.875rem;outline:none;
+  padding:.42rem .6rem;border-radius:var(--r);font-size:.82rem;outline:none;
   font-family:inherit;transition:border-color .15s,box-shadow .15s;width:100%;
 }
 .setting-group input:hover,.setting-group select:hover{border-color:var(--border-strong)}
@@ -160,9 +170,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .font-add:hover{border-color:var(--accent);color:var(--accent)}
 
 /* toggle switch */
-.toggle-group{flex-direction:row;align-items:center;gap:.6rem;flex-wrap:wrap}
+.toggle-group{flex-direction:row;align-items:center;gap:.5rem;flex-wrap:wrap}
 .toggle-group>label:first-child{order:0}
-.toggle-hint{font-size:.7rem;color:var(--text-faint);width:100%;line-height:1.45}
+.toggle-hint{font-size:.66rem;color:var(--text-faint);width:100%;line-height:1.35}
 .toggle{position:relative;width:40px;height:23px;flex-shrink:0}
 .toggle input{opacity:0;width:0;height:0}
 .toggle-slider{position:absolute;inset:0;background:var(--border-strong);border-radius:999px;cursor:pointer;transition:.2s}

@@ -1112,6 +1112,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Formerly-"beta" tools (glossary, free-form add, undo/redo) are now always on.
   function betaOn() { return true; }
   document.body.classList.add("beta");
+
+  // Collapse / expand the settings panel (state remembered across reloads).
+  const settingsBar = document.getElementById("settingsBar");
+  const settingsToggle = document.getElementById("settingsToggle");
+  if (settingsBar && settingsToggle) {
+    if (localStorage.getItem("manga_settings_collapsed") === "1")
+      settingsBar.classList.add("collapsed");
+    settingsToggle.addEventListener("click", () => {
+      const collapsed = settingsBar.classList.toggle("collapsed");
+      localStorage.setItem("manga_settings_collapsed", collapsed ? "1" : "0");
+    });
+  }
   if (glossary) {
     glossary.value = localStorage.getItem("manga_glossary") || "";
     glossary.addEventListener("input", () =>
