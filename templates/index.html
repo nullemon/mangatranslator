@@ -38,205 +38,227 @@
     </header>
 
     <div class="settings-bar">
-      <div class="setting-group">
-        <label for="engine">Translation Engine</label>
-        <select id="engine">
-          <option value="claude">Claude (Anthropic)</option>
-          <option value="gemini">Gemini (Google)</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label for="apiKey" id="apiKeyLabel">Claude API Key</label>
-        <div class="key-field">
-          <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
-          <span class="key-status" id="apiKeyStatus">Saved</span>
-          <button type="button" class="key-reveal" id="apiKeyReveal" title="Show / hide key" aria-label="Show or hide key">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="setting-group">
-        <label for="sourceLang">Source Language</label>
-        <select id="sourceLang">
-          <option value="Japanese">Japanese</option>
-          <option value="Arabic">Arabic</option>
-          <option value="auto">Auto-detect</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label for="targetLang">Target Language</label>
-        <select id="targetLang">
-          <option value="English">English</option>
-          <option value="Arabic">Arabic (العربية)</option>
-          <option value="Spanish">Spanish</option>
-          <option value="French">French</option>
-          <option value="German">German</option>
-          <option value="Portuguese">Portuguese</option>
-          <option value="Korean">Korean</option>
-          <option value="Chinese">Chinese (Simplified)</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label for="model">Model</label>
-        <select id="model"></select>
-      </div>
-      <div class="setting-group">
-        <label for="fontSelect">Font</label>
-        <div class="font-row">
-          <select id="fontSelect"><option value="">Auto-detect</option></select>
-          <label class="font-add" title="Add .ttf / .otf font files">
-            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 4v12M4 10h12"/></svg>
-            Add
-            <input type="file" id="fontUpload" accept=".ttf,.otf" multiple hidden>
-          </label>
-        </div>
-      </div>
-      <div class="setting-group">
-        <label for="textCase">Lettering Case</label>
-        <select id="textCase">
-          <option value="upper">UPPERCASE (classic)</option>
-          <option value="keep">Keep as written</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label for="pageFinish">Page Finish</label>
-        <select id="pageFinish">
-          <option value="clean">Clean scan (keeps art)</option>
-          <option value="off">Untouched (original pixels)</option>
-        </select>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="smartMode">Smart Detection</label>
-        <label class="toggle">
-          <input type="checkbox" id="smartMode">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Off = trained balloon model (recommended). On = AI vision locates text for unusual layouts.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="translateSfx">Translate Background SFX</label>
-        <label class="toggle">
-          <input type="checkbox" id="translateSfx">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="maxQuality">Maximum Quality</label>
-        <label class="toggle">
-          <input type="checkbox" id="maxQuality">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Process at full resolution and use the whole GPU stack (AI finds all text, GPU cleans it). Slower; best with the GPU setup installed.</span>
-      </div>
-      <div class="setting-group toggle-group beta-only">
-        <label for="isolatePage">Isolate Page (beta)</label>
-        <label class="toggle">
-          <input type="checkbox" id="isolatePage">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Remove the background around a photographed page (table/floor/edges) — whites it out and crops to the page. Best-effort for phone photos.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="hdUpscale">HD Upscale</label>
-        <label class="toggle">
-          <input type="checkbox" id="hdUpscale">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Sharpen &amp; upscale low-res pages with MangaJaNai. Faithful — keeps the art exactly.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="compressOut">Compress Output</label>
-        <label class="toggle">
-          <input type="checkbox" id="compressOut">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Save the result as a ~2–4MB JPEG instead of a heavy PNG (great for big pages / Clean output).</span>
-      </div>
-      <div class="setting-group">
-        <label for="watermark">Watermark</label>
-        <input type="text" id="watermark" placeholder="e.g. @yourname" maxlength="60">
-      </div>
-      <div class="setting-group">
-        <label for="credit">Credit / TL name <span class="muted">(in the margin, movable)</span></label>
-        <input type="text" id="credit" placeholder="e.g. TL: YourScans" maxlength="80">
-      </div>
-      <div class="setting-group">
-        <label for="endScan">End page <span class="muted">(one-click "thanks for reading" last page)</span></label>
-        <input type="text" id="endScan" placeholder="Scanlation name" maxlength="60">
-        <input type="text" id="endDiscord" placeholder="discord.gg/yourserver" maxlength="80" style="margin-top:6px">
-        <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-          <label class="toggle" style="margin:0"><input type="checkbox" id="endShowDiscord" checked><span class="toggle-slider"></span></label>
-          <span class="toggle-hint" style="margin:0;flex:1">Show Discord link <span class="muted">(turn off for a clean page with no Discord)</span></span>
-        </div>
-        <input type="text" id="endMessage" placeholder="Custom message (optional — replaces 'support the official release')" maxlength="120" style="margin-top:6px">
-        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-          <select id="endTheme" style="flex:1">
-            <option value="royal">👑 Royal (gold)</option>
-            <option value="naruto">🍥 Ninja orange</option>
-            <option value="onepiece">🏴‍☠️ Pirate poster</option>
-            <option value="ragnarok">⚔️ Gods &amp; gold</option>
-            <option value="bluelock">⚽ Striker blue</option>
-            <option value="onepunch">👊 One-Punch impact</option>
-            <option value="neon">⚡ Neon glow</option>
-            <option value="minimal">▢ Minimal</option>
+      <!-- ── TRANSLATION ───────────────────────────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">Translation</h3>
+        <div class="setting-group">
+          <label for="engine">Translation Engine</label>
+          <select id="engine">
+            <option value="claude">Claude (Anthropic)</option>
+            <option value="gemini">Gemini (Google)</option>
           </select>
         </div>
-        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-          <label class="toggle" style="margin:0"><input type="checkbox" id="endUseColor"><span class="toggle-slider"></span></label>
-          <span class="toggle-hint" style="margin:0;flex:1">Custom accent color</span>
-          <input type="color" id="endColor" value="#d4af5a" style="width:42px;height:30px;padding:0;border:none;background:none;cursor:pointer">
-          <button class="btn btn-primary btn-sm" id="endCardBtn" type="button">+ Make End Page</button>
+        <div class="setting-group">
+          <label for="apiKey" id="apiKeyLabel">Claude API Key</label>
+          <div class="key-field">
+            <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
+            <span class="key-status" id="apiKeyStatus">Saved</span>
+            <button type="button" class="key-reveal" id="apiKeyReveal" title="Show / hide key" aria-label="Show or hide key">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
         </div>
-        <span class="toggle-hint">Adds a neat final page (heading + your name + Discord) in your chosen style. It joins the page strip and the ZIP export.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="removeWatermark">Remove Site Watermarks</label>
-        <label class="toggle">
-          <input type="checkbox" id="removeWatermark" checked>
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Erase scanlation-site stamps / URLs (e.g. eshadow.net) added on top of the art.</span>
-      </div>
-      <div class="setting-group toggle-group">
-        <label for="replaceWatermark">Replace With My Watermark</label>
-        <label class="toggle">
-          <input type="checkbox" id="replaceWatermark">
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="toggle-hint">Drop the Watermark text above into the spot the site watermark was erased from (instead of stamping it across the page).</span>
-      </div>
-      <div class="setting-group">
-        <label for="transStyle">Translation Approach</label>
-        <select id="transStyle">
-          <option value="natural">Natural — read the panel, localize (recommended)</option>
-          <option value="literal">Literal — faithful, close to original wording</option>
-          <option value="liberal">Liberal — punchy, rewritten for flow</option>
-        </select>
-      </div>
-      <div class="setting-group prompt-group" style="grid-column:1/-1;flex-basis:100%;width:100%">
-        <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
-        <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
-      </div>
-      <div class="setting-group prompt-group beta-only" style="grid-column:1/-1;flex-basis:100%;width:100%">
-        <label for="glossary">Glossary <span class="muted">(beta — names/terms kept consistent every page)</span></label>
-        <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
-      </div>
-      <div class="setting-group prompt-group" style="grid-column:1/-1;flex-basis:100%;width:100%">
-        <label for="profileSelect">🧠 Trained series style <span class="muted">(AI learns from chapters you upload, then matches that style)</span></label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <select id="profileSelect" style="flex:1"><option value="">None — generic translation</option></select>
-          <button class="btn btn-ghost btn-sm" id="trainBtn" type="button">Train / Manage…</button>
+        <div class="setting-group">
+          <label for="sourceLang">Source Language</label>
+          <select id="sourceLang">
+            <option value="Japanese">Japanese</option>
+            <option value="Arabic">Arabic</option>
+            <option value="auto">Auto-detect</option>
+          </select>
         </div>
-        <span class="toggle-hint">Upload a few of your already-translated chapters once (ZIP or images). Pick the series here and new chapters translate in that exact style — names, tone, honorifics, SFX.</span>
-      </div>
-      <div class="setting-group" style="grid-column:1/-1;flex-basis:100%;width:100%;flex-direction:row;align-items:center;gap:.6rem">
-        <span class="muted" style="font-size:.78rem">All settings save automatically and restore on reload.</span>
+        <div class="setting-group">
+          <label for="targetLang">Target Language</label>
+          <select id="targetLang">
+            <option value="English">English</option>
+            <option value="Arabic">Arabic (العربية)</option>
+            <option value="Spanish">Spanish</option>
+            <option value="French">French</option>
+            <option value="German">German</option>
+            <option value="Portuguese">Portuguese</option>
+            <option value="Korean">Korean</option>
+            <option value="Chinese">Chinese (Simplified)</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label for="model">Model</label>
+          <select id="model"></select>
+        </div>
+        <div class="setting-group">
+          <label for="transStyle">Translation Approach</label>
+          <select id="transStyle">
+            <option value="natural">Natural — read the panel, localize (recommended)</option>
+            <option value="literal">Literal — faithful, close to original wording</option>
+            <option value="liberal">Liberal — punchy, rewritten for flow</option>
+          </select>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="smartMode">Smart Detection</label>
+          <label class="toggle">
+            <input type="checkbox" id="smartMode">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Off = trained balloon model (recommended). On = AI vision locates text for unusual layouts.</span>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="translateSfx">Translate Background SFX</label>
+          <label class="toggle">
+            <input type="checkbox" id="translateSfx">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.</span>
+        </div>
+      </section>
+
+      <!-- ── STYLE & CONSISTENCY ───────────────────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">Style &amp; consistency</h3>
+        <div class="setting-group prompt-group full">
+          <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
+          <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
+        </div>
+        <div class="setting-group prompt-group full">
+          <label for="glossary">Glossary <span class="muted">(names/terms kept consistent every page)</span></label>
+          <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
+        </div>
+        <div class="setting-group prompt-group full">
+          <label for="profileSelect">🧠 Trained series style <span class="muted">(AI learns from chapters you upload, then matches that style)</span></label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="profileSelect" style="flex:1"><option value="">None — generic translation</option></select>
+            <button class="btn btn-ghost btn-sm" id="trainBtn" type="button">Train / Manage…</button>
+          </div>
+          <span class="toggle-hint">Upload a few of your already-translated chapters once (ZIP or images). Pick the series here and new chapters translate in that exact style — names, tone, honorifics, SFX.</span>
+        </div>
+      </section>
+
+      <!-- ── TYPESETTING & OUTPUT ──────────────────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">Typesetting &amp; output</h3>
+        <div class="setting-group">
+          <label for="fontSelect">Font</label>
+          <div class="font-row">
+            <select id="fontSelect"><option value="">Auto-detect</option></select>
+            <label class="font-add" title="Add .ttf / .otf font files">
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 4v12M4 10h12"/></svg>
+              Add
+              <input type="file" id="fontUpload" accept=".ttf,.otf" multiple hidden>
+            </label>
+          </div>
+        </div>
+        <div class="setting-group">
+          <label for="textCase">Lettering Case</label>
+          <select id="textCase">
+            <option value="upper">UPPERCASE (classic)</option>
+            <option value="keep">Keep as written</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label for="pageFinish">Page Finish</label>
+          <select id="pageFinish">
+            <option value="clean">Clean scan (keeps art)</option>
+            <option value="off">Untouched (original pixels)</option>
+          </select>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="maxQuality">Maximum Quality</label>
+          <label class="toggle">
+            <input type="checkbox" id="maxQuality">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Process at full resolution and use the whole GPU stack (AI finds all text, GPU cleans it). Slower; best with the GPU setup installed.</span>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="hdUpscale">HD Upscale</label>
+          <label class="toggle">
+            <input type="checkbox" id="hdUpscale">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Sharpen &amp; upscale low-res pages with MangaJaNai. Faithful — keeps the art exactly.</span>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="compressOut">Compress Output</label>
+          <label class="toggle">
+            <input type="checkbox" id="compressOut">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Save the result as a ~2–4MB JPEG instead of a heavy PNG (great for big pages / Clean output).</span>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="isolatePage">Isolate Page</label>
+          <label class="toggle">
+            <input type="checkbox" id="isolatePage">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Remove the background around a photographed page (table/floor/edges) — whites it out and crops to the page. Best-effort for phone photos.</span>
+        </div>
+      </section>
+
+      <!-- ── WATERMARK & CREDIT ────────────────────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">Watermark &amp; credit</h3>
+        <div class="setting-group">
+          <label for="watermark">Watermark</label>
+          <input type="text" id="watermark" placeholder="e.g. @yourname" maxlength="60">
+        </div>
+        <div class="setting-group">
+          <label for="credit">Credit / TL name <span class="muted">(in the margin, movable)</span></label>
+          <input type="text" id="credit" placeholder="e.g. TL: YourScans" maxlength="80">
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="removeWatermark">Remove Site Watermarks</label>
+          <label class="toggle">
+            <input type="checkbox" id="removeWatermark" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Erase scanlation-site stamps / URLs (e.g. eshadow.net) added on top of the art.</span>
+        </div>
+        <div class="setting-group toggle-group">
+          <label for="replaceWatermark">Replace With My Watermark</label>
+          <label class="toggle">
+            <input type="checkbox" id="replaceWatermark">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-hint">Drop the Watermark text above into the spot the site watermark was erased from (instead of stamping it across the page).</span>
+        </div>
+      </section>
+
+      <!-- ── END PAGE ──────────────────────────────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">End page <span class="muted">(one-click "thanks for reading" last page)</span></h3>
+        <div class="setting-group endpage full">
+          <div class="endpage-row">
+            <input type="text" id="endScan" placeholder="Scanlation name" maxlength="60">
+            <input type="text" id="endDiscord" placeholder="discord.gg/yourserver" maxlength="80">
+          </div>
+          <div class="endpage-row">
+            <select id="endTheme">
+              <option value="royal">👑 Royal (gold)</option>
+              <option value="naruto">🍥 Ninja orange</option>
+              <option value="onepiece">🏴‍☠️ Pirate poster</option>
+              <option value="ragnarok">⚔️ Gods &amp; gold</option>
+              <option value="bluelock">⚽ Striker blue</option>
+              <option value="onepunch">👊 One-Punch impact</option>
+              <option value="neon">⚡ Neon glow</option>
+              <option value="minimal">▢ Minimal</option>
+            </select>
+            <input type="text" id="endMessage" placeholder="Custom message (optional — replaces 'support the official release')" maxlength="120">
+          </div>
+          <div class="endpage-controls">
+            <label class="toggle" style="margin:0"><input type="checkbox" id="endShowDiscord" checked><span class="toggle-slider"></span></label>
+            <span class="toggle-hint" style="margin:0">Show Discord link</span>
+            <label class="toggle" style="margin:0"><input type="checkbox" id="endUseColor"><span class="toggle-slider"></span></label>
+            <span class="toggle-hint" style="margin:0">Custom accent</span>
+            <input type="color" id="endColor" value="#d4af5a" style="width:40px;height:30px;padding:0;border:none;background:none;cursor:pointer">
+            <button class="btn btn-primary btn-sm" id="endCardBtn" type="button" style="margin-left:auto">+ Make End Page</button>
+          </div>
+          <span class="toggle-hint">Adds a neat final page (heading + your name + optional Discord) in your chosen style. It joins the page strip and the ZIP export.</span>
+        </div>
+      </section>
+
+      <!-- ── FOOTER ────────────────────────────────────────────────── -->
+      <div class="settings-footer">
+        <span class="muted">All settings save automatically and restore on reload.</span>
         <button type="button" class="btn btn-ghost btn-sm" id="resetSettings" title="Clear saved defaults (keeps API keys)">Reset defaults</button>
         <button type="button" class="btn btn-ghost btn-sm" id="checkSystem" title="Show which detection / GPU / Arabic components are active">System status</button>
-        <label class="beta-toggle" title="Turn on experimental features (glossary, free-form add, undo/redo, …)">
-          <input type="checkbox" id="betaMode"> <span>Beta features</span>
-        </label>
         <span id="systemStatus" class="muted" style="font-size:.74rem"></span>
       </div>
     </div>
@@ -444,8 +466,8 @@
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso-add" title="Draw a free-form shape over weird-shaped/missed text — it reads &amp; translates it">⬡＋ Lasso translate</button>
               <button class="btn btn-ghost btn-sm" id="rescanBtn" title="Re-scan this page with AI and add any text it missed (keeps your edits)">🔍 Find missed text</button>
-              <button class="btn btn-ghost btn-sm beta-only" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
-              <button class="btn btn-ghost btn-sm beta-only" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+              <button class="btn btn-ghost btn-sm" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+              <button class="btn btn-ghost btn-sm" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
             </div>
             <span class="edit-hint" id="editHint">Pick a tool to fix anything by hand.</span>
             <button class="btn btn-primary btn-sm" id="editApply" style="display:none">Apply &amp; Re-render</button>

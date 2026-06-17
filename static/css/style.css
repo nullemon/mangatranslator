@@ -86,15 +86,35 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 
 /* ── Cards / panels ── */
 .settings-bar{
-  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-  gap:1rem 1.4rem;align-items:start;
+  display:flex;flex-direction:column;gap:1.4rem;
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r-lg);padding:1.25rem 1.4rem;margin-bottom:1.25rem;
   box-shadow:var(--shadow-sm);
 }
-@media(max-width:1080px){.settings-bar{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:720px){.settings-bar{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:480px){.settings-bar{grid-template-columns:1fr}}
+/* Each labelled group of settings is its own responsive grid. */
+.settings-section{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:1rem 1.4rem;align-items:start;
+}
+.section-title{
+  grid-column:1/-1;display:flex;align-items:center;gap:.7rem;margin:0;
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  color:var(--text-dim);
+}
+.section-title::after{content:"";flex:1;height:1px;background:var(--border)}
+.section-title .muted{text-transform:none;letter-spacing:.02em;font-weight:500}
+/* Items that should run the full width of their section (textareas, end page). */
+.setting-group.full{grid-column:1/-1}
+.settings-footer{
+  display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
+  border-top:1px solid var(--border);padding-top:1rem;
+}
+.settings-footer .muted{font-size:.78rem;margin-right:auto}
+/* End page: tidy two-up rows + a single controls strip. */
+.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:.6rem}
+.endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.55rem;margin:.2rem 0 .5rem}
+@media(max-width:1080px){.settings-section{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.settings-section{grid-template-columns:1fr}.endpage-row{grid-template-columns:1fr}}
 .setting-group{display:flex;flex-direction:column;gap:.4rem;min-width:0}
 .setting-group>label{
   font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;
@@ -373,10 +393,6 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-glow{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
 .tl-glow:hover{border-color:var(--accent);color:var(--accent)}
 .tl-glow.on{border-color:var(--accent);color:var(--accent);background:var(--ring)}
-/* beta features gating */
-.beta-only{display:none !important}
-body.beta .beta-only{display:revert !important}
-.beta-toggle{display:inline-flex;align-items:center;gap:.3rem;font-size:.78rem;color:var(--text-dim);cursor:pointer}
 .tl-erase{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
 .tl-erase:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-erase.on{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}

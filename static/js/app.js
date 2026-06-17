@@ -1109,22 +1109,9 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("manga_trans_style", transStyle.value));
   }
 
-  // ── Beta features: a master switch that reveals experimental tools ──
-  const betaMode = document.getElementById("betaMode");
-  function betaOn() { return !!(betaMode && betaMode.checked); }
-  function applyBeta() { document.body.classList.toggle("beta", betaOn()); }
-  if (betaMode) {
-    // Beta features are ON by default now — only off if the user explicitly turned them off.
-    const savedBeta = localStorage.getItem("manga_beta");
-    betaMode.checked = savedBeta === null ? true : savedBeta === "1";
-    applyBeta();
-    betaMode.addEventListener("change", () => {
-      localStorage.setItem("manga_beta", betaMode.checked ? "1" : "0");
-      applyBeta();
-      const p = getActive();
-      if (p) { buildTranslationsList(p); if (tool) buildOverlay(); }
-    });
-  }
+  // Formerly-"beta" tools (glossary, free-form add, undo/redo) are now always on.
+  function betaOn() { return true; }
+  document.body.classList.add("beta");
   if (glossary) {
     glossary.value = localStorage.getItem("manga_glossary") || "";
     glossary.addEventListener("input", () =>
