@@ -165,6 +165,11 @@
         <label for="endScan">End page <span class="muted">(one-click "thanks for reading" last page)</span></label>
         <input type="text" id="endScan" placeholder="Scanlation name" maxlength="60">
         <input type="text" id="endDiscord" placeholder="discord.gg/yourserver" maxlength="80" style="margin-top:6px">
+        <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+          <label class="toggle" style="margin:0"><input type="checkbox" id="endShowDiscord" checked><span class="toggle-slider"></span></label>
+          <span class="toggle-hint" style="margin:0;flex:1">Show Discord link <span class="muted">(turn off for a clean page with no Discord)</span></span>
+        </div>
+        <input type="text" id="endMessage" placeholder="Custom message (optional — replaces 'support the official release')" maxlength="120" style="margin-top:6px">
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
           <select id="endTheme" style="flex:1">
             <option value="royal">👑 Royal (gold)</option>
@@ -172,6 +177,7 @@
             <option value="onepiece">🏴‍☠️ Pirate poster</option>
             <option value="ragnarok">⚔️ Gods &amp; gold</option>
             <option value="bluelock">⚽ Striker blue</option>
+            <option value="onepunch">👊 One-Punch impact</option>
             <option value="neon">⚡ Neon glow</option>
             <option value="minimal">▢ Minimal</option>
           </select>

@@ -231,6 +231,22 @@ def _diamond(d, cx, cy, r, fill):
     d.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=fill)
 
 
+def _impact_burst(img, cx, cy, r, color, spikes=34, inner=0.16):
+    """A comic 'BOOM' starburst — alternating long/short spikes radiating out.
+    Used for the One-Punch impact backdrop."""
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for i in range(spikes):
+        a0 = 2 * math.pi * i / spikes
+        a1 = 2 * math.pi * (i + 0.5) / spikes
+        rr = r * (1.0 if i % 2 == 0 else 0.8)
+        p_in = (cx + math.cos(a0) * r * inner, cy + math.sin(a0) * r * inner)
+        p_tip = (cx + math.cos(a0) * rr, cy + math.sin(a0) * rr)
+        p_side = (cx + math.cos(a1) * r * inner * 1.2, cy + math.sin(a1) * r * inner * 1.2)
+        d.polygon([p_in, p_tip, p_side], fill=color)
+    img.alpha_composite(layer)
+
+
 # ─────────────────────────────── text drawing ───────────────────────────
 def _center(d, cx, y, text, font, fill, tracking=0, stroke=0, stroke_fill=None):
     if tracking <= 0:
@@ -320,6 +336,15 @@ STYLES = {
         "f_head": "bangers", "f_kick": "body", "f_name": "body", "f_body": "body",
         "head_caps": True,
     },
+    "onepunch": {
+        "label": "One-Punch impact", "look": "onepunch",
+        "base": (247, 202, 24), "base2": (236, 176, 10),   # hero-suit yellow
+        "ink": (26, 22, 18), "muted": (150, 80, 30),
+        "accent": (206, 38, 30), "accent_ink": (250, 240, 220),  # cape red
+        "rule": (26, 22, 18), "pill": (206, 38, 30), "pill_ink": (250, 240, 220),
+        "f_head": "bangers", "f_kick": "anton", "f_name": "bangers", "f_body": "body",
+        "head_caps": True, "head_shadow": (206, 38, 30),
+    },
 }
 _ALIAS = {"dark": "royal", "light": "minimal", "ornate": "royal", "halftone": "naruto",
           "blurple": "neon"}
@@ -369,6 +394,11 @@ def _paint_bg(img, st):
                 pts.append((x, y))
             ld.line(pts, fill=(150, 140, 120, 22), width=2)
         img.alpha_composite(layer)
+    elif look == "onepunch":
+        # explosive impact star behind everything + faint comic halftone dots
+        _impact_burst(img, W * 0.5, H * 0.42, max(W, H) * 0.85, (255, 255, 255, 46))
+        _impact_burst(img, W * 0.5, H * 0.42, max(W, H) * 0.6, (206, 38, 30, 26), spikes=26)
+        _halftone(img, (26, 22, 18, 30), spacing=18, max_r=4)
     elif look == "bluelock":
         _hex_pattern(img, (90, 150, 230, 30), size=46, width=2)
         # diagonal speed shards
@@ -411,6 +441,10 @@ def _paint_frame(img, st, m):
         for (cx, cy) in [(m + 30, m + 30), (W - m - 30, m + 30),
                          (m + 30, H - m - 30), (W - m - 30, H - m - 30)]:
             _skull(d, cx, cy, 16, rule, st["base"])
+    elif look == "onepunch":
+        # bold double comic border (black outer, red inner)
+        d.rectangle([m, m, W - m, H - m], outline=st["ink"], width=9)
+        d.rectangle([m + 16, m + 16, W - m - 16, H - m - 16], outline=accent, width=3)
     elif look == "naruto":
         d.rectangle([m, m, W - m, H - m], outline=accent, width=7)
         d.rectangle([m + 14, m + 14, W - m - 14, H - m - 14], outline=accent, width=2)
@@ -567,7 +601,7 @@ def make_end_card(
         st["accent_ink"] = st["pill_ink"]
 
     img = _vgrad(W, H, st["base"], st["base2"])
-    need_rgba = st.get("glow") or st["look"] in ("naruto", "onepiece", "bluelock", "ragnarok")
+    need_rgba = st.get("glow") or st["look"] in ("naruto", "onepiece", "bluelock", "ragnarok", "onepunch")
     if need_rgba:
         img = img.convert("RGBA")
 

@@ -686,18 +686,22 @@ async def end_card(
     theme: str = Form(""),
     accent: str = Form(""),
     heading: str = Form("THANK YOU FOR READING"),
+    kicker: str = Form("END OF CHAPTER"),
+    footer: str = Form("Please support the official release"),
     width: int = Form(1200),
     height: int = Form(1700),
 ):
-    """Generate a one-click 'thank you for reading' end page for a chapter —
-    scanlation name + Discord call-to-action, no upload or API key needed."""
+    """Generate a one-click 'thank you for reading' end page for a chapter.
+    Discord is optional (leave blank to omit it); heading/kicker/footer let the
+    user put a custom message. No upload or API key needed."""
     from core.endcard import make_end_card
     task_id = str(uuid.uuid4())
     output_path = f"output/{task_id}_end.png"
     try:
         img = make_end_card(
             scanlation=scanlation, discord=discord, style=style, theme=theme,
-            accent=accent, heading=heading, width=width, height=height,
+            accent=accent, heading=heading, kicker=kicker, footer=footer,
+            width=width, height=height,
         )
         cv2.imwrite(output_path, img)
     except Exception as e:

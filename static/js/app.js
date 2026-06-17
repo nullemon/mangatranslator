@@ -1938,6 +1938,8 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ══ END PAGE (one-click "thanks for reading" last page) ══ */
   const endScan    = document.getElementById("endScan");
   const endDiscord = document.getElementById("endDiscord");
+  const endShowDiscord = document.getElementById("endShowDiscord");
+  const endMessage = document.getElementById("endMessage");
   const endTheme   = document.getElementById("endTheme");
   const endUseColor = document.getElementById("endUseColor");
   const endColor   = document.getElementById("endColor");
@@ -1946,11 +1948,15 @@ document.addEventListener("DOMContentLoaded", () => {
     endScan.value    = localStorage.getItem("manga_end_scan")    || "";
     endDiscord.value = localStorage.getItem("manga_end_discord") || "";
     endTheme.value   = localStorage.getItem("manga_end_style")   || "royal";
+    if (endMessage) endMessage.value = localStorage.getItem("manga_end_message") || "";
+    if (endShowDiscord) endShowDiscord.checked = localStorage.getItem("manga_end_showdiscord") !== "0";
     if (endColor)    endColor.value = localStorage.getItem("manga_end_color") || "#d4af5a";
     if (endUseColor) endUseColor.checked = localStorage.getItem("manga_end_usecolor") === "1";
     endScan.addEventListener("input",    () => localStorage.setItem("manga_end_scan", endScan.value));
     endDiscord.addEventListener("input", () => localStorage.setItem("manga_end_discord", endDiscord.value));
     endTheme.addEventListener("change",  () => localStorage.setItem("manga_end_style", endTheme.value));
+    if (endMessage) endMessage.addEventListener("input", () => localStorage.setItem("manga_end_message", endMessage.value));
+    if (endShowDiscord) endShowDiscord.addEventListener("change", () => localStorage.setItem("manga_end_showdiscord", endShowDiscord.checked ? "1" : "0"));
     if (endColor)    endColor.addEventListener("input", () => localStorage.setItem("manga_end_color", endColor.value));
     if (endUseColor) endUseColor.addEventListener("change", () => localStorage.setItem("manga_end_usecolor", endUseColor.checked ? "1" : "0"));
   }
@@ -1961,7 +1967,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const f = new FormData();
       f.append("scanlation", (endScan && endScan.value.trim()) || "BorutoTBV Scanlations");
-      f.append("discord", (endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv");
+      // Discord is omitted entirely when the toggle is off (clean page).
+      const showDiscord = !endShowDiscord || endShowDiscord.checked;
+      f.append("discord", showDiscord ? ((endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv") : "");
+      if (endMessage && endMessage.value.trim()) f.append("footer", endMessage.value.trim());
       f.append("style", endTheme ? endTheme.value : "royal");
       if (endUseColor && endUseColor.checked && endColor) f.append("accent", endColor.value);
       // Match the chapter's page size so it blends in (fall back to a portrait default).
