@@ -718,40 +718,54 @@ async def end_card(
     return {"task_id": task_id}
 
 
-def _images_from_uploads(blobs):
-    """Decode a list of (filename, bytes) into BGR images, expanding any ZIPs.
-    Returns images sorted by name so chapter/page order is preserved."""
-    named = []
+_IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+
+def _collect_page_refs(blobs):
+    """Build a sorted list of page references from uploads, expanding any ZIPs,
+    WITHOUT decoding. Each ref is (sortkey, reader) where reader yields raw bytes
+    on demand — so a 30-chapter ZIP only decodes the pages we actually study.
+    ZipFile handles are kept open for the lifetime of the returned refs."""
+    refs = []
     for name, data in blobs:
         low = (name or "").lower()
         if low.endswith(".zip") or data[:2] == b"PK":
             try:
-                with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                    for zi in sorted(zf.namelist()):
-                        if zi.endswith("/") or "__MACOSX" in zi:
-                            continue
-                        if zi.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
-                            named.append((zi, zf.read(zi)))
+                zf = zipfile.ZipFile(io.BytesIO(data))
             except Exception as e:
                 print(f"[profile] bad zip {name}: {e}")
+                continue
+            for zi in zf.namelist():
+                if zi.endswith("/") or "__MACOSX" in zi:
+                    continue
+                if zi.lower().endswith(_IMG_EXT):
+                    refs.append((zi, (zf, zi)))
             continue
-        named.append((name, data))
+        if low.endswith(_IMG_EXT) or data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+            refs.append((name, (None, data)))
 
-    named.sort(key=lambda kv: kv[0])
-    images = []
-    for _, data in named:
-        arr = np.frombuffer(data, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is not None:
-            images.append(img)
-    return images
+    refs.sort(key=lambda r: r[0])
+    return refs
+
+
+def _decode_ref(ref):
+    zf, payload = ref
+    try:
+        data = zf.read(payload) if zf is not None else payload
+        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 def _sample_evenly(items, n):
-    if len(items) <= n:
+    if n <= 0 or len(items) <= n:
         return items
     step = len(items) / float(n)
     return [items[int(i * step)] for i in range(n)]
+
+
+def _chunk(items, n):
+    return [items[i:i + n] for i in range(0, len(items), n)]
 
 
 @app.get("/api/profiles")
@@ -798,37 +812,51 @@ async def profile_learn(
     files: list[UploadFile] = File(...),
 ):
     """Learn (or enrich) a series profile from already-translated chapter pages.
-    Accepts loose images and/or ZIPs of pages; samples a handful and has the
-    vision model distill a glossary + house style, then merges into the profile."""
+    Accepts loose images and/or ZIPs (drop in 10-30 chapters at once). Samples a
+    representative spread across ALL the pages, studies them in batches, and
+    merges everything learned into the profile's glossary + house style."""
     if not api_key:
         raise HTTPException(400, "api_key is required to learn a profile")
     if not name.strip():
         raise HTTPException(400, "A series name is required")
 
     blobs = [(f.filename or "page.png", await f.read()) for f in files]
-    images = _images_from_uploads(blobs)
-    if not images:
+    refs = _collect_page_refs(blobs)
+    total = len(refs)
+    if not total:
         raise HTTPException(400, "No readable images found in the upload")
 
-    sample = _sample_evenly(images, 8)
+    # Study more pages when more chapters are uploaded, but cap the cost: up to
+    # 32 pages spread evenly across the whole upload, in batches of 8 per call.
+    n_study = min(max(8, total // 4), 32)
+    sample = _sample_evenly(refs, n_study)
+    images = [im for im in (_decode_ref(r[1]) for r in sample) if im is not None]
+    if not images:
+        raise HTTPException(400, "Could not decode any of the uploaded pages")
+
     from core import profiles
     from core.translator import make_translator
 
     def work():
         translator = make_translator(provider, api_key, model,
                                      source_lang=source_lang)
-        learned = translator.analyze_pages(sample, target_lang)
-        existing = profiles.load(name)
-        merged = profiles.merge_learned(existing, learned, name,
-                                        added_sources=len(images))
-        return profiles.save(merged)
+        prof = profiles.load(name)
+        studied = 0
+        for batch in _chunk(images, 8):
+            learned = translator.analyze_pages(batch, target_lang)
+            prof = profiles.merge_learned(prof, learned, name,
+                                          added_sources=len(batch))
+            studied += len(batch)
+        if prof is None:
+            raise RuntimeError("no pages were studied")
+        return profiles.save(prof), studied
 
     try:
         loop = asyncio.get_event_loop()
-        prof = await loop.run_in_executor(None, work)
+        prof, studied = await loop.run_in_executor(None, work)
     except Exception as e:
         raise HTTPException(500, f"Learning failed: {e}")
-    return {"profile": prof, "pages_seen": len(images), "pages_studied": len(sample)}
+    return {"profile": prof, "pages_seen": total, "pages_studied": studied}
 
 
 @app.get("/api/status/{task_id}")
