@@ -85,65 +85,92 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 [data-theme="dark"] .theme-toggle .icon-moon{display:block}
 
 /* ── Cards / panels ── */
+/* ============================ SETTINGS PANEL ============================ */
 .settings-bar{
-  display:flex;flex-direction:column;gap:.9rem;
+  display:flex;flex-direction:column;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--r-lg);padding:.7rem 1.1rem 1rem;margin-bottom:1rem;
-  box-shadow:var(--shadow-sm);
+  border-radius:var(--r-lg);margin-bottom:1rem;box-shadow:var(--shadow-sm);
+  overflow:hidden;
 }
-/* Collapse / expand the whole panel to reclaim space above the workflow. */
+/* Header bar that collapses / expands the whole panel. */
 .settings-head{
   display:flex;align-items:center;gap:.5rem;cursor:pointer;user-select:none;
-  background:none;border:none;color:var(--text-dim);padding:.15rem 0;width:100%;
-  font:inherit;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  background:none;border:none;border-bottom:1px solid var(--border);color:var(--text-dim);
+  padding:.75rem 1.2rem;width:100%;font:inherit;
+  font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
 }
 .settings-head .chev{transition:transform .18s;margin-left:auto;color:var(--text-faint)}
+.settings-bar.collapsed .settings-head{border-bottom:none}
 .settings-bar.collapsed .settings-head .chev{transform:rotate(-90deg)}
 .settings-bar.collapsed>section,.settings-bar.collapsed>.settings-footer{display:none}
-/* Each labelled group of settings is its own responsive grid. */
+
+/* Each section: a title row + a responsive grid of fields. */
 .settings-section{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:.55rem 1.1rem;align-items:start;
+  gap:.7rem 1.4rem;align-items:start;padding:.85rem 1.2rem;
 }
+.settings-section + .settings-section{border-top:1px solid var(--border)}
 .section-title{
-  grid-column:1/-1;display:flex;align-items:center;gap:.7rem;margin:.1rem 0 0;
-  font-size:.66rem;text-transform:uppercase;letter-spacing:.09em;font-weight:700;
+  grid-column:1/-1;margin:0 0 .15rem;
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
   color:var(--text-dim);
 }
-.section-title::after{content:"";flex:1;height:1px;background:var(--border)}
-.section-title .muted{text-transform:none;letter-spacing:.02em;font-weight:500}
-/* Wide items span two grid columns (not the whole row, which looks oversized on
-   ultra-wide screens); .full spans the row but its content is width-capped. */
+.section-title .muted{text-transform:none;letter-spacing:.01em;font-weight:500;font-size:.72rem}
+
+/* Field group: small uppercase label above a control. */
+.setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .setting-group.half{grid-column:span 2}
 .setting-group.full{grid-column:1/-1}
-.endpage{max-width:860px}
-.settings-footer{
-  display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
-  border-top:1px solid var(--border);padding-top:.7rem;
-}
-.settings-footer .muted{font-size:.76rem;margin-right:auto}
-/* End page: tidy two-up rows + a single controls strip (hints stay inline). */
-.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.45rem}
-.endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem;margin:.1rem 0 .4rem}
-.endpage-controls .toggle-hint{width:auto;margin:0}
-@media(max-width:1080px){.settings-section{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:560px){.settings-section{grid-template-columns:1fr}.endpage-row{grid-template-columns:1fr}}
-.setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .setting-group>label{
-  font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;
+  font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;
   color:var(--text-faint);font-weight:600;
 }
 .setting-group input,.setting-group select,.prompt-group textarea,#enhanceModel{
   background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-  padding:.42rem .6rem;border-radius:var(--r);font-size:.82rem;outline:none;
+  padding:.5rem .6rem;border-radius:var(--r-sm);font-size:.82rem;outline:none;
   font-family:inherit;transition:border-color .15s,box-shadow .15s;width:100%;
 }
 .setting-group input:hover,.setting-group select:hover{border-color:var(--border-strong)}
 .setting-group input:focus,.setting-group select:focus,
-.prompt-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}
+.prompt-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--ring)}
 .setting-group select{cursor:pointer;appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.4'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right .6rem center;padding-right:1.9rem}
+.inline-row{display:flex;gap:.5rem;align-items:center}
+
+/* Options: every toggle in one tidy grid — label left, switch right. */
+.options-grid{
+  grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:0 1.4rem;
+}
+.opt{
+  display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.5rem .1rem;border-bottom:1px solid var(--border);min-width:0;
+}
+.opt>span{font-size:.8rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opt .toggle{flex:none}
+
+/* Footer actions. */
+.settings-footer{
+  display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
+  border-top:1px solid var(--border);padding:.8rem 1.2rem;
+}
+.settings-footer .muted{font-size:.76rem;margin-right:auto}
+
+/* End page: tidy two-up rows + one controls strip (width-capped). */
+.endpage{max-width:880px}
+.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.5rem}
+.endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem;margin:.15rem 0 .45rem}
+.endpage-controls .toggle-hint{width:auto;margin:0}
+
+@media(max-width:1100px){
+  .settings-section{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .options-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:560px){
+  .settings-section,.options-grid{grid-template-columns:1fr}
+  .endpage-row{grid-template-columns:1fr}
+}
 
 /* API key field: input + reveal + saved badge */
 .key-field{position:relative;display:flex;align-items:center}
@@ -262,10 +289,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .enhance-body{padding:1rem 1.1rem}
 .enhance-settings{margin-bottom:1rem;background:var(--surface-2);box-shadow:none}
 .prompt-group{display:flex;flex-direction:column;gap:.3rem}
-.prompt-group label{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);font-weight:600}
+.prompt-group label{font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);font-weight:600}
 .muted{color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400}
-.prompt-group textarea{resize:vertical;line-height:1.4;font-size:.82rem;min-height:2.3rem;height:2.3rem}
-.prompt-group textarea:focus{height:4.5rem}
+.prompt-group textarea{resize:vertical;line-height:1.45;font-size:.82rem;min-height:3rem}
 
 /* ── Progress ── */
 .steps{display:flex;align-items:center;justify-content:center;gap:0;margin:1.5rem 0 1.5rem}

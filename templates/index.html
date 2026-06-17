@@ -95,22 +95,6 @@
             <option value="liberal">Liberal — punchy, rewritten for flow</option>
           </select>
         </div>
-        <div class="setting-group toggle-group">
-          <label for="smartMode">Smart Detection</label>
-          <label class="toggle">
-            <input type="checkbox" id="smartMode">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Off = trained balloon model (recommended). On = AI vision locates text for unusual layouts.</span>
-        </div>
-        <div class="setting-group toggle-group">
-          <label for="translateSfx">Translate Background SFX</label>
-          <label class="toggle">
-            <input type="checkbox" id="translateSfx">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.</span>
-        </div>
       </section>
 
       <!-- ── STYLE & CONSISTENCY ───────────────────────────────────── -->
@@ -162,38 +146,6 @@
             <option value="off">Untouched (original pixels)</option>
           </select>
         </div>
-        <div class="setting-group toggle-group">
-          <label for="maxQuality">Maximum Quality</label>
-          <label class="toggle">
-            <input type="checkbox" id="maxQuality">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Process at full resolution and use the whole GPU stack (AI finds all text, GPU cleans it). Slower; best with the GPU setup installed.</span>
-        </div>
-        <div class="setting-group toggle-group">
-          <label for="hdUpscale">HD Upscale</label>
-          <label class="toggle">
-            <input type="checkbox" id="hdUpscale">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Sharpen &amp; upscale low-res pages with MangaJaNai. Faithful — keeps the art exactly.</span>
-        </div>
-        <div class="setting-group toggle-group">
-          <label for="compressOut">Compress Output</label>
-          <label class="toggle">
-            <input type="checkbox" id="compressOut">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Save the result as a ~2–4MB JPEG instead of a heavy PNG (great for big pages / Clean output).</span>
-        </div>
-        <div class="setting-group toggle-group">
-          <label for="isolatePage">Isolate Page</label>
-          <label class="toggle">
-            <input type="checkbox" id="isolatePage">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Remove the background around a photographed page (table/floor/edges) — whites it out and crops to the page. Best-effort for phone photos.</span>
-        </div>
       </section>
 
       <!-- ── WATERMARK & CREDIT ────────────────────────────────────── -->
@@ -207,21 +159,44 @@
           <label for="credit">Credit / TL name <span class="muted">(in the margin, movable)</span></label>
           <input type="text" id="credit" placeholder="e.g. TL: YourScans" maxlength="80">
         </div>
-        <div class="setting-group toggle-group">
-          <label for="removeWatermark">Remove Site Watermarks</label>
-          <label class="toggle">
-            <input type="checkbox" id="removeWatermark" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Erase scanlation-site stamps / URLs (e.g. eshadow.net) added on top of the art.</span>
-        </div>
-        <div class="setting-group toggle-group">
-          <label for="replaceWatermark">Replace With My Watermark</label>
-          <label class="toggle">
-            <input type="checkbox" id="replaceWatermark">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-hint">Drop the Watermark text above into the spot the site watermark was erased from (instead of stamping it across the page).</span>
+      </section>
+
+      <!-- ── OPTIONS (all toggles in one place) ────────────────────── -->
+      <section class="settings-section">
+        <h3 class="section-title">Options</h3>
+        <div class="options-grid">
+          <div class="opt" title="Off = trained balloon model (recommended). On = AI vision locates text for unusual layouts.">
+            <span>Smart Detection</span>
+            <label class="toggle"><input type="checkbox" id="smartMode"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.">
+            <span>Translate Background SFX</span>
+            <label class="toggle"><input type="checkbox" id="translateSfx"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Process at full resolution and use the whole GPU stack (AI finds all text, GPU cleans it). Slower; best with the GPU setup installed.">
+            <span>Maximum Quality</span>
+            <label class="toggle"><input type="checkbox" id="maxQuality"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Sharpen &amp; upscale low-res pages with MangaJaNai. Faithful — keeps the art exactly.">
+            <span>HD Upscale</span>
+            <label class="toggle"><input type="checkbox" id="hdUpscale"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Save the result as a ~2–4MB JPEG instead of a heavy PNG (great for big pages / Clean output).">
+            <span>Compress Output</span>
+            <label class="toggle"><input type="checkbox" id="compressOut"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Remove the background around a photographed page (table/floor/edges) — whites it out and crops to the page. Best-effort for phone photos.">
+            <span>Isolate Page</span>
+            <label class="toggle"><input type="checkbox" id="isolatePage"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Erase scanlation-site stamps / URLs (e.g. eshadow.net) added on top of the art.">
+            <span>Remove Site Watermarks</span>
+            <label class="toggle"><input type="checkbox" id="removeWatermark" checked><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Drop the Watermark text into the spot the site watermark was erased from (instead of stamping it across the page).">
+            <span>Replace With My Watermark</span>
+            <label class="toggle"><input type="checkbox" id="replaceWatermark"><span class="toggle-slider"></span></label>
+          </div>
         </div>
       </section>
 
