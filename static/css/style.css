@@ -112,8 +112,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 }
 .section-title::after{content:"";flex:1;height:1px;background:var(--border)}
 .section-title .muted{text-transform:none;letter-spacing:.02em;font-weight:500}
-/* Items that should run the full width of their section (textareas, end page). */
+/* Wide items span two grid columns (not the whole row, which looks oversized on
+   ultra-wide screens); .full spans the row but its content is width-capped. */
+.setting-group.half{grid-column:span 2}
 .setting-group.full{grid-column:1/-1}
+.endpage{max-width:860px}
 .settings-footer{
   display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
   border-top:1px solid var(--border);padding-top:.7rem;
