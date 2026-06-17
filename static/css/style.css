@@ -170,9 +170,18 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .font-add:hover{border-color:var(--accent);color:var(--accent)}
 
 /* toggle switch */
-.toggle-group{flex-direction:row;align-items:center;gap:.5rem;flex-wrap:wrap}
+.toggle-group{flex-direction:row;align-items:center;gap:.5rem;flex-wrap:wrap;position:relative}
 .toggle-group>label:first-child{order:0}
+/* Help text no longer takes a whole line — it shows as a hover tooltip instead. */
 .toggle-hint{font-size:.66rem;color:var(--text-faint);width:100%;line-height:1.35}
+.toggle-group>.toggle-hint,.prompt-group>.toggle-hint{
+  position:absolute;left:0;top:calc(100% + 3px);z-index:30;width:max-content;max-width:300px;
+  background:var(--surface-2);color:var(--text-dim);border:1px solid var(--border);
+  border-radius:var(--r);padding:.4rem .55rem;box-shadow:var(--shadow-sm);line-height:1.4;
+  opacity:0;visibility:hidden;transition:opacity .12s;pointer-events:none;
+}
+.toggle-group:hover>.toggle-hint,.prompt-group:hover>.toggle-hint{opacity:1;visibility:visible}
+.prompt-group{position:relative}
 .toggle{position:relative;width:40px;height:23px;flex-shrink:0}
 .toggle input{opacity:0;width:0;height:0}
 .toggle-slider{position:absolute;inset:0;background:var(--border-strong);border-radius:999px;cursor:pointer;transition:.2s}
@@ -249,10 +258,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .enhance-header svg{color:var(--accent)}
 .enhance-body{padding:1rem 1.1rem}
 .enhance-settings{margin-bottom:1rem;background:var(--surface-2);box-shadow:none}
-.prompt-group{display:flex;flex-direction:column;gap:.4rem}
-.prompt-group label{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);font-weight:600}
+.prompt-group{display:flex;flex-direction:column;gap:.3rem}
+.prompt-group label{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);font-weight:600}
 .muted{color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400}
-.prompt-group textarea{resize:vertical;line-height:1.55;font-size:.85rem}
+.prompt-group textarea{resize:vertical;line-height:1.4;font-size:.82rem;min-height:2.3rem;height:2.3rem}
+.prompt-group textarea:focus{height:4.5rem}
 
 /* ── Progress ── */
 .steps{display:flex;align-items:center;justify-content:center;gap:0;margin:1.5rem 0 1.5rem}
