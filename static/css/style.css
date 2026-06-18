@@ -107,7 +107,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 /* Each section: a title row + a responsive grid of fields. */
 .settings-section{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:.7rem 1.4rem;align-items:start;padding:.85rem 1.2rem;
+  gap:.5rem 1.3rem;align-items:start;padding:.55rem 1.2rem;
 }
 .settings-section + .settings-section{border-top:1px solid var(--border)}
 .section-title{
