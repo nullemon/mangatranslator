@@ -1117,8 +1117,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsBar = document.getElementById("settingsBar");
   const settingsToggle = document.getElementById("settingsToggle");
   if (settingsBar && settingsToggle) {
-    // Collapsed by default so it never dominates the screen — expand on demand.
-    if (localStorage.getItem("manga_settings_collapsed") !== "0")
+    // Open by default; only collapsed if the user explicitly collapsed it before.
+    if (localStorage.getItem("manga_settings_collapsed") === "1")
       settingsBar.classList.add("collapsed");
     settingsToggle.addEventListener("click", () => {
       const collapsed = settingsBar.classList.toggle("collapsed");
