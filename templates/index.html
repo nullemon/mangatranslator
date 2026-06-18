@@ -101,9 +101,9 @@
         </div>
       </section>
 
-      <!-- ── STYLE & CONSISTENCY ───────────────────────────────────── -->
+      <!-- ── STYLE, TYPESETTING & OUTPUT ───────────────────────────── -->
       <section class="settings-section">
-        <h3 class="section-title">Style &amp; consistency</h3>
+        <h3 class="section-title">Style, typesetting &amp; output</h3>
         <div class="setting-group prompt-group half">
           <label for="stylePrompt">Translation Style <span class="muted">(editable — sent with every page)</span></label>
           <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
@@ -113,18 +113,12 @@
           <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
         </div>
         <div class="setting-group prompt-group half">
-          <label for="profileSelect">🧠 Trained series style <span class="muted">(AI learns from chapters you upload, then matches that style)</span></label>
-          <div style="display:flex;gap:8px;align-items:center">
+          <label for="profileSelect">🧠 Trained series style <span class="muted">(AI learns from chapters you upload)</span></label>
+          <div class="inline-row">
             <select id="profileSelect" style="flex:1"><option value="">None — generic translation</option></select>
             <button class="btn btn-ghost btn-sm" id="trainBtn" type="button">Train / Manage…</button>
           </div>
-          <span class="toggle-hint">Upload a few of your already-translated chapters once (ZIP or images). Pick the series here and new chapters translate in that exact style — names, tone, honorifics, SFX.</span>
         </div>
-      </section>
-
-      <!-- ── TYPESETTING & OUTPUT ──────────────────────────────────── -->
-      <section class="settings-section">
-        <h3 class="section-title">Typesetting &amp; output</h3>
         <div class="setting-group">
           <label for="fontSelect">Font</label>
           <div class="font-row">
@@ -150,11 +144,6 @@
             <option value="off">Untouched (original pixels)</option>
           </select>
         </div>
-      </section>
-
-      <!-- ── WATERMARK & CREDIT ────────────────────────────────────── -->
-      <section class="settings-section">
-        <h3 class="section-title">Watermark &amp; credit</h3>
         <div class="setting-group">
           <label for="watermark">Watermark</label>
           <input type="text" id="watermark" placeholder="e.g. @yourname" maxlength="60">
