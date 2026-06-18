@@ -127,7 +127,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 }
 .setting-group input,.setting-group select,.prompt-group textarea,#enhanceModel{
   background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-  padding:.5rem .6rem;border-radius:var(--r-sm);font-size:.82rem;outline:none;
+  padding:.34rem .55rem;border-radius:var(--r-sm);font-size:.78rem;outline:none;
   font-family:inherit;transition:border-color .15s,box-shadow .15s;width:100%;
 }
 .setting-group input:hover,.setting-group select:hover{border-color:var(--border-strong)}
@@ -291,7 +291,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .prompt-group{display:flex;flex-direction:column;gap:.3rem}
 .prompt-group label{font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);font-weight:600}
 .muted{color:var(--text-faint);text-transform:none;letter-spacing:0;font-weight:400}
-.prompt-group textarea{resize:vertical;line-height:1.45;font-size:.82rem;min-height:3rem}
+.prompt-group textarea{resize:vertical;line-height:1.4;font-size:.78rem;min-height:2.5rem}
 
 /* ── Progress ── */
 .steps{display:flex;align-items:center;justify-content:center;gap:0;margin:1.5rem 0 1.5rem}
