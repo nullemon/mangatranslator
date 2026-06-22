@@ -740,13 +740,14 @@ class TranslationPipeline:
         output_path: str,
         progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
         render_base_path: Optional[str] = None,
+        scan_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     ) -> Dict[str, Any]:
         """Translate a page. Normally detection AND typesetting happen on the
-        same image. For the Scan → Translate flow, pass `render_base_path` (the
-        AI-scanned page): text is then DETECTED/OCR'd on the crisp RAW
-        (`image_path`) but ERASED and typeset onto the clean scanned base — so
-        the generative scan can't corrupt detection. Both must be the same page;
-        the base is resized to the raw's working size to keep boxes aligned."""
+        same image. For the Scan → Translate flow, pass `scan_fn`: text is
+        detected/OCR'd on the crisp RAW, the Japanese is ERASED (aligned, so it's
+        clean), `scan_fn` AI-remakes a clean text-free HD scan of that page, and
+        the English is typeset onto the scan — so the generative scan never
+        corrupts detection and never has erase marks smeared into the art."""
         def update(step: int, msg: str, pct: int):
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
@@ -875,6 +876,26 @@ class TranslationPipeline:
             return self._result(output_path, base_path, [], ann_path)
 
         update(3, "Erasing original text...", 60)
+        if scan_fn is not None:
+            # Erase the Japanese on the aligned page, AI-remake a clean text-free
+            # HD scan of it, then typeset English on that scan. Doing the scan
+            # AFTER the erase means the scan cleans up any erase marks, and the
+            # English (placed last) is never scanned/regenerated.
+            erased = self.compositor.clean(base)
+            update(3, "AI remaking a clean HD scan...", 68)
+            try:
+                scanned = scan_fn(erased)
+                if scanned is not None and scanned.size:
+                    if scanned.shape[:2] != base.shape[:2]:
+                        scanned = cv2.resize(scanned, (base.shape[1], base.shape[0]),
+                                             interpolation=cv2.INTER_AREA)
+                    base = scanned
+                else:
+                    base = erased
+            except Exception as e:
+                print(f"[pipeline] scan step failed, using erased page: {e}")
+                base = erased
+            cv2.imwrite(base_path, base)   # rerender / Original base = the clean scan
         update(4, "Fitting translations into balloons...", 80)
         result = self.compositor.compose(base, items, masks)
         if self.finish in ("clean", "api"):

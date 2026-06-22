@@ -350,79 +350,58 @@ async def _run(
         translate_source = image_path
         render_base_path = None
 
+        scan_fn = None
         if enhance:
+            # Scan → Translate ORDER: detect/OCR on the RAW → erase the Japanese
+            # (aligned, so the erase is clean) → this scan_fn AI-remakes a clean
+            # TEXT-FREE HD scan → English is typeset onto the scan afterwards. So
+            # the scan happens AFTER erasing (it cleans any erase marks) and the
+            # English (placed last) is never scanned/regenerated. The pipeline
+            # calls scan_fn at the right moment. (Plain Raw → Scan uses /api/enhance.)
             tasks[task_id].update(
-                {"step": 0, "progress": 2,
-                 "message": "Preprocessing image (crop + clean)..."}
-            )
+                {"step": 0, "progress": 2, "message": "Preprocessing image..."})
             enhanced_path = f"uploads/{task_id}_enhanced.png"
-            enhancer = ImageEnhancer()
+            tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
+            _enhancer = ImageEnhancer()
 
-            def do_enhance():
-                img = cv2.imread(image_path)
-                if img is None:
-                    raise ValueError(f"Cannot load image: {image_path}")
+            def scan_fn(erased_img):
                 tasks[task_id].update(
-                    {"progress": 15,
-                     "message": f"Sending to {enhance_provider.title()} (this can take 30-60s)..."}
-                )
+                    {"progress": 35,
+                     "message": f"AI remaking a clean HD scan with {enhance_provider.title()} (30-60s)..."})
                 ai_ok = False
                 try:
-                    # Send the RAW page straight to the AI scanner. Pre-deskewing
-                    # locally here and letting the pipeline deskew again warped
-                    # the page twice and stretched it on the way back (visible
-                    # distortion). One clean pass: AI scans, pipeline deskews once.
-                    out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                    out = _enhancer.enhance(erased_img, enhance_prompt, enhance_provider,
+                                            enhance_key, enhance_model)
                     ai_ok = True
-                    tasks[task_id].update({"progress": 35, "message": "AI enhancement complete!"})
                 except Exception as e:
-                    print(f"[enhance] AI step failed, using local scan cleanup: {e}")
-                    # Surface the REAL reason (bad key, quota, wrong model) so the
-                    # user sees why the page wasn't AI-scanned — not a vague
-                    # "failed" that looks like the local result is the AI one.
                     reason = str(e).strip() or type(e).__name__
+                    print(f"[enhance] AI scan failed, local cleanup: {e}")
                     tasks[task_id].update(
-                        {"progress": 35,
-                         "enhance_error": reason[:300],
+                        {"enhance_error": reason[:300],
                          "message": f"⚠ {enhance_provider.title()} scan FAILED — "
-                                    f"{reason[:160]} — fell back to local cleanup "
-                                    f"(not the AI scan you asked for)."}
-                    )
-                    out = scan_cleanup(img)
-                # Snap the AI result back to the EXACT source geometry so nothing
-                # is stretched and detection boxes stay aligned.
-                if out.shape[:2] != img.shape[:2]:
-                    out = cv2.resize(out, (img.shape[1], img.shape[0]),
+                                    f"{reason[:140]} — fell back to local cleanup."})
+                    out = scan_cleanup(erased_img)
+                if out.shape[:2] != erased_img.shape[:2]:
+                    out = cv2.resize(out, (erased_img.shape[1], erased_img.shape[0]),
                                      interpolation=cv2.INTER_AREA)
-                # Claw back solid-black art the generative scan bleached to white
-                # (black panels, gutters, white-on-black titles stay as drawn).
                 if ai_ok:
+                    # Claw back solid-black art the generative scan bleached, then
+                    # force a uniform clean B&W scan (desaturate + paper→white,
+                    # ink→black, screentones kept grey).
                     try:
-                        out = preserve_dark_regions(out, img)
+                        out = preserve_dark_regions(out, erased_img)
                     except Exception as e:
                         print(f"[enhance] dark-region preserve skipped: {e}")
-                    # The generative scan leaves some areas dirty / colour-tinted.
-                    # Force a uniform clean B&W scan: desaturate (manga is B&W) and
-                    # snap paper->white, ink->black while keeping screentones grey.
                     try:
                         from core.pipeline import scan_finish
-                        gray3 = cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
-                                             cv2.COLOR_GRAY2BGR)
-                        out = scan_finish(gray3)
+                        out = scan_finish(cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
+                                                       cv2.COLOR_GRAY2BGR))
                     except Exception as e:
                         print(f"[enhance] B&W clean pass skipped: {e}")
                 cv2.imwrite(enhanced_path, out)
+                tasks[task_id]["enhanced_path"] = enhanced_path
+                return out
 
-            await loop.run_in_executor(None, do_enhance)
-            tasks[task_id]["enhanced_path"] = enhanced_path
-            tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
-            # Scan → Translate: read text from the crisp RAW (so the generative
-            # scan can't corrupt detection/OCR), but ERASE + typeset onto the
-            # AI-scanned page. Detection runs on image_path; the scanned page is
-            # the render base.
-            render_base_path = enhanced_path
-            # The enhanced page already carries the desired clean-scan look — do
-            # NOT run the local scan finish over it again; keep it as delivered.
             finish = "off"
             tasks[task_id]["finish"] = "off"
 
@@ -454,7 +433,7 @@ async def _run(
         result = await loop.run_in_executor(
             None,
             lambda: pipeline.process(translate_source, output_path, on_progress,
-                                     render_base_path=render_base_path),
+                                     scan_fn=scan_fn),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
 
