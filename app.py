@@ -346,8 +346,9 @@ async def _run(
         loop = asyncio.get_event_loop()
 
         # Default: translate on the exact uploaded pixels. The Scan workflows
-        # below redirect this to the cleaned/enhanced page.
+        # below detect on the RAW but render onto the scanned page (render_base).
         translate_source = image_path
+        render_base_path = None
 
         if enhance:
             tasks[task_id].update(
@@ -405,12 +406,11 @@ async def _run(
             await loop.run_in_executor(None, do_enhance)
             tasks[task_id]["enhanced_path"] = enhanced_path
             tasks[task_id]["enhanced_url"] = f"/api/enhanced/{task_id}"
-            # Scan workflows (Raw → Scan → Translate) translate ON the cleaned /
-            # AI-scanned page — that IS the point of the scan step: the user
-            # wants the clean TCB-style result with English typeset over it. So
-            # the enhanced page becomes the translation base. (Plain Raw →
-            # Translate doesn't enhance, so it stays on the original pixels.)
-            translate_source = enhanced_path
+            # Scan → Translate: read text from the crisp RAW (so the generative
+            # scan can't corrupt detection/OCR), but ERASE + typeset onto the
+            # AI-scanned page. Detection runs on image_path; the scanned page is
+            # the render base.
+            render_base_path = enhanced_path
             # The enhanced page already carries the desired clean-scan look — do
             # NOT run the local scan finish over it again; keep it as delivered.
             finish = "off"
@@ -443,7 +443,8 @@ async def _run(
 
         result = await loop.run_in_executor(
             None,
-            lambda: pipeline.process(translate_source, output_path, on_progress),
+            lambda: pipeline.process(translate_source, output_path, on_progress,
+                                     render_base_path=render_base_path),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
 

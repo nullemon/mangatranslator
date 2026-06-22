@@ -739,7 +739,14 @@ class TranslationPipeline:
         image_path: str,
         output_path: str,
         progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+        render_base_path: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Translate a page. Normally detection AND typesetting happen on the
+        same image. For the Scan → Translate flow, pass `render_base_path` (the
+        AI-scanned page): text is then DETECTED/OCR'd on the crisp RAW
+        (`image_path`) but ERASED and typeset onto the clean scanned base — so
+        the generative scan can't corrupt detection. Both must be the same page;
+        the base is resized to the raw's working size to keep boxes aligned."""
         def update(step: int, msg: str, pct: int):
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
@@ -759,36 +766,54 @@ class TranslationPipeline:
         if self.max_quality:
             print(f"[pipeline] MAX QUALITY run — full-resolution {image.shape[1]}x{image.shape[0]}")
 
-        update(0, "Preprocessing image...", 2)
-        image = auto_crop_page(image)
-        if self.isolate_page:
-            update(0, "Isolating page (removing background)...", 3)
-            try:
-                image = isolate_page(image)
-            except Exception as e:
-                print(f"[pipeline] isolate-page failed, continuing: {e}")
+        # Detect/OCR on `image`; erase + typeset on `base`. They're the same
+        # except in Scan → Translate, where base is the AI-scanned page.
+        base = None
+        if render_base_path:
+            base = cv2.imread(render_base_path)
+            if base is None:
+                print(f"[pipeline] render base missing ({render_base_path}); using raw")
 
-        # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
-        # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts
-        # without redrawing, so the art is preserved; Real-ESRGAN is the more
-        # aggressive fallback. Only runs on pages that aren't already large.
-        if (self.upscaler is not None
-                and self.upscale_on
-                and max(image.shape[:2]) < 2000
-                and self.upscaler.ok):
-            if self.max_quality:
-                print("[pipeline] NOTE: HD Upscale + Maximum Quality together is "
-                      "very heavy — on an 8GB laptop GPU this can take many "
-                      "minutes. For fast translation, leave HD Upscale OFF.")
-            update(0, "Upscaling page to HD (MangaJaNai)...", 4)
-            try:
-                image = self.upscaler.upscale(image)
-                print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
-            except Exception as e:
-                print(f"[pipeline] upscale failed, continuing as-is: {e}")
+        update(0, "Preprocessing image...", 2)
+        if base is None:
+            # Standard path: detection and rendering share one image.
+            image = auto_crop_page(image)
+            if self.isolate_page:
+                update(0, "Isolating page (removing background)...", 3)
+                try:
+                    image = isolate_page(image)
+                except Exception as e:
+                    print(f"[pipeline] isolate-page failed, continuing: {e}")
+
+            # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
+            # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts
+            # without redrawing, so the art is preserved; Real-ESRGAN is the more
+            # aggressive fallback. Only runs on pages that aren't already large.
+            if (self.upscaler is not None
+                    and self.upscale_on
+                    and max(image.shape[:2]) < 2000
+                    and self.upscaler.ok):
+                if self.max_quality:
+                    print("[pipeline] NOTE: HD Upscale + Maximum Quality together is "
+                          "very heavy — on an 8GB laptop GPU this can take many "
+                          "minutes. For fast translation, leave HD Upscale OFF.")
+                update(0, "Upscaling page to HD (MangaJaNai)...", 4)
+                try:
+                    image = self.upscaler.upscale(image)
+                    print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
+                except Exception as e:
+                    print(f"[pipeline] upscale failed, continuing as-is: {e}")
+            base = image
+        else:
+            # Scan → Translate: keep the raw at its working size for detection and
+            # match the scanned base to it so erase masks / boxes line up.
+            if base.shape[:2] != image.shape[:2]:
+                base = cv2.resize(base, (image.shape[1], image.shape[0]),
+                                  interpolation=cv2.INTER_AREA)
+            print(f"[pipeline] Scan→Translate: detecting on RAW, typesetting on scanned base")
 
         base_path = self._base_path(output_path)
-        cv2.imwrite(base_path, image)
+        cv2.imwrite(base_path, base)
 
         # Clean-only: remove ALL text and stop — no detection-LLM, no
         # translation (so no API key needed). Page Finish still decides raw
@@ -844,14 +869,14 @@ class TranslationPipeline:
             items.append(self._credit_item(image.shape[1], image.shape[0], nid))
 
         if not items:
-            out = scan_finish(image) if self.finish in ("clean", "api") else image
+            out = scan_finish(base) if self.finish in ("clean", "api") else base
             cv2.imwrite(output_path, out)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
 
         update(3, "Erasing original text...", 60)
         update(4, "Fitting translations into balloons...", 80)
-        result = self.compositor.compose(image, items, masks)
+        result = self.compositor.compose(base, items, masks)
         if self.finish in ("clean", "api"):
             update(4, "Applying clean-scan finish...", 92)
             result = scan_finish(result)
