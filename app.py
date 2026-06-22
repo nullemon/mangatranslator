@@ -1013,17 +1013,32 @@ async def rerender(task_id: str, request: Request):
         base_img = cv2.imread(base)
         if base_img is None:
             raise ValueError("Base image missing")
+        # "Remove BG" outlines: keep inside the polygon(s), white out everything
+        # outside. Kept separate from erase covers so compose ignores them.
+        keep_polys = [c["keep_poly"] for c in covers
+                      if isinstance(c, dict) and c.get("keep_poly")]
+        erase_covers = [c for c in covers
+                        if not (isinstance(c, dict) and c.get("keep_poly"))]
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"),
                           translate_sfx=bool(t.get("translate_sfx", False)),
                           replace_watermark=bool(t.get("replace_watermark", False)),
                           watermark_text=t.get("watermark", ""))
-        out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, covers)
+        out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, erase_covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the
         # original pixels untouched. No generative repaint, ever.
         if t.get("finish", "clean") in ("clean", "api"):
             out = scan_finish(out)
+        if keep_polys:
+            h, w = out.shape[:2]
+            mask = np.zeros((h, w), np.uint8)
+            for poly in keep_polys:
+                pts = np.array(poly, np.int32).reshape(-1, 2)
+                if len(pts) >= 3:
+                    cv2.fillPoly(mask, [pts], 255)
+            if cv2.countNonZero(mask):
+                out[mask == 0] = (255, 255, 255)   # background → white (no crop, keeps coords aligned)
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:
