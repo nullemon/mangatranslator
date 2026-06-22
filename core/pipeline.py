@@ -117,83 +117,106 @@ def boost_for_detection(image: np.ndarray) -> np.ndarray:
         return image
 
 
-def _page_hull(mask: np.ndarray, h: int, w: int, page_area: float):
-    """From a binary candidate mask, clean it up, take the convex hull of the
-    significant blobs and return (hull, bbox, hull_area) if it looks like a
-    believable page — a big chunk of the frame that doesn't cover essentially
-    the WHOLE frame (judged by the hull POLYGON area, so a tilted page whose
-    bounding box is near-full but which leaves carpet in the corners still
-    counts). Else None."""
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
-                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-    k = max(9, (min(h, w) // 30) | 1)   # connect the page content into one blob
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
-                            cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)), iterations=2)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def _fill_largest(binmask: np.ndarray, h: int, w: int, page_area: float,
+                  close_div: int = 30):
+    """Clean a candidate page mask, keep its LARGEST blob and fill its holes
+    (so dark panels inside the page count as page). Returns (filled_mask, bbox,
+    area) following the page's true — possibly tilted/irregular — outline, or
+    None if it isn't a believable page (too small, or fills the whole frame)."""
+    binmask = cv2.morphologyEx(binmask, cv2.MORPH_OPEN,
+                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    k = max(9, (min(h, w) // close_div) | 1)
+    binmask = cv2.morphologyEx(binmask, cv2.MORPH_CLOSE,
+                               cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)), iterations=2)
+    contours, _ = cv2.findContours(binmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     sig = [c for c in contours if cv2.contourArea(c) > page_area * 0.01]
     if not sig:
         return None
-    hull = cv2.convexHull(np.vstack(sig))
-    bx, by, bw, bh = cv2.boundingRect(hull)
-    hull_area = cv2.contourArea(hull)
-    if hull_area < page_area * 0.20:        # too small to be the page
+    big = max(sig, key=cv2.contourArea)
+    filled = np.zeros((h, w), np.uint8)
+    cv2.drawContours(filled, [big], -1, 255, cv2.FILLED)
+    area = int(cv2.countNonZero(filled))
+    if area < page_area * 0.20 or area > page_area * 0.985:
         return None
-    if hull_area > page_area * 0.985:       # covers the whole frame → nothing to remove
-        return None
-    return hull, (bx, by, bw, bh), hull_area
+    return filled, cv2.boundingRect(big), area
+
+
+def _isolate_grabcut(image: np.ndarray, h: int, w: int, page_area: float):
+    """Segment the page from the background with GrabCut: seed the centre as
+    definite foreground (the page) and a thin outer ring as definite background
+    (the surface), and let GrabCut learn each one's colour. Handles a coloured /
+    shadowed / gradient carpet that fixed thresholds can't. Runs on a downscaled
+    copy for speed; returns (filled_mask, bbox, area) or None."""
+    longest = max(h, w)
+    scale = 768.0 / longest if longest > 768 else 1.0
+    sh, sw = max(1, int(h * scale)), max(1, int(w * scale))
+    small = cv2.resize(image, (sw, sh), interpolation=cv2.INTER_AREA) if scale < 1 else image.copy()
+
+    gc = np.full((sh, sw), cv2.GC_PR_FGD, np.uint8)
+    ring = max(2, int(min(sh, sw) * 0.02))      # outer ~2% = definite background
+    gc[:ring, :] = cv2.GC_BGD; gc[-ring:, :] = cv2.GC_BGD
+    gc[:, :ring] = cv2.GC_BGD; gc[:, -ring:] = cv2.GC_BGD
+    gc[int(sh * 0.30):int(sh * 0.70),
+       int(sw * 0.30):int(sw * 0.70)] = cv2.GC_FGD   # centre = definite page
+    bgd = np.zeros((1, 65), np.float64)
+    fgd = np.zeros((1, 65), np.float64)
+    cv2.grabCut(small, gc, None, bgd, fgd, 5, cv2.GC_INIT_WITH_MASK)
+    fg = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    if scale < 1:
+        fg = cv2.resize(fg, (w, h), interpolation=cv2.INTER_NEAREST)
+    return _fill_largest(fg, h, w, page_area)
 
 
 def isolate_page(image: np.ndarray) -> np.ndarray:
     """Beta: remove the background around a photographed page (table, floor,
-    carpet, the adjacent page/spine). Finds the page, paints everything OUTSIDE
-    its convex hull white, and crops to it.
+    carpet, the adjacent page/spine). Finds the page outline, paints everything
+    OUTSIDE it white, and crops to it.
 
-    Backgrounds vary, so three cues are tried and the best believable page wins:
-    (1) COLOUR — pixels whose colour is far from the photo's border colour; a
-        tan/coloured carpet differs in colour from the neutral white/grey page
-        even when they're a similar brightness;
-    (2) BRIGHT — the page is lighter than the surface (Otsu); robust to texture;
-    (3) TONE — grey difference from the border tone (plain backgrounds).
-    Returns the image unchanged only if none find a confident page (so it never
-    wrecks a clean scan)."""
+    GrabCut is the primary segmenter — it learns the page's and the surface's
+    colours, so it carves out a tilted/irregular page from a coloured or
+    shadowed carpet. If GrabCut isn't confident, three simple cues are tried as
+    a fallback (colour distance from the border, brightness, grey tone). Returns
+    the image unchanged only if none find a confident page (never wrecks a clean
+    scan)."""
     h, w = image.shape[:2]
     page_area = h * w
-    blur = cv2.GaussianBlur(image, (7, 7), 0)
-    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
 
-    candidates = []
-    # (1) Colour distance from the border (background) colour.
-    border_px = np.concatenate([blur[0, :, :], blur[-1, :, :],
-                                blur[:, 0, :], blur[:, -1, :]]).reshape(-1, 3)
-    bg_col = np.median(border_px, axis=0)
-    dist = np.linalg.norm(blur.astype(np.float32) - bg_col, axis=2)
-    candidates.append(("colour", (dist > 30).astype(np.uint8) * 255))
-    # (2) Bright page vs darker surface (Otsu).
-    _, bright = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    candidates.append(("bright", bright))
-    # (3) Grey tone difference from the border tone.
-    bg = int(round(float(np.median(gray[[0, -1], :]))))
-    candidates.append(("tone", (cv2.absdiff(gray, np.full_like(gray, bg)) > 24).astype(np.uint8) * 255))
+    res, method = None, None
+    try:
+        res = _isolate_grabcut(image, h, w, page_area)
+        method = "grabcut"
+    except Exception as e:
+        print(f"[isolate] grabcut failed ({e}); trying heuristics")
 
-    best = None
-    for name, mask in candidates:
-        res = _page_hull(mask, h, w, page_area)
-        if res is None:
-            continue
-        if best is None or res[2] > best[1][2]:   # prefer the larger believable page
-            best = (name, res)
-    if best is None:
+    if res is None:
+        blur = cv2.GaussianBlur(image, (7, 7), 0)
+        gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
+        border_px = np.concatenate([blur[0, :, :], blur[-1, :, :],
+                                    blur[:, 0, :], blur[:, -1, :]]).reshape(-1, 3)
+        bg_col = np.median(border_px, axis=0)
+        dist = np.linalg.norm(blur.astype(np.float32) - bg_col, axis=2)
+        _, bright = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        bg = int(round(float(np.median(gray[[0, -1], :]))))
+        candidates = [
+            ("colour", (dist > 30).astype(np.uint8) * 255),
+            ("bright", bright),
+            ("tone", (cv2.absdiff(gray, np.full_like(gray, bg)) > 24).astype(np.uint8) * 255),
+        ]
+        for name, mask in candidates:
+            r = _fill_largest(mask, h, w, page_area)
+            if r is not None and (res is None or r[2] > res[2]):
+                res, method = r, name
+
+    if res is None:
         print("[isolate] no confident page found — leaving page unchanged")
         return image
-    name, (hull, (bx, by, bw, bh), hull_area) = best
-    print(f"[isolate] page via '{name}' — {bw}x{bh} ({hull_area/page_area:.0%} of frame)")
+    mask, (bx, by, bw, bh), area = res
+    print(f"[isolate] page via '{method}' — {bw}x{bh} ({area/page_area:.0%} of frame)")
 
-    hull_mask = np.zeros((h, w), np.uint8)
-    cv2.fillConvexPoly(hull_mask, hull, 255)
     # feather the edge a touch so the cut isn't a hard jagged line
-    hull_mask = cv2.erode(hull_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+    mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
     out = image.copy()
-    out[hull_mask == 0] = (255, 255, 255)     # background → white
+    out[mask == 0] = (255, 255, 255)          # background → white
     return out[by:by + bh, bx:bx + bw]        # crop to the page
 
 
