@@ -117,21 +117,10 @@ def boost_for_detection(image: np.ndarray) -> np.ndarray:
         return image
 
 
-def isolate_page(image: np.ndarray) -> np.ndarray:
-    """Beta: remove the background around a photographed page (table, floor,
-    the adjacent page/spine showing on a side). Finds the page content as
-    everything that differs from the photo's border tone, takes its convex
-    hull, paints everything OUTSIDE the hull white, and crops to it. Best-effort
-    for phone photos of physical books; returns the image unchanged if it can't
-    confidently find a page (so it never wrecks a clean scan)."""
-    h, w = image.shape[:2]
-    page_area = h * w
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
-    bg = int(round(float(np.median(border))))
-    diff = cv2.absdiff(blurred, np.full_like(blurred, bg))
-    _, mask = cv2.threshold(diff, 24, 255, cv2.THRESH_BINARY)
+def _page_hull(mask: np.ndarray, h: int, w: int, page_area: float):
+    """From a binary candidate mask, clean it up, take the convex hull of the
+    significant blobs and return (hull, bbox) if it looks like a believable page
+    (a big chunk of the frame that isn't already edge-to-edge). Else None."""
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
     k = max(9, (min(h, w) // 30) | 1)   # connect the page content into one blob
@@ -140,15 +129,55 @@ def isolate_page(image: np.ndarray) -> np.ndarray:
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     sig = [c for c in contours if cv2.contourArea(c) > page_area * 0.01]
     if not sig:
-        return image
+        return None
     hull = cv2.convexHull(np.vstack(sig))
     bx, by, bw, bh = cv2.boundingRect(hull)
-    # Safety: only act when we found a believable page (a big chunk of the frame
-    # that doesn't already fill it — i.e. there IS background to remove).
-    if bw * bh < page_area * 0.20:
+    if bw * bh < page_area * 0.20:          # too small to be the page
+        return None
+    if bw >= w * 0.97 and bh >= h * 0.97:   # fills the frame → nothing around it
+        return None
+    return hull, (bx, by, bw, bh)
+
+
+def isolate_page(image: np.ndarray) -> np.ndarray:
+    """Beta: remove the background around a photographed page (table, floor,
+    carpet, the adjacent page/spine showing on a side). Finds the page, takes
+    its convex hull, paints everything OUTSIDE the hull white, and crops to it.
+
+    Two strategies are tried so a TEXTURED/patterned background (e.g. a carpet)
+    doesn't defeat it: (1) the page is the BRIGHT region (white paper is lighter
+    than most surfaces — robust to texture), and (2) the page differs from the
+    photo's border tone (works on a plain surface). The larger believable page
+    wins. Returns the image unchanged if neither finds a confident page (so it
+    never wrecks a clean scan)."""
+    h, w = image.shape[:2]
+    page_area = h * w
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+
+    candidates = []
+    # (1) Bright page vs darker/ textured surface — Otsu split (texture-robust).
+    _, bright = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    candidates.append(bright)
+    # (2) Differs-from-border tone — good on a plain, uniform background.
+    border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
+    bg = int(round(float(np.median(border))))
+    diff = cv2.absdiff(blurred, np.full_like(blurred, bg))
+    _, m = cv2.threshold(diff, 24, 255, cv2.THRESH_BINARY)
+    candidates.append(m)
+
+    best = None
+    for mask in candidates:
+        res = _page_hull(mask, h, w, page_area)
+        if res is None:
+            continue
+        _, (_, _, bw, bh) = res
+        if best is None or bw * bh > best[1][2] * best[1][3]:
+            best = res
+    if best is None:
         return image
-    if bw >= w * 0.97 and bh >= h * 0.97:
-        return image  # already edge-to-edge, nothing around it
+    hull, (bx, by, bw, bh) = best
+
     hull_mask = np.zeros((h, w), np.uint8)
     cv2.fillConvexPoly(hull_mask, hull, 255)
     # feather the edge a touch so the cut isn't a hard jagged line
