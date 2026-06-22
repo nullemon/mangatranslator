@@ -401,6 +401,16 @@ async def _run(
                         out = preserve_dark_regions(out, img)
                     except Exception as e:
                         print(f"[enhance] dark-region preserve skipped: {e}")
+                    # The generative scan leaves some areas dirty / colour-tinted.
+                    # Force a uniform clean B&W scan: desaturate (manga is B&W) and
+                    # snap paper->white, ink->black while keeping screentones grey.
+                    try:
+                        from core.pipeline import scan_finish
+                        gray3 = cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
+                                             cv2.COLOR_GRAY2BGR)
+                        out = scan_finish(gray3)
+                    except Exception as e:
+                        print(f"[enhance] B&W clean pass skipped: {e}")
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
