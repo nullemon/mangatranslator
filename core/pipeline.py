@@ -119,8 +119,11 @@ def boost_for_detection(image: np.ndarray) -> np.ndarray:
 
 def _page_hull(mask: np.ndarray, h: int, w: int, page_area: float):
     """From a binary candidate mask, clean it up, take the convex hull of the
-    significant blobs and return (hull, bbox) if it looks like a believable page
-    (a big chunk of the frame that isn't already edge-to-edge). Else None."""
+    significant blobs and return (hull, bbox, hull_area) if it looks like a
+    believable page — a big chunk of the frame that doesn't cover essentially
+    the WHOLE frame (judged by the hull POLYGON area, so a tilted page whose
+    bounding box is near-full but which leaves carpet in the corners still
+    counts). Else None."""
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
     k = max(9, (min(h, w) // 30) | 1)   # connect the page content into one blob
@@ -132,51 +135,58 @@ def _page_hull(mask: np.ndarray, h: int, w: int, page_area: float):
         return None
     hull = cv2.convexHull(np.vstack(sig))
     bx, by, bw, bh = cv2.boundingRect(hull)
-    if bw * bh < page_area * 0.20:          # too small to be the page
+    hull_area = cv2.contourArea(hull)
+    if hull_area < page_area * 0.20:        # too small to be the page
         return None
-    if bw >= w * 0.97 and bh >= h * 0.97:   # fills the frame → nothing around it
+    if hull_area > page_area * 0.985:       # covers the whole frame → nothing to remove
         return None
-    return hull, (bx, by, bw, bh)
+    return hull, (bx, by, bw, bh), hull_area
 
 
 def isolate_page(image: np.ndarray) -> np.ndarray:
     """Beta: remove the background around a photographed page (table, floor,
-    carpet, the adjacent page/spine showing on a side). Finds the page, takes
-    its convex hull, paints everything OUTSIDE the hull white, and crops to it.
+    carpet, the adjacent page/spine). Finds the page, paints everything OUTSIDE
+    its convex hull white, and crops to it.
 
-    Two strategies are tried so a TEXTURED/patterned background (e.g. a carpet)
-    doesn't defeat it: (1) the page is the BRIGHT region (white paper is lighter
-    than most surfaces — robust to texture), and (2) the page differs from the
-    photo's border tone (works on a plain surface). The larger believable page
-    wins. Returns the image unchanged if neither finds a confident page (so it
-    never wrecks a clean scan)."""
+    Backgrounds vary, so three cues are tried and the best believable page wins:
+    (1) COLOUR — pixels whose colour is far from the photo's border colour; a
+        tan/coloured carpet differs in colour from the neutral white/grey page
+        even when they're a similar brightness;
+    (2) BRIGHT — the page is lighter than the surface (Otsu); robust to texture;
+    (3) TONE — grey difference from the border tone (plain backgrounds).
+    Returns the image unchanged only if none find a confident page (so it never
+    wrecks a clean scan)."""
     h, w = image.shape[:2]
     page_area = h * w
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    blur = cv2.GaussianBlur(image, (7, 7), 0)
+    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
 
     candidates = []
-    # (1) Bright page vs darker/ textured surface — Otsu split (texture-robust).
-    _, bright = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    candidates.append(bright)
-    # (2) Differs-from-border tone — good on a plain, uniform background.
-    border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
-    bg = int(round(float(np.median(border))))
-    diff = cv2.absdiff(blurred, np.full_like(blurred, bg))
-    _, m = cv2.threshold(diff, 24, 255, cv2.THRESH_BINARY)
-    candidates.append(m)
+    # (1) Colour distance from the border (background) colour.
+    border_px = np.concatenate([blur[0, :, :], blur[-1, :, :],
+                                blur[:, 0, :], blur[:, -1, :]]).reshape(-1, 3)
+    bg_col = np.median(border_px, axis=0)
+    dist = np.linalg.norm(blur.astype(np.float32) - bg_col, axis=2)
+    candidates.append(("colour", (dist > 30).astype(np.uint8) * 255))
+    # (2) Bright page vs darker surface (Otsu).
+    _, bright = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    candidates.append(("bright", bright))
+    # (3) Grey tone difference from the border tone.
+    bg = int(round(float(np.median(gray[[0, -1], :]))))
+    candidates.append(("tone", (cv2.absdiff(gray, np.full_like(gray, bg)) > 24).astype(np.uint8) * 255))
 
     best = None
-    for mask in candidates:
+    for name, mask in candidates:
         res = _page_hull(mask, h, w, page_area)
         if res is None:
             continue
-        _, (_, _, bw, bh) = res
-        if best is None or bw * bh > best[1][2] * best[1][3]:
-            best = res
+        if best is None or res[2] > best[1][2]:   # prefer the larger believable page
+            best = (name, res)
     if best is None:
+        print("[isolate] no confident page found — leaving page unchanged")
         return image
-    hull, (bx, by, bw, bh) = best
+    name, (hull, (bx, by, bw, bh), hull_area) = best
+    print(f"[isolate] page via '{name}' — {bw}x{bh} ({hull_area/page_area:.0%} of frame)")
 
     hull_mask = np.zeros((h, w), np.uint8)
     cv2.fillConvexPoly(hull_mask, hull, 255)
