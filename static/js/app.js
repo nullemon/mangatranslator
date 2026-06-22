@@ -377,7 +377,7 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ══ ENHANCEMENT SETTINGS ══ */
   function enhKeyName() { return "manga_enh_key_" + enhanceProvider.value; }
   async function initEnhance() {
-    let defaultPrompt = "Restore this photographed manga page into a clean flatbed-scanned black-and-white page: flatten all curvature/warp, remove creases, folds, shadows and uneven lighting, de-skew and straighten, square up the borders and crop out the surface around the page; pure white paper, solid black ink, crisp sharp lines. Preserve every panel, character, screentone and all Japanese text exactly — only fix geometry, lighting and tone, never the artwork.";
+    let defaultPrompt = "Restore this into a clean TCB-style black-and-white manga scan: pure white paper, solid black ink, sharp crisp lines, flattened and straightened, no creases or shadows. Keep all artwork, screentones and Japanese text exactly as drawn.";
     try {
       const res = await fetch("/api/enhance-prompt");
       if (res.ok) {

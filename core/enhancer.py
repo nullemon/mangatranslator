@@ -31,21 +31,10 @@ class ImageEnhancer:
     an external image-to-image model (OpenAI gpt-image-1 or Google Gemini)."""
 
     DEFAULT_PROMPT = (
-        "Restore this photographed manga page into a clean, flatbed-scanned "
-        "black-and-white page. You MAY redraw pixels to: flatten the page "
-        "completely (remove all page curvature, warping and the bend near the "
-        "spine, as if pressed flat on a scanner); remove every crease, fold, "
-        "wrinkle, dog-ear, shadow, glare and uneven lighting; de-skew and "
-        "straighten so the page is perfectly rectangular and front-on; square "
-        "up and clean the borders into straight sharp edges and crop out "
-        "everything around the page (desk, carpet, the facing page). Make the "
-        "paper pure flat white, the ink solid black, with crisp sharp lines and "
-        "clean high-contrast print quality. PRESERVE EXACTLY, do not change: "
-        "every panel, character, face, pose and background drawing; all "
-        "screentones, hatching, gradients and fine linework; and all Japanese "
-        "text and lettering in the same place. Do NOT add, remove, invent, "
-        "redraw or rearrange any panel, character, effect or text — only correct "
-        "geometry, lighting and tone. Output one clean scan of the same page."
+        "Restore this into a clean TCB-style black-and-white manga scan: pure "
+        "white paper, solid black ink, sharp crisp lines, flattened and "
+        "straightened, no creases or shadows. Keep all artwork, screentones and "
+        "Japanese text exactly as drawn."
     )
 
     OPENAI_URL = "https://api.openai.com/v1/images/edits"
