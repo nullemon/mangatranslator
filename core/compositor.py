@@ -86,25 +86,42 @@ class Compositor:
         # Detect text on a (possibly contrast-boosted) copy so faint raws read
         # well, but ERASE from the original pixels.
         src = det_image if det_image is not None and det_image.shape[:2] == (h, w) else image
-        mask = np.zeros((h, w), np.uint8)
+        text_mask = np.zeros((h, w), np.uint8)
         if self.text_seg is not None and self.text_seg.ok:
             try:
-                mask = cv2.bitwise_or(mask, self.text_seg.mask(src))
+                text_mask = self.text_seg.mask(src)
             except Exception as e:
                 print(f"[compositor] clean: text-seg mask failed: {e}")
+
+        # Flat-fill each detected speech balloon with its OWN background colour,
+        # snapped to pure white (or black for dark bubbles). A balloon interior is
+        # uniform, so filling it gives a perfectly clean box — far better than
+        # inpainting it, which reconstructs from neighbours and looks smudged.
+        # The inked outline is protected by eroding the mask first, and any text
+        # inside the balloon is wiped by the fill.
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         for bm in (bubble_masks or []):
-            if bm is not None and bm.shape[:2] == (h, w):
-                mask = cv2.bitwise_or(mask, (bm > 0).astype(np.uint8) * 255)
-        if cv2.countNonZero(mask) == 0:
-            print("[compositor] clean: no text detected — page unchanged")
+            if bm is None or bm.shape[:2] != (h, w):
+                continue
+            interior = cv2.erode((bm > 0).astype(np.uint8) * 255, erode_k, iterations=2) > 0
+            if int(interior.sum()) < 64:
+                continue
+            med = np.median(result[interior].reshape(-1, 3), axis=0)
+            lum = 0.114 * med[0] + 0.587 * med[1] + 0.299 * med[2]   # BGR luma
+            fill = (255, 255, 255) if lum >= 165 else (0, 0, 0) if lum <= 70 else med
+            result[interior] = fill
+            text_mask[interior] = 0      # handled by the flat fill — don't inpaint
+
+        if cv2.countNonZero(text_mask) == 0:
             return result
+        # Inpaint only the remaining text strokes (free text sitting over artwork).
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        mask = cv2.dilate(mask, k, iterations=2)   # cover antialiased halos
+        text_mask = cv2.dilate(text_mask, k, iterations=2)   # cover antialiased halos
         if self.lama is not None and self.lama.ok:
-            out = self.lama.inpaint(result, mask)
+            out = self.lama.inpaint(result, text_mask)
             if out is not None:
                 return out
-        return cv2.inpaint(result, mask, 5, cv2.INPAINT_TELEA)
+        return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
 
     def compose(
         self,

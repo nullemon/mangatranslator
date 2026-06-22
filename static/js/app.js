@@ -259,7 +259,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
-  const isClean = wf => wf === "clean";
+  const isClean = wf => wf === "clean" || wf === "clean-isolate";
   const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean";
   const isUpscaleOnly = wf => wf === "upscale-only";
 
@@ -612,7 +612,9 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("font", fontSelect.value);
       f.append("finish", pageFinish ? pageFinish.value : "clean");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
-      f.append("isolate_page", isolatePage && isolatePage.checked ? "true" : "false");
+      // "Clean + Remove BG" forces background isolation on; plain Clean honours the toggle.
+      const iso = workflow === "clean-isolate" || (isolatePage && isolatePage.checked);
+      f.append("isolate_page", iso ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());

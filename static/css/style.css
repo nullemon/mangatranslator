@@ -264,8 +264,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 /* ── Workflow picker ── */
 .workflow-picker{margin-bottom:1rem}
 .workflow-label{font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint);font-weight:600;margin-bottom:.5rem}
-.workflow-cards{display:grid;grid-template-columns:repeat(7,1fr);gap:.5rem}
-@media(max-width:1300px){.workflow-cards{grid-template-columns:repeat(4,1fr)}}
+.workflow-cards{display:grid;grid-template-columns:repeat(8,1fr);gap:.5rem}
+@media(max-width:1500px){.workflow-cards{grid-template-columns:repeat(4,1fr)}}
 @media(max-width:800px){.workflow-cards{grid-template-columns:repeat(2,1fr)}}
 .wf-card{
   display:flex;flex-direction:column;align-items:flex-start;gap:.25rem;
