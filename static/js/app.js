@@ -18,7 +18,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const smartMode      = document.getElementById("smartMode");
   const translateSfx   = document.getElementById("translateSfx");
   const maxQuality     = document.getElementById("maxQuality");
-  const isolatePage    = document.getElementById("isolatePage");
   const compressOut    = document.getElementById("compressOut");
   const transStyle     = document.getElementById("transStyle");
   const removeWatermark= document.getElementById("removeWatermark");
@@ -117,11 +116,6 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem("manga_max_quality", maxQuality.checked ? "1" : "0"));
   }
 
-  if (isolatePage) {
-    isolatePage.checked = localStorage.getItem("manga_isolate_page") === "1";
-    isolatePage.addEventListener("change", () =>
-      localStorage.setItem("manga_isolate_page", isolatePage.checked ? "1" : "0"));
-  }
 
   if (compressOut) {
     compressOut.checked = localStorage.getItem("manga_compress_out") === "1";
@@ -259,7 +253,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
-  const isClean = wf => wf === "clean" || wf === "clean-isolate";
+  const isClean = wf => wf === "clean";
   const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean";
   const isUpscaleOnly = wf => wf === "upscale-only";
 
@@ -612,9 +606,6 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("font", fontSelect.value);
       f.append("finish", pageFinish ? pageFinish.value : "clean");
       f.append("upscale", hdUpscale && hdUpscale.checked ? "true" : "false");
-      // "Clean + Remove BG" forces background isolation on; plain Clean honours the toggle.
-      const iso = workflow === "clean-isolate" || (isolatePage && isolatePage.checked);
-      f.append("isolate_page", iso ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
@@ -633,7 +624,6 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", smartMode.checked ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
-      f.append("isolate_page", isolatePage && isolatePage.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       f.append("remove_watermark", removeWatermark && removeWatermark.checked ? "true" : "false");
       f.append("replace_watermark", replaceWatermark && replaceWatermark.checked ? "true" : "false");
