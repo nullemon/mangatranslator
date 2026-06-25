@@ -573,6 +573,16 @@ async def _run_enhance(
                     out = preserve_dark_regions(out, cleaned)
                 except Exception as e:
                     print(f"[enhance] dark-region preserve skipped: {e}")
+            # Crisp clean-scan finish so the AI remake looks like a real B&W scan
+            # (pure white paper, solid black ink, sharp) instead of a faded /
+            # low-contrast / colour-tinted result. Desaturate first (manga is
+            # B&W). This is contrast/levels, NOT an upscale.
+            try:
+                from core.pipeline import scan_finish
+                out = scan_finish(cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
+                                               cv2.COLOR_GRAY2BGR))
+            except Exception as e:
+                print(f"[enhance] crisp finish skipped: {e}")
             # Optional second stage: faithful HD upscale on top of the AI scan.
             if upscale:
                 from core.upscale import Upscaler
