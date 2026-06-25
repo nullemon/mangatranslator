@@ -174,7 +174,8 @@ class ImageEnhancer:
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-        print(f"[enhance] xAI request: model={model}, image={len(data_uri) // 1024}KB")
+        print(f"[enhance] xAI request: POST {self.XAI_URL} | model={model} | "
+              f"input={w}x{h} | prompt[:80]={prompt[:80]!r}")
         with httpx.Client(timeout=self.timeout) as client:
             resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
         print(f"[enhance] xAI response: {resp.status_code}")
@@ -183,16 +184,27 @@ class ImageEnhancer:
             raise RuntimeError(self._err("xAI", resp))
 
         payload = resp.json()
+        # Diagnostics: what did xAI actually send back? (everything except the
+        # huge image blob). 'revised_prompt' tells us whether it used our prompt.
+        meta = {k: v for k, v in payload.items() if k != "data"}
+        print(f"[enhance] xAI payload meta: {meta}")
         items = payload.get("data") or []
         if items:
             first = items[0]
+            print(f"[enhance] xAI data[0] keys: {list(first.keys())}")
+            if first.get("revised_prompt"):
+                print(f"[enhance] xAI revised_prompt: {str(first['revised_prompt'])[:200]}")
             if first.get("b64_json"):
-                return self._decode(base64.b64decode(first["b64_json"]))
+                outimg = self._decode(base64.b64decode(first["b64_json"]))
+                print(f"[enhance] xAI returned image {outimg.shape[1]}x{outimg.shape[0]}")
+                return outimg
             if first.get("url"):
                 with httpx.Client(timeout=self.timeout) as client:
                     img_resp = client.get(first["url"])
                 if img_resp.status_code == 200:
-                    return self._decode(img_resp.content)
+                    outimg = self._decode(img_resp.content)
+                    print(f"[enhance] xAI returned image {outimg.shape[1]}x{outimg.shape[0]} (via url)")
+                    return outimg
         raise RuntimeError(f"xAI returned no image: {str(payload)[:300]}")
 
     def _err(self, name: str, resp: httpx.Response) -> str:
