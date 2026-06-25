@@ -739,15 +739,7 @@ class TranslationPipeline:
         image_path: str,
         output_path: str,
         progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
-        render_base_path: Optional[str] = None,
-        scan_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     ) -> Dict[str, Any]:
-        """Translate a page. Normally detection AND typesetting happen on the
-        same image. For the Scan → Translate flow, pass `scan_fn`: text is
-        detected/OCR'd on the crisp RAW, the Japanese is ERASED (aligned, so it's
-        clean), `scan_fn` AI-remakes a clean text-free HD scan of that page, and
-        the English is typeset onto the scan — so the generative scan never
-        corrupts detection and never has erase marks smeared into the art."""
         def update(step: int, msg: str, pct: int):
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
@@ -767,55 +759,36 @@ class TranslationPipeline:
         if self.max_quality:
             print(f"[pipeline] MAX QUALITY run — full-resolution {image.shape[1]}x{image.shape[0]}")
 
-        # Detect/OCR on `image`; erase + typeset on `base`. They're the same
-        # except in Scan → Translate, where base is the AI-scanned page.
-        base = None
-        if render_base_path:
-            base = cv2.imread(render_base_path)
-            if base is None:
-                print(f"[pipeline] render base missing ({render_base_path}); using raw")
-
         update(0, "Preprocessing image...", 2)
-        if base is None:
-            # Standard path: detection and rendering share one image.
-            image = auto_crop_page(image)
-            if self.isolate_page:
-                update(0, "Isolating page (removing background)...", 3)
-                try:
-                    image = isolate_page(image)
-                except Exception as e:
-                    print(f"[pipeline] isolate-page failed, continuing: {e}")
+        image = auto_crop_page(image)
+        if self.isolate_page:
+            update(0, "Isolating page (removing background)...", 3)
+            try:
+                image = isolate_page(image)
+            except Exception as e:
+                print(f"[pipeline] isolate-page failed, continuing: {e}")
 
-            # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
-            # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts
-            # without redrawing, so the art is preserved; Real-ESRGAN is the more
-            # aggressive fallback. Only runs on pages that aren't already large.
-            if (self.upscaler is not None
-                    and self.upscale_on
-                    and scan_fn is None
-                    and max(image.shape[:2]) < 2000
-                    and self.upscaler.ok):
-                if self.max_quality:
-                    print("[pipeline] NOTE: HD Upscale + Maximum Quality together is "
-                          "very heavy — on an 8GB laptop GPU this can take many "
-                          "minutes. For fast translation, leave HD Upscale OFF.")
-                update(0, "Upscaling page to HD (MangaJaNai)...", 4)
-                try:
-                    image = self.upscaler.upscale(image)
-                    print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
-                except Exception as e:
-                    print(f"[pipeline] upscale failed, continuing as-is: {e}")
-            base = image
-        else:
-            # Scan → Translate: keep the raw at its working size for detection and
-            # match the scanned base to it so erase masks / boxes line up.
-            if base.shape[:2] != image.shape[:2]:
-                base = cv2.resize(base, (image.shape[1], image.shape[0]),
-                                  interpolation=cv2.INTER_AREA)
-            print(f"[pipeline] Scan→Translate: detecting on RAW, typesetting on scanned base")
+        # HD upscale: OFF by default, opt-in per run (UI toggle / MANGA_UPSCALE).
+        # With MangaJaNai installed this is FAITHFUL — sharpens and de-artifacts
+        # without redrawing, so the art is preserved; Real-ESRGAN is the more
+        # aggressive fallback. Only runs on pages that aren't already large.
+        if (self.upscaler is not None
+                and self.upscale_on
+                and max(image.shape[:2]) < 2000
+                and self.upscaler.ok):
+            if self.max_quality:
+                print("[pipeline] NOTE: HD Upscale + Maximum Quality together is "
+                      "very heavy — on an 8GB laptop GPU this can take many "
+                      "minutes. For fast translation, leave HD Upscale OFF.")
+            update(0, "Upscaling page to HD (MangaJaNai)...", 4)
+            try:
+                image = self.upscaler.upscale(image)
+                print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
+            except Exception as e:
+                print(f"[pipeline] upscale failed, continuing as-is: {e}")
 
         base_path = self._base_path(output_path)
-        cv2.imwrite(base_path, base)
+        cv2.imwrite(base_path, image)
 
         # Clean-only: remove ALL text and stop — no detection-LLM, no
         # translation (so no API key needed). Page Finish still decides raw
@@ -871,48 +844,17 @@ class TranslationPipeline:
             items.append(self._credit_item(image.shape[1], image.shape[0], nid))
 
         if not items:
-            out = scan_finish(base) if self.finish in ("clean", "api") else base
+            out = scan_finish(image) if self.finish in ("clean", "api") else image
             cv2.imwrite(output_path, out)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
 
         update(3, "Erasing original text...", 60)
-        if scan_fn is not None:
-            # Erase the Japanese on the aligned page, AI-remake a clean text-free
-            # HD scan of it, then typeset English on that scan. Doing the scan
-            # AFTER the erase means the scan cleans up any erase marks, and the
-            # English (placed last) is never scanned/regenerated.
-            erased = self.compositor.clean(base)
-            update(3, "AI remaking a clean HD scan...", 68)
-            try:
-                scanned = scan_fn(erased)
-                if scanned is not None and scanned.size:
-                    if scanned.shape[:2] != base.shape[:2]:
-                        scanned = cv2.resize(scanned, (base.shape[1], base.shape[0]),
-                                             interpolation=cv2.INTER_AREA)
-                    base = scanned
-                else:
-                    base = erased
-            except Exception as e:
-                print(f"[pipeline] scan step failed, using erased page: {e}")
-                base = erased
-            cv2.imwrite(base_path, base)   # rerender / Original base = the clean scan
         update(4, "Fitting translations into balloons...", 80)
-        result = self.compositor.compose(base, items, masks)
+        result = self.compositor.compose(image, items, masks)
         if self.finish in ("clean", "api"):
             update(4, "Applying clean-scan finish...", 92)
             result = scan_finish(result)
-        # Scan → Translate HD: the generative scan caps at ~2K, so upscale the
-        # FINISHED page with MangaJaNai (true detail upscaler) to get a sharp ~4K
-        # result. Done here (after text is placed) so coordinates never shift.
-        if (scan_fn is not None and self.upscale_on
-                and self.upscaler is not None and self.upscaler.ok):
-            update(5, "Upscaling to HD (MangaJaNai)...", 96)
-            try:
-                result = self.upscaler.upscale(result)
-                print(f"[pipeline] HD upscaled to {result.shape[1]}x{result.shape[0]}")
-            except Exception as e:
-                print(f"[pipeline] HD upscale failed, keeping as-is: {e}")
         cv2.imwrite(output_path, result)
         update(5, "Complete!", 100)
 
