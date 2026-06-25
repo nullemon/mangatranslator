@@ -401,7 +401,9 @@ document.addEventListener("DOMContentLoaded", () => {
       p === "xai"    ? "xAI (Grok) API Key" : "Gemini API Key";
   }
   enhanceProvider.addEventListener("change", () => {
-    localStorage.setItem(enhKeyName(), enhanceKey.value);
+    // Each provider's key is already saved per-provider by the input handler
+    // below; just remember the chosen provider and load ITS key/model. (Saving
+    // here would overwrite the new provider's key with the old field value.)
     localStorage.setItem("manga_enh_provider", enhanceProvider.value);
     syncEnhanceFields();
   });
