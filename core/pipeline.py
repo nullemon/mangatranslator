@@ -792,6 +792,7 @@ class TranslationPipeline:
             # aggressive fallback. Only runs on pages that aren't already large.
             if (self.upscaler is not None
                     and self.upscale_on
+                    and scan_fn is None
                     and max(image.shape[:2]) < 2000
                     and self.upscaler.ok):
                 if self.max_quality:
@@ -901,6 +902,17 @@ class TranslationPipeline:
         if self.finish in ("clean", "api"):
             update(4, "Applying clean-scan finish...", 92)
             result = scan_finish(result)
+        # Scan → Translate HD: the generative scan caps at ~2K, so upscale the
+        # FINISHED page with MangaJaNai (true detail upscaler) to get a sharp ~4K
+        # result. Done here (after text is placed) so coordinates never shift.
+        if (scan_fn is not None and self.upscale_on
+                and self.upscaler is not None and self.upscaler.ok):
+            update(5, "Upscaling to HD (MangaJaNai)...", 96)
+            try:
+                result = self.upscaler.upscale(result)
+                print(f"[pipeline] HD upscaled to {result.shape[1]}x{result.shape[0]}")
+            except Exception as e:
+                print(f"[pipeline] HD upscale failed, keeping as-is: {e}")
         cv2.imwrite(output_path, result)
         update(5, "Complete!", 100)
 
