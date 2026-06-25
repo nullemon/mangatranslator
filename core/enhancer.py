@@ -162,10 +162,12 @@ class ImageEnhancer:
         if max(h, w) > max_dim:
             scale = max_dim / max(h, w)
             image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        # PNG (lossless) so line art / screentones aren't softened by JPEG before
+        # Grok even sees them — pasting a crisp page in gives a crisp remake.
+        ok, buf = cv2.imencode(".png", image)
         if not ok:
             raise ValueError("Failed to encode image for xAI")
-        data_uri = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+        data_uri = "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
         body = {
             "model": model,
             "prompt": prompt,

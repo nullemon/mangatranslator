@@ -549,15 +549,16 @@ async def _run_enhance(
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
-            tasks[task_id].update({"progress": 15, "message": "Cropping and cleaning page..."})
-            cleaned = scan_cleanup(img)
             tasks[task_id].update(
                 {"progress": 30,
                  "message": f"Sending to {provider.title()} (this can take 30-60s)..."}
             )
             ai_ok = False
             try:
-                out = enhancer.enhance(cleaned, prompt, provider, api_key, model)
+                # Send the RAW page to the AI scanner — exactly like pasting it into
+                # Grok yourself. Pre-running scan_cleanup faded the input before Grok
+                # ever saw it, so its remake came out washed out. Raw in = clean out.
+                out = enhancer.enhance(img, prompt, provider, api_key, model)
                 ai_ok = True
                 tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
             except Exception as e:
@@ -566,11 +567,11 @@ async def _run_enhance(
                     {"progress": 70,
                      "message": f"AI failed ({type(e).__name__}); used local clean scan"}
                 )
-                out = cleaned
+                out = scan_cleanup(img)
             # Keep solid blacks the generative scan would otherwise bleach.
             if ai_ok:
                 try:
-                    out = preserve_dark_regions(out, cleaned)
+                    out = preserve_dark_regions(out, img)
                 except Exception as e:
                     print(f"[enhance] dark-region preserve skipped: {e}")
             # Crisp clean-scan finish so the AI remake looks like a real B&W scan
