@@ -287,11 +287,9 @@ document.addEventListener("DOMContentLoaded", () => {
     workflow = wf;
     wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
     enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
-    // Show the settings panel for translate AND clean (Clean uses HD Upscale,
-    // Page Finish, Isolate Page, Compress Output) — only the pure enhance/
-    // upscale workflows hide it.
-    document.querySelector(".settings-bar").style.display =
-      (needsTranslate(wf) || isClean(wf)) ? "" : "none";
+    // Keep the Settings panel always visible (it's collapsible) so the top menu
+    // never disappears when switching to Raw → Scan / upscale workflows.
+    document.querySelector(".settings-bar").style.display = "";
     goBtn.textContent = {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
