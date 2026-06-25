@@ -345,6 +345,24 @@ STYLES = {
         "f_head": "bangers", "f_kick": "anton", "f_name": "bangers", "f_body": "body",
         "head_caps": True, "head_shadow": (206, 38, 30),
     },
+    "hxh": {
+        "label": "Hunter green", "look": "royal",
+        "base": (12, 22, 15), "base2": (5, 11, 7),
+        "ink": (236, 242, 234), "muted": (150, 182, 156),
+        "accent": (52, 168, 86), "accent_ink": (6, 20, 10),
+        "rule": (52, 168, 86), "pill": (52, 168, 86), "pill_ink": (6, 20, 10),
+        "f_head": "anton", "f_kick": "bebas", "f_name": "anton", "f_body": "body",
+        "head_caps": True,
+    },
+    "berserk": {
+        "label": "Berserk (blood)", "look": "ragnarok",
+        "base": (16, 12, 12), "base2": (6, 4, 4),
+        "ink": (230, 224, 214), "muted": (152, 140, 134),
+        "accent": (158, 28, 28), "accent_ink": (236, 226, 216),
+        "rule": (158, 28, 28), "pill": (112, 16, 16), "pill_ink": (236, 226, 216),
+        "f_head": "cinzeldec", "f_kick": "cinzel", "f_name": "cinzel", "f_body": "marcellus",
+        "head_caps": True, "head_shadow": (70, 10, 10),
+    },
 }
 _ALIAS = {"dark": "royal", "light": "minimal", "ornate": "royal", "halftone": "naruto",
           "blurple": "neon"}
