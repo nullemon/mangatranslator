@@ -568,22 +568,9 @@ async def _run_enhance(
                      "message": f"AI failed ({type(e).__name__}); used local clean scan"}
                 )
                 out = scan_cleanup(img)
-            # Keep solid blacks the generative scan would otherwise bleach.
-            if ai_ok:
-                try:
-                    out = preserve_dark_regions(out, img)
-                except Exception as e:
-                    print(f"[enhance] dark-region preserve skipped: {e}")
-            # Crisp clean-scan finish so the AI remake looks like a real B&W scan
-            # (pure white paper, solid black ink, sharp) instead of a faded /
-            # low-contrast / colour-tinted result. Desaturate first (manga is
-            # B&W). This is contrast/levels, NOT an upscale.
-            try:
-                from core.pipeline import scan_finish
-                out = scan_finish(cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
-                                               cv2.COLOR_GRAY2BGR))
-            except Exception as e:
-                print(f"[enhance] crisp finish skipped: {e}")
+            # Grok's remake is delivered AS-IS (no dark-region paste, no extra
+            # finish) — exactly like pasting the page into Grok yourself. Only the
+            # local fallback is pre-cleaned. (Optional HD upscale below.)
             # Optional second stage: faithful HD upscale on top of the AI scan.
             if upscale:
                 from core.upscale import Upscaler
