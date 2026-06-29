@@ -1291,6 +1291,34 @@ async def make_zip(request: Request):
     )
 
 
+@app.post("/api/unzip")
+async def unzip(file: UploadFile = File(...)):
+    """Expand an uploaded ZIP of manga pages into individual images so the drop
+    zone can accept a whole chapter as a .zip. Returns base64 images in name
+    order; the frontend turns them back into files and queues them."""
+    import base64 as _b64
+    data = await file.read()
+    images = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for zi in sorted(zf.namelist()):
+                if zi.endswith("/") or "__MACOSX" in zi:
+                    continue
+                low = zi.lower()
+                if low.endswith(_IMG_EXT):
+                    ext = low.rsplit(".", 1)[-1].replace("jpg", "jpeg")
+                    images.append({
+                        "name": os.path.basename(zi),
+                        "type": f"image/{ext}",
+                        "b64": _b64.b64encode(zf.read(zi)).decode(),
+                    })
+    except Exception as e:
+        raise HTTPException(400, f"Could not read ZIP: {e}")
+    if not images:
+        raise HTTPException(400, "No images found in the ZIP")
+    return {"images": images}
+
+
 @app.get("/api/enhanced/{task_id}")
 async def enhanced(task_id: str):
     if task_id not in tasks:

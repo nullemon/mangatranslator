@@ -417,14 +417,41 @@ document.addEventListener("DOMContentLoaded", () => {
   dropZone.addEventListener("click", () => fileInput.click());
   dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
   dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
-  dropZone.addEventListener("drop", e => {
+  dropZone.addEventListener("drop", async e => {
     e.preventDefault(); dropZone.classList.remove("drag-over");
-    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+    if (e.dataTransfer.files.length) addFiles(await expandFiles(e.dataTransfer.files));
   });
-  fileInput.addEventListener("change", () => {
-    if (fileInput.files.length) addFiles(fileInput.files);
+  fileInput.addEventListener("change", async () => {
+    if (fileInput.files.length) addFiles(await expandFiles(fileInput.files));
     fileInput.value = "";
   });
+
+  // Expand any dropped/selected .zip into image Files (via /api/unzip), so a
+  // whole chapter can be uploaded as a single zip. Non-zip images pass through.
+  async function expandFiles(fileList) {
+    const out = [];
+    for (const f of [...fileList]) {
+      const isZip = /\.zip$/i.test(f.name) || f.type === "application/zip"
+                    || f.type === "application/x-zip-compressed";
+      if (isZip) {
+        try {
+          const fd = new FormData(); fd.append("file", f);
+          const res = await fetch("/api/unzip", { method: "POST", body: fd });
+          if (!res.ok) { let m = res.statusText; try { m = (await res.json()).detail || m; } catch (_) {} throw new Error(m); }
+          const data = await res.json();
+          for (const im of (data.images || [])) {
+            const bin = Uint8Array.from(atob(im.b64), c => c.charCodeAt(0));
+            out.push(new File([bin], im.name, { type: im.type || "image/png" }));
+          }
+        } catch (e) {
+          showError(`Couldn't read "${f.name}": ${e.message}`);
+        }
+      } else if (f.type.startsWith("image/")) {
+        out.push(f);
+      }
+    }
+    return out;
+  }
 
   function addFiles(fileList) {
     const incoming = [...fileList].filter(f => f.type.startsWith("image/"));
