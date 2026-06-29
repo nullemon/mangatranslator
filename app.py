@@ -1267,7 +1267,17 @@ async def make_zip(request: Request):
             if not path or not os.path.exists(path):
                 continue
             stem = os.path.splitext(os.path.basename(t.get("name", f"page_{i}")))[0]
-            zf.write(path, f"{i:03d}_{stem}.png")
+            # Re-encode to a REAL PNG so the .png name always matches the bytes —
+            # output files may actually be JPEG/WebP (they keep the upload's
+            # extension, and Compress re-encodes to .jpg), which broke opening the
+            # "*.png" in Photoshop. Decode whatever it is, write true PNG.
+            img = cv2.imread(path)
+            if img is None:
+                continue
+            ok, png = cv2.imencode(".png", img)
+            if not ok:
+                continue
+            zf.writestr(f"{i:03d}_{stem}.png", png.tobytes())
             count += 1
 
     if count == 0:
