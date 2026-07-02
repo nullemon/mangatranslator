@@ -81,7 +81,7 @@ class ClaudeTranslator:
     def _ask(self, content: list) -> str:
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=8192,   # a full page of dialogue can overrun 4096 and truncate the JSON
             messages=[{"role": "user", "content": content}],
         )
         return response.content[0].text
@@ -163,7 +163,15 @@ class GeminiTranslator:
     def _ask(self, parts: list) -> str:
         body = {
             "contents": [{"parts": parts}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 16384,
+                # Gemini 2.5 spends "thinking" tokens from the SAME output budget;
+                # a busy page could burn it all thinking and return no text
+                # (finishReason=MAX_TOKENS). Disable thinking so the whole budget
+                # goes to the actual translation JSON.
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
         }
         url = self.URL.format(model=self.model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
