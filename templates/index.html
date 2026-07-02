@@ -186,6 +186,10 @@
             <span>Replace With My Watermark</span>
             <label class="toggle"><input type="checkbox" id="replaceWatermark"><span class="toggle-slider"></span></label>
           </div>
+          <div class="opt" title="Dense text pages (One Piece SBS, Q&amp;A, author notes). Uses AI vision to find paragraph/column text — not just speech bubbles — and gives a readable transcript in the Details tab.">
+            <span>SBS / text-heavy page</span>
+            <label class="toggle"><input type="checkbox" id="sbsMode"><span class="toggle-slider"></span></label>
+          </div>
         </div>
       </section>
 
@@ -457,6 +461,8 @@
               <input type="range" id="fontScale" min="0.6" max="2.0" step="0.1" value="1.0">
               <span id="fontScaleVal">1.0x</span>
             </div>
+            <button class="btn btn-ghost btn-sm" id="copyTranscript" title="Copy all original → translation text">📋 Copy transcript</button>
+            <button class="btn btn-ghost btn-sm" id="downloadTranscript" title="Download the translation as a .txt file">⬇ .txt</button>
             <button class="btn btn-primary btn-sm" id="applyBtn">Apply &amp; Re-render</button>
           </div>
           <div id="translationsList" class="translations-list"></div>

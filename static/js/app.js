@@ -104,6 +104,15 @@ document.addEventListener("DOMContentLoaded", () => {
   smartMode.addEventListener("change", () =>
     localStorage.setItem("manga_smart", smartMode.checked ? "1" : "0"));
 
+  // SBS / text-heavy mode: forces AI-vision detection (best for dense paragraph
+  // pages) and surfaces the transcript.
+  const sbsMode = document.getElementById("sbsMode");
+  if (sbsMode) {
+    sbsMode.checked = localStorage.getItem("manga_sbs") === "1";
+    sbsMode.addEventListener("change", () =>
+      localStorage.setItem("manga_sbs", sbsMode.checked ? "1" : "0"));
+  }
+
   if (translateSfx) {
     translateSfx.checked = localStorage.getItem("manga_translate_sfx") === "1";
     translateSfx.addEventListener("change", () =>
@@ -670,7 +679,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("source_lang", sourceLang ? sourceLang.value : "Japanese");
       f.append("provider", engineSelect.value);
       f.append("model", modelSelect.value);
-      f.append("smart_mode", smartMode.checked ? "true" : "false");
+      // SBS / text-heavy pages need the AI-vision detector to catch paragraph text.
+      f.append("smart_mode", (smartMode.checked || (sbsMode && sbsMode.checked)) ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
@@ -1066,6 +1076,41 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // ── Transcript: a readable original → translation dump (great for SBS pages) ──
+  function buildTranscript(page) {
+    const items = (page && page.items || []).filter(it => (it.translation || "").trim());
+    if (!items.length) return "";
+    const head = `${page.name || "page"} — ${items.length} lines\n${"=".repeat(40)}\n\n`;
+    return head + items.map((it, i) => {
+      const o = (it.original || "").replace(/\s*\n\s*/g, " ").trim();
+      const t = (it.translation || "").replace(/\s*\n\s*/g, " ").trim();
+      return o ? `${i + 1}. ${o}\n   → ${t}` : `${i + 1}. ${t}`;
+    }).join("\n\n");
+  }
+  const copyTranscriptBtn = document.getElementById("copyTranscript");
+  const downloadTranscriptBtn = document.getElementById("downloadTranscript");
+  if (copyTranscriptBtn) copyTranscriptBtn.addEventListener("click", async () => {
+    const txt = buildTranscript(getActive());
+    if (!txt) { showError("Nothing to copy yet — translate a page first."); return; }
+    try {
+      await navigator.clipboard.writeText(txt);
+      const o = copyTranscriptBtn.textContent;
+      copyTranscriptBtn.textContent = "✓ Copied";
+      setTimeout(() => { copyTranscriptBtn.textContent = o; }, 1500);
+    } catch (_) { showError("Couldn't copy — your browser blocked clipboard access."); }
+  });
+  if (downloadTranscriptBtn) downloadTranscriptBtn.addEventListener("click", () => {
+    const page = getActive();
+    const txt = buildTranscript(page);
+    if (!txt) { showError("Nothing to download yet — translate a page first."); return; }
+    const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = ((page.name || "page").replace(/\.[^.]+$/, "")) + "_translation.txt";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
 
   applyBtn.addEventListener("click", () => applyChanges());
   async function applyChanges(btn) {
