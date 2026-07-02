@@ -499,6 +499,7 @@ async def enhance_only(
     prompt: str = Form(""),
     model: str = Form(""),
     upscale: str = Form("false"),
+    tiles: str = Form("1"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -524,9 +525,13 @@ async def enhance_only(
         "mode": "enhance",
     }
 
+    try:
+        n_tiles = int(tiles)
+    except (TypeError, ValueError):
+        n_tiles = 1
     asyncio.create_task(
         _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt,
-                     model, upscale=(upscale == "true"))
+                     model, upscale=(upscale == "true"), tiles=n_tiles)
     )
     return {"task_id": task_id}
 
@@ -540,6 +545,7 @@ async def _run_enhance(
     prompt: str,
     model: str,
     upscale: bool = False,
+    tiles: int = 1,
 ):
     try:
         tasks[task_id].update(
@@ -558,10 +564,18 @@ async def _run_enhance(
             )
             ai_ok = False
             try:
-                # Send the RAW page to the AI scanner — exactly like pasting it into
-                # Grok yourself. Pre-running scan_cleanup faded the input before Grok
-                # ever saw it, so its remake came out washed out. Raw in = clean out.
-                out = enhancer.enhance(img, prompt, provider, api_key, model)
+                if tiles >= 2:
+                    # BETA tile mode: split the page, AI-scan each piece at full
+                    # quality (beats the ~2K cap), then merge into a high-res page.
+                    def _tp(n, total):
+                        tasks[task_id].update(
+                            {"progress": 30 + int(40 * n / max(total, 1)),
+                             "message": f"AI scanning tile {n + 1}/{total} (Beta {tiles})..."})
+                    out = enhancer.enhance_tiled(img, prompt, provider, api_key, model,
+                                                 tiles=tiles, progress=_tp)
+                else:
+                    # Send the RAW page to the AI scanner — like pasting it into Grok.
+                    out = enhancer.enhance(img, prompt, provider, api_key, model)
                 ai_ok = True
                 tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
             except Exception as e:

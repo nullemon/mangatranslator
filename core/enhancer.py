@@ -91,6 +91,66 @@ class ImageEnhancer:
             raise ValueError("The model returned data that is not a valid image")
         return img
 
+    @staticmethod
+    def _feather(h: int, w: int, ramp: int) -> np.ndarray:
+        """Blend weight: ~1 in the centre, ramps down toward every edge over
+        `ramp` px, so overlapping tiles cross-fade instead of showing a seam."""
+        ramp = max(1, min(ramp, h // 2, w // 2))
+        ry = np.ones(h, np.float32); rx = np.ones(w, np.float32)
+        r = np.linspace(0.02, 1.0, ramp, dtype=np.float32)
+        ry[:ramp] = r; ry[-ramp:] = r[::-1]
+        rx[:ramp] = r; rx[-ramp:] = r[::-1]
+        return np.outer(ry, rx)
+
+    def enhance_tiled(self, image, prompt, provider, api_key, model,
+                      tiles: int = 2, out_scale: float = 2.0,
+                      progress=None) -> np.ndarray:
+        """Beat the model's ~2K cap: split the page into `tiles` pieces, AI-scan
+        EACH at full quality (so each gets the model's whole resolution budget),
+        then merge into one high-res page. Each enhanced tile is forced back to
+        its exact tile shape (1:1) so the pieces line up; overlaps are feathered
+        so seams disappear. tiles=2 splits along the long axis; tiles=4 is 2x2."""
+        h, w = image.shape[:2]
+        if tiles >= 4:
+            rows, cols = 2, 2
+        elif tiles == 2:
+            rows, cols = (2, 1) if h >= w else (1, 2)
+        else:
+            return self.enhance(image, prompt, provider, api_key, model)
+
+        tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
+            " This is ONE tile of a larger page — keep the EXACT same framing, "
+            "crop and proportions, edge to edge; do not add borders, zoom, or "
+            "shift anything, so tiles line up seamlessly.")
+        ov = max(8, int(min(h, w) * 0.05))          # overlap between tiles
+        S = max(1.0, float(out_scale))
+        OH, OW = int(round(h * S)), int(round(w * S))
+        acc = np.zeros((OH, OW, 3), np.float32)
+        wsum = np.zeros((OH, OW), np.float32)
+
+        n, total = 0, rows * cols
+        for r in range(rows):
+            for c in range(cols):
+                y0, y1 = r * h // rows, (r + 1) * h // rows
+                x0, x1 = c * w // cols, (c + 1) * w // cols
+                ey0, ey1 = max(0, y0 - ov), min(h, y1 + ov)
+                ex0, ex1 = max(0, x0 - ov), min(w, x1 + ov)
+                if progress:
+                    progress(n, total)
+                enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
+                                   provider, api_key, model)
+                th, tw = int(round((ey1 - ey0) * S)), int(round((ex1 - ex0) * S))
+                # Force 1:1 back to the tile's shape so it aligns on merge.
+                interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
+                enh = cv2.resize(enh, (tw, th), interpolation=interp)
+                mask = self._feather(th, tw, int(ov * S))
+                oy0, ox0 = int(round(ey0 * S)), int(round(ex0 * S))
+                acc[oy0:oy0 + th, ox0:ox0 + tw] += enh.astype(np.float32) * mask[..., None]
+                wsum[oy0:oy0 + th, ox0:ox0 + tw] += mask
+                n += 1
+        wsum[wsum == 0] = 1.0
+        return np.clip(acc / wsum[..., None], 0, 255).astype(np.uint8)
+
     # ── OpenAI (ChatGPT) gpt-image-1 ──
     def _openai(self, image, prompt, api_key, model) -> np.ndarray:
         png = self._encode_png(image)

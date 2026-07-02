@@ -30,6 +30,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const enhanceKeyLabel= document.getElementById("enhanceKeyLabel");
   const enhanceModel   = document.getElementById("enhanceModel");
   const enhancePrompt  = document.getElementById("enhancePrompt");
+  const tileMode       = document.getElementById("tileMode");
+  if (tileMode) {
+    tileMode.value = localStorage.getItem("manga_tile_mode") || "1";
+    tileMode.addEventListener("change", () => localStorage.setItem("manga_tile_mode", tileMode.value));
+  }
   const enhancePanel   = document.getElementById("enhancePanel");
 
   const uploadSection  = document.getElementById("uploadSection");
@@ -718,6 +723,7 @@ document.addEventListener("DOMContentLoaded", () => {
     f.append("api_key", enhanceKey.value.trim());
     f.append("prompt", enhancePrompt.value);
     f.append("model", enhanceModel.value);
+    if (tileMode) f.append("tiles", tileMode.value);   // beta HD tile mode
     // "AI Scan → HD" chains MangaJaNai after the generative scan; the HD toggle
     // also forces the upscale stage on a plain "Raw → Scan" run.
     if (workflow === "scan-upscale" || (hdUpscale && hdUpscale.checked)) {

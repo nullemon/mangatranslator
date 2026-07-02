@@ -337,6 +337,14 @@
           <label for="enhancePrompt">Conversion Prompt <span class="muted">(editable)</span></label>
           <textarea id="enhancePrompt" rows="3" placeholder="Describe how the rough page should be cleaned up..."></textarea>
         </div>
+        <div class="setting-group">
+          <label for="tileMode">HD tile mode <span class="muted">(beta — beats the AI's ~2K cap)</span></label>
+          <select id="tileMode">
+            <option value="1">Off — one AI pass</option>
+            <option value="2">Beta 2 — split in 2, scan each, merge</option>
+            <option value="4">Beta 4 — split in 4 (2×2), scan each, merge</option>
+          </select>
+        </div>
       </div>
     </div>
 
