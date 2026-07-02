@@ -427,6 +427,27 @@ document.addEventListener("DOMContentLoaded", () => {
     fileInput.value = "";
   });
 
+  // Paste image(s) from the clipboard (Ctrl/Cmd+V) — e.g. a screenshot or a copied
+  // page — straight into the queue. Ignored while typing in a text field.
+  document.addEventListener("paste", async (e) => {
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const files = [];
+    let n = 0;
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const blob = it.getAsFile();
+        if (blob) {
+          n++;
+          const ext = (it.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          files.push(new File([blob], blob.name || `pasted-${n}.${ext}`, { type: it.type }));
+        }
+      }
+    }
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
+
   // Expand any dropped/selected .zip into image Files (via /api/unzip), so a
   // whole chapter can be uploaded as a single zip. Non-zip images pass through.
   async function expandFiles(fileList) {
