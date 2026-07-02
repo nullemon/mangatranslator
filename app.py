@@ -579,25 +579,19 @@ async def _run_enhance(
                                                    cv2.COLOR_GRAY2BGR))
                 except Exception as e:
                     print(f"[enhance] crisp finish skipped: {e}")
-            # Resolution: Grok DOWNSCALES big pages to ~2K, so never deliver smaller
-            # than the input. Upscale (MangaJaNai — faithful, sharp) up to at least
-            # the input size; the HD toggle pushes to a larger target.
-            in_long = max(img.shape[:2])
-            target = 3600 if upscale else max(in_long, max(out.shape[:2]))
-            if max(out.shape[:2]) < target:
+            # HD upscale (MangaJaNai) ONLY when the toggle is on — off by default.
+            if upscale:
                 tasks[task_id].update({"progress": 85,
                                        "message": "Upscaling to HD (MangaJaNai)..."})
                 try:
                     from core.upscale import Upscaler
                     up = Upscaler()
                     if up.ok:
-                        out = up.upscale(out, target_long=target)
+                        out = up.upscale(out, target_long=3600)
                     else:
-                        scale = target / max(out.shape[:2])
-                        out = cv2.resize(out, None, fx=scale, fy=scale,
-                                         interpolation=cv2.INTER_CUBIC)
+                        print("[enhance] HD upscale requested but no model installed")
                 except Exception as e:
-                    print(f"[enhance] upscale step failed: {e}")
+                    print(f"[enhance] HD upscale step failed: {e}")
             cv2.imwrite(output_path, out)
 
         loop = asyncio.get_event_loop()
