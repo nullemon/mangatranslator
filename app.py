@@ -568,22 +568,36 @@ async def _run_enhance(
                      "message": f"AI failed ({type(e).__name__}); used local clean scan"}
                 )
                 out = scan_cleanup(img)
-            # Grok's remake is delivered AS-IS (no dark-region paste, no extra
-            # finish) — exactly like pasting the page into Grok yourself. Only the
-            # local fallback is pre-cleaned. (Optional HD upscale below.)
-            # Optional second stage: faithful HD upscale on top of the AI scan.
-            if upscale:
-                from core.upscale import Upscaler
+            if ai_ok:
+                # Grok caps at ~1-2K and returns generative grain / a colour tint,
+                # so snap to a clean B&W scan: desaturate (manga is B&W) + paper→
+                # white, ink→black, screentones kept grey. This is what removes the
+                # grainy washed-out look.
+                try:
+                    from core.pipeline import scan_finish
+                    out = scan_finish(cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY),
+                                                   cv2.COLOR_GRAY2BGR))
+                except Exception as e:
+                    print(f"[enhance] crisp finish skipped: {e}")
+            # Resolution: Grok DOWNSCALES big pages to ~2K, so never deliver smaller
+            # than the input. Upscale (MangaJaNai — faithful, sharp) up to at least
+            # the input size; the HD toggle pushes to a larger target.
+            in_long = max(img.shape[:2])
+            target = 3600 if upscale else max(in_long, max(out.shape[:2]))
+            if max(out.shape[:2]) < target:
                 tasks[task_id].update({"progress": 85,
                                        "message": "Upscaling to HD (MangaJaNai)..."})
-                up = Upscaler()
-                if up.ok:
-                    try:
-                        out = up.upscale(out, target_long=3600)
-                    except Exception as e:
-                        print(f"[enhance] HD upscale step failed: {e}")
-                else:
-                    print("[enhance] HD upscale requested but no model installed")
+                try:
+                    from core.upscale import Upscaler
+                    up = Upscaler()
+                    if up.ok:
+                        out = up.upscale(out, target_long=target)
+                    else:
+                        scale = target / max(out.shape[:2])
+                        out = cv2.resize(out, None, fx=scale, fy=scale,
+                                         interpolation=cv2.INTER_CUBIC)
+                except Exception as e:
+                    print(f"[enhance] upscale step failed: {e}")
             cv2.imwrite(output_path, out)
 
         loop = asyncio.get_event_loop()
