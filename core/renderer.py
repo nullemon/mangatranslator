@@ -28,7 +28,7 @@ class TextRenderer:
         self.font_path = font_path or self._find_font()
         self.font_scale = max(0.5, min(font_scale, 3.0))
         self.uppercase = uppercase
-        self.min_font_size = 10
+        self.min_font_size = 8   # lower floor so long text shrinks to fit small boxes
         self.padding_ratio = max(0.0, 0.04 / self.font_scale)
         self.line_spacing_ratio = max(0.04, 0.12 / self.font_scale)
         self._font_cache: Dict[tuple, ImageFont.FreeTypeFont] = {}
