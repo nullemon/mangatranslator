@@ -147,7 +147,7 @@ class GeminiTranslator:
 
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash",
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash-lite",
                  timeout: float = 180.0, style: str = "",
                  source_lang: str = "Japanese", translate_sfx: bool = False):
         self.api_key = api_key
@@ -263,7 +263,7 @@ class GeminiTranslator:
         return f"Gemini error {resp.status_code}: {resp.text[:300]}"
 
 
-DEFAULT_MODELS = {"claude": "claude-sonnet-4-6", "gemini": "gemini-2.5-flash"}
+DEFAULT_MODELS = {"claude": "claude-sonnet-4-6", "gemini": "gemini-2.5-flash-lite"}
 
 
 def make_translator(provider: str, api_key: str, model: str = "", style: str = "",
