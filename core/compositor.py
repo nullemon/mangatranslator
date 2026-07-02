@@ -437,7 +437,22 @@ class Compositor:
         # still cover the original text.
         if cv2.countNonZero(inner) < max(1, int(0.25 * cv2.countNonZero(mask))):
             inner = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-        result[inner > 0] = (0, 0, 0) if dark else (255, 255, 255)
+        interior = inner > 0
+        if not interior.any():
+            return
+        # Fill with the balloon's OWN background colour so the wipe blends in — a
+        # grey/screentoned bubble stays grey instead of being bleached to white.
+        # The median ignores the (minority) text strokes; near-white/near-black
+        # snap to clean so normal bubbles come out crisp.
+        med = np.median(result[interior].reshape(-1, 3), axis=0)
+        lum = 0.114 * med[0] + 0.587 * med[1] + 0.299 * med[2]   # BGR luma
+        if lum >= 205:
+            fill = (255, 255, 255)
+        elif lum <= 50:
+            fill = (0, 0, 0)
+        else:
+            fill = (int(med[0]), int(med[1]), int(med[2]))
+        result[interior] = fill
 
     def _ink_mask(self, gray_roi):
         """Mask of pixels that deviate from the smooth local background — i.e.
