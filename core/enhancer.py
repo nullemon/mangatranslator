@@ -92,6 +92,16 @@ class ImageEnhancer:
         return img
 
     @staticmethod
+    def _low_ink_line(profile: np.ndarray, center: int, band: int) -> int:
+        """Index near `center` (within ±band) with the least ink — a panel gutter
+        or plain area — so a tile seam placed there is invisible."""
+        lo = max(1, center - band)
+        hi = min(len(profile) - 1, center + band)
+        if hi <= lo:
+            return center
+        return lo + int(np.argmin(profile[lo:hi]))
+
+    @staticmethod
     def _feather(h: int, w: int, ramp: int) -> np.ndarray:
         """Blend weight: ~1 in the centre, ramps down toward every edge over
         `ramp` px, so overlapping tiles cross-fade instead of showing a seam."""
@@ -126,11 +136,22 @@ class ImageEnhancer:
         S = int(round(max(1.0, out_scale)))         # integer scale → exact tile borders
         out = np.zeros((h * S, w * S, 3), np.uint8)
 
+        # Put each interior seam on the LOWEST-INK line near its midpoint (a panel
+        # gutter / plain area) so the cut doesn't slice through a face and any
+        # tiny tile mismatch lands where there's nothing to misalign.
+        gray = cv2.cvtColor(cv2.GaussianBlur(image, (5, 5), 0), cv2.COLOR_BGR2GRAY)
+        dark = (gray < 110).astype(np.int32)
+        band = max(6, int(min(h, w) * 0.09))
+        ys = [0] + [self._low_ink_line(dark.sum(1), r * h // rows, band)
+                    for r in range(1, rows)] + [h]
+        xs = [0] + [self._low_ink_line(dark.sum(0), c * w // cols, band)
+                    for c in range(1, cols)] + [w]
+
         n, total = 0, rows * cols
         for r in range(rows):
             for c in range(cols):
-                y0, y1 = r * h // rows, (r + 1) * h // rows
-                x0, x1 = c * w // cols, (c + 1) * w // cols
+                y0, y1 = ys[r], ys[r + 1]
+                x0, x1 = xs[c], xs[c + 1]
                 # Send the tile PLUS an overlap so the AI has context past the
                 # edge, but only PLACE the exact tile region (no overlap) — a hard
                 # boundary, so tiles never double up / ghost.
