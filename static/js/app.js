@@ -306,10 +306,10 @@ document.addEventListener("DOMContentLoaded", () => {
   function setEngine(eng) {
     const cfg = ENGINE_CONFIG[eng];
     if (!cfg) return;
-    if (engineInited) {
-      const prev = ENGINE_CONFIG[engineSelect.value];
-      if (prev) localStorage.setItem(prev.storageKey, apiKeyInput.value);
-    }
+    // NOTE: don't save the key here on switch — engineSelect.value is already the
+    // NEW engine, so this saved the current key onto the wrong engine (collapsing
+    // both engines to one key → Claude got the Gemini key → 401). Each engine's
+    // key is already persisted per-engine by the apiKeyInput 'input' handler.
     engineSelect.value = eng;
     apiKeyLabel.textContent = cfg.label;
     apiKeyInput.placeholder = cfg.placeholder;
