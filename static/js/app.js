@@ -244,6 +244,7 @@ document.addEventListener("DOMContentLoaded", () => {
     gemini: {
       label: "Gemini API Key", placeholder: "AIza...", storageKey: "manga_key_gemini",
       models: [
+        { value: "gemini-2.5-flash-lite", text: "Gemini 2.5 Flash-Lite (Cheapest)" },
         { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast)" },
         { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (Best)" },
         { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (Lite)" },

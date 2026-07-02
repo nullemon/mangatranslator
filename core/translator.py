@@ -161,23 +161,26 @@ class GeminiTranslator:
         return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
 
     def _ask(self, parts: list) -> str:
-        body = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 16384,
-                # Gemini 2.5 spends "thinking" tokens from the SAME output budget;
-                # a busy page could burn it all thinking and return no text
-                # (finishReason=MAX_TOKENS). Disable thinking so the whole budget
-                # goes to the actual translation JSON.
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
-        }
+        def _body(disable_thinking: bool) -> dict:
+            gc = {"temperature": 0.2, "maxOutputTokens": 16384}
+            if disable_thinking:
+                # Gemini 2.5 flash/flash-lite spend "thinking" tokens from the
+                # SAME output budget — a busy page can burn it all and return no
+                # text (finishReason=MAX_TOKENS). Turning thinking off (cheapest)
+                # gives the whole budget to the translation JSON.
+                gc["thinkingConfig"] = {"thinkingBudget": 0}
+            return {"contents": [{"parts": parts}], "generationConfig": gc}
+
         url = self.URL.format(model=self.model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
 
         with httpx.Client(timeout=self.timeout) as client:
-            resp = client.post(url, headers=headers, json=body)
+            resp = client.post(url, headers=headers, json=_body(True))
+            # Some models (e.g. gemini-2.5-pro) are thinking-only and reject
+            # thinkingBudget:0 — retry with thinking left on.
+            if resp.status_code == 400 and ("thinking" in resp.text.lower()
+                                            or "budget" in resp.text.lower()):
+                resp = client.post(url, headers=headers, json=_body(False))
 
         if resp.status_code != 200:
             raise RuntimeError(self._err(resp))
