@@ -429,13 +429,17 @@ def preserve_dark_regions(enhanced: np.ndarray, original: np.ndarray) -> np.ndar
     return out.clip(0, 255).astype(np.uint8)
 
 
-def compress_upload(data: bytes, max_dim: int = 3200, target_kb: int = 3072) -> bytes:
+def compress_upload(data: bytes, max_dim: int = 4000, target_kb: int = 6144,
+                    full: bool = False) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't
     choke on huge payloads. Caps the long side at `max_dim`, then re-encodes as
-    JPEG — first lowering quality, then stepping the resolution down further if
-    needed — until it fits under `target_kb`. Text stays crisp enough for OCR
-    and detection. Images already under the target pass through untouched."""
-    if len(data) <= target_kb * 1024:
+    JPEG — first lowering quality, then stepping the resolution down only as a
+    last resort — until it fits under `target_kb`. Text stays crisp for OCR and
+    detection. Images already under the target pass through untouched.
+
+    `full=True` disables compression entirely — the raw upload is kept as-is for
+    maximum quality (used when Maximum Quality is on)."""
+    if full or len(data) <= target_kb * 1024:
         return data
     arr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -450,10 +454,12 @@ def compress_upload(data: bytes, max_dim: int = 3200, target_kb: int = 3072) -> 
 
     best = None
     target = target_kb * 1024
-    for dim_scale in (1.0, 0.85, 0.72, 0.6, 0.5):
+    # Keep resolution; drop JPEG quality first. Only shrink resolution as a last
+    # resort (and never below 0.7x) so line art and lettering stay sharp.
+    for dim_scale in (1.0, 0.85, 0.7):
         stage = base if dim_scale == 1.0 else cv2.resize(
             base, None, fx=dim_scale, fy=dim_scale, interpolation=cv2.INTER_AREA)
-        for q in (90, 84, 78, 72):
+        for q in (95, 90, 85, 80):
             ok, enc = cv2.imencode(".jpg", stage, [cv2.IMWRITE_JPEG_QUALITY, q])
             if not ok:
                 continue

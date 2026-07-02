@@ -255,7 +255,8 @@ async def translate(
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}{ext}"
 
-    content = compress_upload(await file.read())
+    # Maximum Quality keeps the upload uncompressed (full resolution end-to-end).
+    content = compress_upload(await file.read(), full=(max_quality == "true"))
     with open(upload_path, "wb") as f:
         f.write(content)
 
@@ -507,7 +508,9 @@ async def enhance_only(
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}_scan.png"
 
-    content = compress_upload(await file.read())
+    # Scan sends the page to the AI (which resizes it itself), so keep the upload
+    # at full quality — don't pre-compress it.
+    content = compress_upload(await file.read(), full=True)
     with open(upload_path, "wb") as f:
         f.write(content)
 
