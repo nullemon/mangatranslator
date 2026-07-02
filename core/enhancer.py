@@ -122,34 +122,33 @@ class ImageEnhancer:
             " This is ONE tile of a larger page — keep the EXACT same framing, "
             "crop and proportions, edge to edge; do not add borders, zoom, or "
             "shift anything, so tiles line up seamlessly.")
-        ov = max(8, int(min(h, w) * 0.05))          # overlap between tiles
-        S = max(1.0, float(out_scale))
-        OH, OW = int(round(h * S)), int(round(w * S))
-        acc = np.zeros((OH, OW, 3), np.float32)
-        wsum = np.zeros((OH, OW), np.float32)
+        ov = max(8, int(min(h, w) * 0.05))          # context overlap sent to the AI
+        S = int(round(max(1.0, out_scale)))         # integer scale → exact tile borders
+        out = np.zeros((h * S, w * S, 3), np.uint8)
 
         n, total = 0, rows * cols
         for r in range(rows):
             for c in range(cols):
                 y0, y1 = r * h // rows, (r + 1) * h // rows
                 x0, x1 = c * w // cols, (c + 1) * w // cols
+                # Send the tile PLUS an overlap so the AI has context past the
+                # edge, but only PLACE the exact tile region (no overlap) — a hard
+                # boundary, so tiles never double up / ghost.
                 ey0, ey1 = max(0, y0 - ov), min(h, y1 + ov)
                 ex0, ex1 = max(0, x0 - ov), min(w, x1 + ov)
                 if progress:
                     progress(n, total)
                 enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
                                    provider, api_key, model)
-                th, tw = int(round((ey1 - ey0) * S)), int(round((ex1 - ex0) * S))
-                # Force 1:1 back to the tile's shape so it aligns on merge.
+                th, tw = (ey1 - ey0) * S, (ex1 - ex0) * S
                 interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
-                enh = cv2.resize(enh, (tw, th), interpolation=interp)
-                mask = self._feather(th, tw, int(ov * S))
-                oy0, ox0 = int(round(ey0 * S)), int(round(ex0 * S))
-                acc[oy0:oy0 + th, ox0:ox0 + tw] += enh.astype(np.float32) * mask[..., None]
-                wsum[oy0:oy0 + th, ox0:ox0 + tw] += mask
+                enh = cv2.resize(enh, (tw, th), interpolation=interp)   # 1:1 to the crop
+                # Crop out the overlap margins → just this tile's core region.
+                top, left = (y0 - ey0) * S, (x0 - ex0) * S
+                core = enh[top:top + (y1 - y0) * S, left:left + (x1 - x0) * S]
+                out[y0 * S:y0 * S + core.shape[0], x0 * S:x0 * S + core.shape[1]] = core
                 n += 1
-        wsum[wsum == 0] = 1.0
-        return np.clip(acc / wsum[..., None], 0, 255).astype(np.uint8)
+        return out
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
     def _openai(self, image, prompt, api_key, model) -> np.ndarray:
