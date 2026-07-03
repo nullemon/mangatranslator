@@ -102,24 +102,61 @@ class ImageEnhancer:
         return lo + int(np.argmin(profile[lo:hi]))
 
     @staticmethod
-    def _feather(h: int, w: int, ramp: int) -> np.ndarray:
-        """Blend weight: ~1 in the centre, ramps down toward every edge over
-        `ramp` px, so overlapping tiles cross-fade instead of showing a seam."""
-        ramp = max(1, min(ramp, h // 2, w // 2))
-        ry = np.ones(h, np.float32); rx = np.ones(w, np.float32)
-        r = np.linspace(0.02, 1.0, ramp, dtype=np.float32)
-        ry[:ramp] = r; ry[-ramp:] = r[::-1]
-        rx[:ramp] = r; rx[-ramp:] = r[::-1]
-        return np.outer(ry, rx)
+    def _dp_seam(cost: np.ndarray) -> np.ndarray:
+        """Least-cost top→bottom path through a cost map (H x W): one x per row,
+        moving at most 1 px sideways per row (classic seam-carving DP)."""
+        H, W = cost.shape
+        dp = cost.astype(np.float32).copy()
+        INF = np.float32(1e9)
+        for y in range(1, H):
+            prev = dp[y - 1]
+            left = np.concatenate(([INF], prev[:-1]))
+            right = np.concatenate((prev[1:], [INF]))
+            dp[y] += np.minimum(prev, np.minimum(left, right))
+        xs = np.empty(H, np.int32)
+        xs[-1] = int(np.argmin(dp[-1]))
+        for y in range(H - 2, -1, -1):
+            x = xs[y + 1]
+            lo, hi = max(0, x - 1), min(W, x + 2)
+            xs[y] = lo + int(np.argmin(dp[y, lo:hi]))
+        return xs
+
+    def _stitch(self, A: np.ndarray, B: np.ndarray, band: int, axis: int) -> np.ndarray:
+        """Join two enhanced pieces whose facing edges both contain a rendering
+        of the same `band`-px strip. Instead of a straight cut, trace the
+        LEAST-VISIBLE seam through the strip — a path that prefers pixels where
+        the two renderings agree (white gaps, matching fills) and avoids ink —
+        so an eye or a text glyph the tiles drew differently comes wholly from
+        ONE tile rather than being sliced."""
+        if axis == 0:   # horizontal seam = transpose, do the vertical case, undo
+            return np.transpose(
+                self._stitch(np.ascontiguousarray(np.transpose(A, (1, 0, 2))),
+                             np.ascontiguousarray(np.transpose(B, (1, 0, 2))),
+                             band, 1), (1, 0, 2)).copy()
+        band = int(min(band, A.shape[1] - 1, B.shape[1] - 1))
+        if band < 4:
+            return np.concatenate([A, B[:, band:]], axis=1)
+        bandA = np.ascontiguousarray(A[:, A.shape[1] - band:])
+        bandB = np.ascontiguousarray(B[:, :band])
+        gA = cv2.cvtColor(bandA, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        gB = cv2.cvtColor(bandB, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        diff = np.abs(gA - gB)                    # disagreement between the tiles
+        ink = 255.0 - np.minimum(gA, gB)          # darkness (prefer paper gaps)
+        seam = self._dp_seam(diff + 0.15 * ink)
+        take_a = np.arange(band)[None, :] < seam[:, None]
+        merged = np.where(take_a[..., None], bandA, bandB)
+        return np.concatenate([A[:, :A.shape[1] - band], merged, B[:, band:]], axis=1)
 
     def enhance_tiled(self, image, prompt, provider, api_key, model,
                       tiles: int = 2, out_scale: float = 2.0,
                       progress=None) -> np.ndarray:
         """Beat the model's ~2K cap: split the page into `tiles` pieces, AI-scan
         EACH at full quality (so each gets the model's whole resolution budget),
-        then merge into one high-res page. Each enhanced tile is forced back to
-        its exact tile shape (1:1) so the pieces line up; overlaps are feathered
-        so seams disappear. tiles=2 splits along the long axis; tiles=4 is 2x2."""
+        then merge into one high-res page. Splits are snapped to panel gutters,
+        every tile is sent WITH an overlap band, and neighbouring tiles are
+        joined along a least-visible seam traced through that band — so nothing
+        gets cut through a face, an eye, or a line of text.
+        tiles=2 splits along the long axis; tiles=4 is 2x2."""
         h, w = image.shape[:2]
         if tiles >= 4:
             rows, cols = 2, 2
@@ -132,15 +169,13 @@ class ImageEnhancer:
             " This is ONE tile of a larger page — keep the EXACT same framing, "
             "crop and proportions, edge to edge; do not add borders, zoom, or "
             "shift anything, so tiles line up seamlessly.")
-        ov = max(8, int(min(h, w) * 0.05))          # context overlap sent to the AI
-        S = int(round(max(1.0, out_scale)))         # integer scale → exact tile borders
-        out = np.zeros((h * S, w * S, 3), np.uint8)
+        ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
+        S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
 
-        # Put each interior seam on the LOWEST-INK line near its midpoint (a panel
-        # gutter / plain area) so the cut doesn't slice through a face and any
-        # tiny tile mismatch lands where there's nothing to misalign.
-        gray = cv2.cvtColor(cv2.GaussianBlur(image, (5, 5), 0), cv2.COLOR_BGR2GRAY)
-        dark = (gray < 110).astype(np.int32)
+        # Prior: put each split on the lowest-ink line near its midpoint (a panel
+        # gutter) so the seam usually has an easy home to begin with.
+        g = cv2.cvtColor(cv2.GaussianBlur(image, (5, 5), 0), cv2.COLOR_BGR2GRAY)
+        dark = (g < 110).astype(np.int32)
         band = max(6, int(min(h, w) * 0.09))
         ys = [0] + [self._low_ink_line(dark.sum(1), r * h // rows, band)
                     for r in range(1, rows)] + [h]
@@ -148,28 +183,32 @@ class ImageEnhancer:
                     for c in range(1, cols)] + [w]
 
         n, total = 0, rows * cols
+        strips = []
         for r in range(rows):
+            ey0 = max(0, ys[r] - ov) if r > 0 else 0
+            ey1 = min(h, ys[r + 1] + ov) if r < rows - 1 else h
+            pieces = []
             for c in range(cols):
-                y0, y1 = ys[r], ys[r + 1]
-                x0, x1 = xs[c], xs[c + 1]
-                # Send the tile PLUS an overlap so the AI has context past the
-                # edge, but only PLACE the exact tile region (no overlap) — a hard
-                # boundary, so tiles never double up / ghost.
-                ey0, ey1 = max(0, y0 - ov), min(h, y1 + ov)
-                ex0, ex1 = max(0, x0 - ov), min(w, x1 + ov)
+                ex0 = max(0, xs[c] - ov) if c > 0 else 0
+                ex1 = min(w, xs[c + 1] + ov) if c < cols - 1 else w
                 if progress:
                     progress(n, total)
+                n += 1
                 enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
                                    provider, api_key, model)
-                th, tw = (ey1 - ey0) * S, (ex1 - ex0) * S
+                tw, th = (ex1 - ex0) * S, (ey1 - ey0) * S
                 interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
-                enh = cv2.resize(enh, (tw, th), interpolation=interp)   # 1:1 to the crop
-                # Crop out the overlap margins → just this tile's core region.
-                top, left = (y0 - ey0) * S, (x0 - ex0) * S
-                core = enh[top:top + (y1 - y0) * S, left:left + (x1 - x0) * S]
-                out[y0 * S:y0 * S + core.shape[0], x0 * S:x0 * S + core.shape[1]] = core
-                n += 1
-        return out
+                pieces.append(cv2.resize(enh, (tw, th), interpolation=interp))
+            strip = pieces[0]
+            for c in range(1, cols):
+                shared = (min(w, xs[c] + ov) - max(0, xs[c] - ov)) * S
+                strip = self._stitch(strip, pieces[c], shared, axis=1)
+            strips.append(strip)
+        out = strips[0]
+        for r in range(1, rows):
+            shared = (min(h, ys[r] + ov) - max(0, ys[r] - ov)) * S
+            out = self._stitch(out, strips[r], shared, axis=0)
+        return np.ascontiguousarray(out)
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
     def _openai(self, image, prompt, api_key, model) -> np.ndarray:
