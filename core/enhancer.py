@@ -205,6 +205,11 @@ class ImageEnhancer:
             "not remove or invent any content.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
+        if max(h, w) >= 2600:
+            # A very high-res upload already exceeds the model's ~2K output tier;
+            # inflating its returns 2x just magnifies softness. Merge at 1:1 and
+            # let MangaJaNai (HD toggle) do the true upscaling afterwards.
+            S = 1
 
         # Prior: put each split on the lowest-ink line near its midpoint (a panel
         # gutter) so the seam usually has an easy home to begin with.
@@ -228,11 +233,27 @@ class ImageEnhancer:
                 if progress:
                     progress(n, total)
                 n += 1
-                enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
-                                   provider, api_key, model)
-                tw, th = (ex1 - ex0) * S, (ey1 - ey0) * S
-                interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
-                pieces.append(cv2.resize(enh, (tw, th), interpolation=interp))
+                crop = image[ey0:ey1, ex0:ex1]
+                ch, cw = crop.shape[:2]
+                # The model only supports aspect ratios up to 2:1 — a thinner
+                # strip gets cropped/squashed. Pad the short side with white
+                # paper to 1.9:1 before sending, cut the padding back off after.
+                if cw >= ch and cw > 1.9 * ch:
+                    crop = cv2.copyMakeBorder(crop, 0, int(np.ceil(cw / 1.9)) - ch,
+                                              0, 0, cv2.BORDER_CONSTANT,
+                                              value=(255, 255, 255))
+                elif ch > cw and ch > 1.9 * cw:
+                    crop = cv2.copyMakeBorder(crop, 0, 0, 0,
+                                              int(np.ceil(ch / 1.9)) - cw,
+                                              cv2.BORDER_CONSTANT,
+                                              value=(255, 255, 255))
+                enh = self.enhance(crop, tile_prompt, provider, api_key, model)
+                pw, ph = crop.shape[1] * S, crop.shape[0] * S
+                interp = cv2.INTER_AREA if enh.shape[0] > ph else cv2.INTER_CUBIC
+                enh = cv2.resize(enh, (pw, ph), interpolation=interp)
+                # Drop the padding → exactly the strip's true region, 1:1.
+                pieces.append(np.ascontiguousarray(enh[:(ey1 - ey0) * S,
+                                                       :(ex1 - ex0) * S]))
             strip = pieces[0]
             for c in range(1, cols):
                 shared = (min(w, xs[c] + ov) - max(0, xs[c] - ov)) * S
@@ -350,13 +371,21 @@ class ImageEnhancer:
             "prompt": prompt,
             "image": images if len(images) > 1 else main,
             "response_format": "b64_json",
+            # The API defaults to the 1K tier (we measured a 1424x720 return —
+            # that was the mush). Always request the 2K tier.
+            "resolution": "2k",
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         print(f"[enhance] xAI request: POST {self.XAI_URL} | model={model} | "
-              f"input={w}x{h} | prompt[:80]={prompt[:80]!r}")
+              f"input={w}x{h} | resolution=2k | prompt[:80]={prompt[:80]!r}")
         with httpx.Client(timeout=self.timeout) as client:
             resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
+            if resp.status_code == 422 and "resolution" in resp.text.lower():
+                # Account/tier that doesn't accept the param — retry without.
+                print("[enhance] xAI rejected 'resolution'; retrying without")
+                body.pop("resolution", None)
+                resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
         print(f"[enhance] xAI response: {resp.status_code}")
 
         if resp.status_code != 200:
