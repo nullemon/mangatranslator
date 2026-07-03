@@ -183,7 +183,7 @@ class ImageEnhancer:
         h, w = image.shape[:2]
         if tiles < 2:
             return self.enhance(image, prompt, provider, api_key, model)
-        n = 4 if tiles >= 4 else 2
+        n = max(2, min(int(tiles), 4))          # Beta 2 / 3 / 4 strips
         # STRIPS, not a grid: cut only across the long axis, so every seam can
         # sit in a panel-row gutter and a wide panel is never split down the
         # middle (that mid-panel vertical seam was the killer). Portrait page →
@@ -191,17 +191,20 @@ class ImageEnhancer:
         # first cut lands on the spine.
         rows, cols = (n, 1) if h >= w else (1, n)
 
+        # NOTE: no reference images are attached — multi-image edit pushed the
+        # model toward COMPOSITING (backgrounds vanished). Each strip generates
+        # solo, exactly like the single-pass scan that works; consistency between
+        # strips is enforced mathematically afterwards (tone matching + seam +
+        # abnormality repair), not by prompting.
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
-            " This is ONE tile of a larger page — keep the EXACT same framing, "
-            "crop and proportions, edge to edge; do not add borders, zoom, or "
-            "shift anything, so tiles line up seamlessly. The FIRST extra image "
-            "is the FULL page this tile comes from, and any second extra image "
-            "is a neighbouring tile that was already cleaned: match their style, "
-            "line weight, tone, contrast and level of detail EXACTLY, so every "
-            "tile looks like one consistent scan of the same page.")
+            " This is ONE piece of a larger manga page — keep the EXACT same "
+            "framing, crop and proportions, edge to edge; do not add borders, "
+            "zoom, or shift anything. CRITICAL: keep every dark area dark — a "
+            "dark sky, black panel, screentone or shading must stay exactly as "
+            "dark as the source; ONLY the paper background becomes white. Do "
+            "not remove or invent any content.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
-        page_ref = self._shrink(image, 768)     # whole-page style reference
 
         # Prior: put each split on the lowest-ink line near its midpoint (a panel
         # gutter) so the seam usually has an easy home to begin with.
@@ -215,7 +218,6 @@ class ImageEnhancer:
 
         n, total = 0, rows * cols
         strips = []
-        prev_tile = None    # each tile follows the one before it → consistent style
         for r in range(rows):
             ey0 = max(0, ys[r] - ov) if r > 0 else 0
             ey1 = min(h, ys[r + 1] + ov) if r < rows - 1 else h
@@ -226,16 +228,8 @@ class ImageEnhancer:
                 if progress:
                     progress(n, total)
                 n += 1
-                crop = image[ey0:ey1, ex0:ex1]
-                refs = [page_ref] + ([prev_tile] if prev_tile is not None else [])
-                try:
-                    enh = self.enhance(crop, tile_prompt, provider, api_key, model,
-                                       refs=refs)
-                except Exception as e:
-                    # A provider that rejects multi-image input still works solo.
-                    print(f"[enhance] tile refs rejected ({e}); retrying without")
-                    enh = self.enhance(crop, tile_prompt, provider, api_key, model)
-                prev_tile = self._shrink(enh, 768)
+                enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
+                                   provider, api_key, model)
                 tw, th = (ex1 - ex0) * S, (ey1 - ey0) * S
                 interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
                 pieces.append(cv2.resize(enh, (tw, th), interpolation=interp))
