@@ -429,6 +429,42 @@ def preserve_dark_regions(enhanced: np.ndarray, original: np.ndarray) -> np.ndar
     return out.clip(0, 255).astype(np.uint8)
 
 
+def repair_abnormal_regions(ai_page: np.ndarray, original: np.ndarray,
+                            thresh: float = 52.0) -> np.ndarray:
+    """Safety net for generative scans: compare the AI page against a
+    deterministic local clean of the ORIGINAL, and restore any region where the
+    AI deviated structurally — bleached screentone, erased or invented content —
+    content-aware and feathered, leaving everything else exactly as the AI drew
+    it. The comparison is on blurred grayscale at a common working scale, so
+    style / line-weight differences pass through while lost content is caught."""
+    oh, ow = ai_page.shape[:2]
+    ref = scan_finish(cv2.cvtColor(cv2.cvtColor(original, cv2.COLOR_BGR2GRAY),
+                                   cv2.COLOR_GRAY2BGR))
+    if ref.shape[:2] != (oh, ow):
+        interp = cv2.INTER_CUBIC if oh > ref.shape[0] else cv2.INTER_AREA
+        ref = cv2.resize(ref, (ow, oh), interpolation=interp)
+    s = min(1.0, 768.0 / max(oh, ow))
+    sw, sh = max(1, int(ow * s)), max(1, int(oh * s))
+    a = cv2.cvtColor(cv2.resize(ai_page, (sw, sh), interpolation=cv2.INTER_AREA),
+                     cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(cv2.resize(ref, (sw, sh), interpolation=cv2.INTER_AREA),
+                     cv2.COLOR_BGR2GRAY).astype(np.float32)
+    diff = np.abs(cv2.GaussianBlur(a, (0, 0), 5) - cv2.GaussianBlur(b, (0, 0), 5))
+    mask = (diff > thresh).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    frac = float((mask > 0).mean())
+    if frac < 0.001:
+        return ai_page
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
+    feather = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), 5)
+    m = np.clip(cv2.resize(feather, (ow, oh), interpolation=cv2.INTER_LINEAR), 0, 1)[..., None]
+    out = ai_page.astype(np.float32) * (1 - m) + ref.astype(np.float32) * m
+    print(f"[repair] AI deviated on {frac:.1%} of the page — restored those "
+          f"regions from the original (content-aware)")
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def compress_upload(data: bytes, max_dim: int = 4000, target_kb: int = 6144,
                     full: bool = False) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't

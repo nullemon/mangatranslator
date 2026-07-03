@@ -37,7 +37,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from core.pipeline import (TranslationPipeline, scan_cleanup, compress_upload,
-                           preserve_dark_regions, probe_components)
+                           preserve_dark_regions, repair_abnormal_regions,
+                           probe_components)
 from core.compositor import Compositor
 from core.enhancer import ImageEnhancer
 
@@ -414,6 +415,12 @@ async def _run(
                         out = preserve_dark_regions(out, img)
                     except Exception as e:
                         print(f"[enhance] dark-region preserve skipped: {e}")
+                    # Abnormality check: restore any region the generative scan
+                    # bleached / erased / invented from the original.
+                    try:
+                        out = repair_abnormal_regions(out, img)
+                    except Exception as e:
+                        print(f"[enhance] abnormality repair skipped: {e}")
                 cv2.imwrite(enhanced_path, out)
 
             await loop.run_in_executor(None, do_enhance)
@@ -623,6 +630,13 @@ async def _run_enhance(
                                                    cv2.COLOR_GRAY2BGR))
                 except Exception as e:
                     print(f"[enhance] crisp finish skipped: {e}")
+                if provider != "local":
+                    # Abnormality check: restore any region the generative scan
+                    # bleached / erased / invented from the original.
+                    try:
+                        out = repair_abnormal_regions(out, img)
+                    except Exception as e:
+                        print(f"[enhance] abnormality repair skipped: {e}")
             # HD upscale (MangaJaNai) ONLY when the toggle is on — off by default.
             if upscale:
                 tasks[task_id].update({"progress": 85,

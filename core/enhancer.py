@@ -148,6 +148,28 @@ class ImageEnhancer:
         merged = np.where(take_a[..., None], bandA, bandB)
         return np.concatenate([A[:, :A.shape[1] - band], merged, B[:, band:]], axis=1)
 
+    def _match_tone(self, A: np.ndarray, B: np.ndarray, band: int, axis: int) -> np.ndarray:
+        """Histogram-match B's tone to A's over their shared overlap band — both
+        contain a rendering of the SAME source strip, so any level difference
+        there is pure model drift. Applying the matched LUT to all of B pulls a
+        strip the model rendered lighter/darker (bleached screentone, lifted
+        blacks) onto its neighbour's levels BEFORE stitching — the strip-wide
+        cure for one half of a panel coming out white and the other grey."""
+        band = int(min(band, (A.shape[1] if axis == 1 else A.shape[0]) - 1,
+                       (B.shape[1] if axis == 1 else B.shape[0]) - 1))
+        if band < 4:
+            return B
+        bandA = A[:, A.shape[1] - band:] if axis == 1 else A[A.shape[0] - band:]
+        bandB = B[:, :band] if axis == 1 else B[:band]
+        gA = cv2.cvtColor(np.ascontiguousarray(bandA), cv2.COLOR_BGR2GRAY)
+        gB = cv2.cvtColor(np.ascontiguousarray(bandB), cv2.COLOR_BGR2GRAY)
+        ca = np.cumsum(np.bincount(gA.ravel(), minlength=256).astype(np.float64))
+        cb = np.cumsum(np.bincount(gB.ravel(), minlength=256).astype(np.float64))
+        ca /= max(ca[-1], 1.0)
+        cb /= max(cb[-1], 1.0)
+        lut = np.clip(np.interp(cb, ca, np.arange(256.0)), 0, 255).astype(np.uint8)
+        return cv2.LUT(np.ascontiguousarray(B), lut)
+
     def enhance_tiled(self, image, prompt, provider, api_key, model,
                       tiles: int = 2, out_scale: float = 2.0,
                       progress=None) -> np.ndarray:
@@ -159,12 +181,15 @@ class ImageEnhancer:
         gets cut through a face, an eye, or a line of text.
         tiles=2 splits along the long axis; tiles=4 is 2x2."""
         h, w = image.shape[:2]
-        if tiles >= 4:
-            rows, cols = 2, 2
-        elif tiles == 2:
-            rows, cols = (2, 1) if h >= w else (1, 2)
-        else:
+        if tiles < 2:
             return self.enhance(image, prompt, provider, api_key, model)
+        n = 4 if tiles >= 4 else 2
+        # STRIPS, not a grid: cut only across the long axis, so every seam can
+        # sit in a panel-row gutter and a wide panel is never split down the
+        # middle (that mid-panel vertical seam was the killer). Portrait page →
+        # horizontal strips; landscape double-spread → vertical strips, whose
+        # first cut lands on the spine.
+        rows, cols = (n, 1) if h >= w else (1, n)
 
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
             " This is ONE tile of a larger page — keep the EXACT same framing, "
@@ -217,12 +242,14 @@ class ImageEnhancer:
             strip = pieces[0]
             for c in range(1, cols):
                 shared = (min(w, xs[c] + ov) - max(0, xs[c] - ov)) * S
-                strip = self._stitch(strip, pieces[c], shared, axis=1)
+                nxt = self._match_tone(strip, pieces[c], shared, axis=1)
+                strip = self._stitch(strip, nxt, shared, axis=1)
             strips.append(strip)
         out = strips[0]
         for r in range(1, rows):
             shared = (min(h, ys[r] + ov) - max(0, ys[r] - ov)) * S
-            out = self._stitch(out, strips[r], shared, axis=0)
+            nxt = self._match_tone(out, strips[r], shared, axis=0)
+            out = self._stitch(out, nxt, shared, axis=0)
         return np.ascontiguousarray(out)
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
