@@ -160,24 +160,24 @@ class ImageEnhancer:
         h, w = image.shape[:2]
         if tiles < 2:
             return self.enhance(image, prompt, provider, api_key, model)
-        n = max(2, min(int(tiles), 4))          # Beta 2 / 3 / 4 strips
-        # STRIPS, not a grid: cut only across the long axis, so every seam can
-        # sit in a panel-row gutter and a wide panel is never split down the
-        # middle (that mid-panel vertical seam was the killer). Portrait page →
-        # horizontal strips; landscape double-spread → vertical strips, whose
-        # first cut lands on the spine.
-        rows, cols = (n, 1) if h >= w else (1, n)
+        n = max(2, min(int(tiles), 4))
+        # Beta 2 and Beta 4 use the layouts of the build that generated best
+        # (hard-boundary era): 2 = halves along the long axis, 4 = 2x2 quarters
+        # (square-ish crops the model handles well). Beta 3 = 3 strips across
+        # the long axis (no mid-panel vertical seam), per user request.
+        if n == 4:
+            rows, cols = 2, 2
+        elif n == 3:
+            rows, cols = (3, 1) if h >= w else (1, 3)
+        else:
+            rows, cols = (2, 1) if h >= w else (1, 2)
 
-        # Each strip generates SOLO, exactly like the single-pass scan that
-        # works (reference images made the model composite; auto-repairs fought
-        # its output — both removed). The only post-work is the seam join.
+        # Each tile generates SOLO — same prompt wording as the build whose
+        # content was right. The only post-work is the seam join.
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
-            " This is ONE piece of a larger manga page — keep the EXACT same "
-            "framing, crop and proportions, edge to edge; do not add borders, "
-            "zoom, or shift anything. CRITICAL: keep every dark area dark — a "
-            "dark sky, black panel, screentone or shading must stay exactly as "
-            "dark as the source; ONLY the paper background becomes white. Do "
-            "not remove or invent any content.")
+            " This is ONE tile of a larger page — keep the EXACT same framing, "
+            "crop and proportions, edge to edge; do not add borders, zoom, or "
+            "shift anything, so tiles line up seamlessly.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
         if max(h, w) >= 2600:
