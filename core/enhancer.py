@@ -177,7 +177,10 @@ class ImageEnhancer:
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
             " This is ONE tile of a larger page — keep the EXACT same framing, "
             "crop and proportions, edge to edge; do not add borders, zoom, or "
-            "shift anything, so tiles line up seamlessly.")
+            "shift anything, so tiles line up seamlessly. Keep grey/toned and "
+            "black backgrounds exactly as dark as the source — never turn them "
+            "white; keep ALL text including page numbers and small margin text; "
+            "page edges clean, no dark marks or torn-paper shadows.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
         if max(h, w) >= 2600:
