@@ -59,7 +59,6 @@ class ImageEnhancer:
         provider: str,
         api_key: str,
         model: str = "",
-        refs=None,
     ) -> np.ndarray:
         if not api_key:
             raise ValueError("An API key is required for image enhancement")
@@ -71,11 +70,11 @@ class ImageEnhancer:
         model = (model or "").strip() or self.DEFAULT_MODELS.get(provider, "")
 
         if provider == "openai":
-            return self._openai(image, prompt, api_key, model)   # refs unsupported
+            return self._openai(image, prompt, api_key, model)
         if provider == "gemini":
-            return self._gemini(image, prompt, api_key, model, refs=refs)
+            return self._gemini(image, prompt, api_key, model)
         if provider == "xai":
-            return self._xai(image, prompt, api_key, model, refs=refs)
+            return self._xai(image, prompt, api_key, model)
         raise ValueError(f"Unknown enhancement provider: {provider!r}")
 
     # ── Encoding helpers ──
@@ -148,28 +147,6 @@ class ImageEnhancer:
         merged = np.where(take_a[..., None], bandA, bandB)
         return np.concatenate([A[:, :A.shape[1] - band], merged, B[:, band:]], axis=1)
 
-    def _match_tone(self, A: np.ndarray, B: np.ndarray, band: int, axis: int) -> np.ndarray:
-        """Histogram-match B's tone to A's over their shared overlap band — both
-        contain a rendering of the SAME source strip, so any level difference
-        there is pure model drift. Applying the matched LUT to all of B pulls a
-        strip the model rendered lighter/darker (bleached screentone, lifted
-        blacks) onto its neighbour's levels BEFORE stitching — the strip-wide
-        cure for one half of a panel coming out white and the other grey."""
-        band = int(min(band, (A.shape[1] if axis == 1 else A.shape[0]) - 1,
-                       (B.shape[1] if axis == 1 else B.shape[0]) - 1))
-        if band < 4:
-            return B
-        bandA = A[:, A.shape[1] - band:] if axis == 1 else A[A.shape[0] - band:]
-        bandB = B[:, :band] if axis == 1 else B[:band]
-        gA = cv2.cvtColor(np.ascontiguousarray(bandA), cv2.COLOR_BGR2GRAY)
-        gB = cv2.cvtColor(np.ascontiguousarray(bandB), cv2.COLOR_BGR2GRAY)
-        ca = np.cumsum(np.bincount(gA.ravel(), minlength=256).astype(np.float64))
-        cb = np.cumsum(np.bincount(gB.ravel(), minlength=256).astype(np.float64))
-        ca /= max(ca[-1], 1.0)
-        cb /= max(cb[-1], 1.0)
-        lut = np.clip(np.interp(cb, ca, np.arange(256.0)), 0, 255).astype(np.uint8)
-        return cv2.LUT(np.ascontiguousarray(B), lut)
-
     def enhance_tiled(self, image, prompt, provider, api_key, model,
                       tiles: int = 2, out_scale: float = 2.0,
                       progress=None) -> np.ndarray:
@@ -191,11 +168,9 @@ class ImageEnhancer:
         # first cut lands on the spine.
         rows, cols = (n, 1) if h >= w else (1, n)
 
-        # NOTE: no reference images are attached — multi-image edit pushed the
-        # model toward COMPOSITING (backgrounds vanished). Each strip generates
-        # solo, exactly like the single-pass scan that works; consistency between
-        # strips is enforced mathematically afterwards (tone matching + seam +
-        # abnormality repair), not by prompting.
+        # Each strip generates SOLO, exactly like the single-pass scan that
+        # works (reference images made the model composite; auto-repairs fought
+        # its output — both removed). The only post-work is the seam join.
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
             " This is ONE piece of a larger manga page — keep the EXACT same "
             "framing, crop and proportions, edge to edge; do not add borders, "
@@ -257,14 +232,12 @@ class ImageEnhancer:
             strip = pieces[0]
             for c in range(1, cols):
                 shared = (min(w, xs[c] + ov) - max(0, xs[c] - ov)) * S
-                nxt = self._match_tone(strip, pieces[c], shared, axis=1)
-                strip = self._stitch(strip, nxt, shared, axis=1)
+                strip = self._stitch(strip, pieces[c], shared, axis=1)
             strips.append(strip)
         out = strips[0]
         for r in range(1, rows):
             shared = (min(h, ys[r] + ov) - max(0, ys[r] - ov)) * S
-            nxt = self._match_tone(out, strips[r], shared, axis=0)
-            out = self._stitch(out, nxt, shared, axis=0)
+            out = self._stitch(out, strips[r], shared, axis=0)
         return np.ascontiguousarray(out)
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
@@ -287,16 +260,8 @@ class ImageEnhancer:
             raise RuntimeError(f"OpenAI returned no image: {str(payload)[:300]}")
         return self._decode(base64.b64decode(items[0]["b64_json"]))
 
-    @staticmethod
-    def _shrink(img: np.ndarray, target: int = 768) -> np.ndarray:
-        """Downscale a reference image so it adds context, not payload."""
-        if max(img.shape[:2]) <= target:
-            return img
-        s = target / max(img.shape[:2])
-        return cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-
     # ── Google Gemini (2.5 Flash Image / "Nano Banana") ──
-    def _gemini(self, image, prompt, api_key, model, refs=None) -> np.ndarray:
+    def _gemini(self, image, prompt, api_key, model) -> np.ndarray:
         h, w = image.shape[:2]
         max_dim = 2048
         if max(h, w) > max_dim:
@@ -306,18 +271,15 @@ class ImageEnhancer:
         if not ok:
             raise ValueError("Failed to encode image for Gemini")
         b64 = base64.b64encode(buf.tobytes()).decode()
-        parts = [{"text": prompt},
-                 {"inlineData": {"mimeType": "image/jpeg", "data": b64}}]
-        # Style/context references (e.g. the full page, the previous tile) so
-        # every tile is rendered consistently with the others.
-        for ref in (refs or []):
-            okr, rbuf = cv2.imencode(".jpg", self._shrink(ref),
-                                     [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if okr:
-                parts.append({"inlineData": {"mimeType": "image/jpeg",
-                                             "data": base64.b64encode(rbuf.tobytes()).decode()}})
         body = {
-            "contents": [{"parts": parts}],
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
+                    ]
+                }
+            ],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
         url = self.GEMINI_URL.format(model=model)
@@ -343,7 +305,7 @@ class ImageEnhancer:
         raise RuntimeError(f"Gemini returned no image: {str(payload)[:300]}")
 
     # ── xAI (Grok Imagine) image-to-image edit ──
-    def _xai(self, image, prompt, api_key, model, refs=None) -> np.ndarray:
+    def _xai(self, image, prompt, api_key, model) -> np.ndarray:
         h, w = image.shape[:2]
         max_dim = 2048
         if max(h, w) > max_dim:
@@ -355,21 +317,10 @@ class ImageEnhancer:
         if not ok:
             raise ValueError("Failed to encode image for xAI")
         data_uri = "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
-        main = {"url": data_uri, "type": "image_url"}
-        # xAI multi-image edit takes up to 3 source images — main + 2 references
-        # (the full page / the previous tile) so tiles come out style-consistent.
-        images = [main]
-        for ref in (refs or [])[:2]:
-            okr, rbuf = cv2.imencode(".jpg", self._shrink(ref),
-                                     [cv2.IMWRITE_JPEG_QUALITY, 88])
-            if okr:
-                images.append({"url": "data:image/jpeg;base64,"
-                                      + base64.b64encode(rbuf.tobytes()).decode(),
-                               "type": "image_url"})
         body = {
             "model": model,
             "prompt": prompt,
-            "image": images if len(images) > 1 else main,
+            "image": {"url": data_uri, "type": "image_url"},
             "response_format": "b64_json",
             # The API defaults to the 1K tier (we measured a 1424x720 return —
             # that was the mush). Always request the 2K tier.
