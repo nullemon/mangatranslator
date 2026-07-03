@@ -513,6 +513,7 @@ async def enhance_only(
     model: str = Form(""),
     upscale: str = Form("false"),
     tiles: str = Form("1"),
+    protect_dark: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -547,7 +548,8 @@ async def enhance_only(
         n_tiles = 1
     asyncio.create_task(
         _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt,
-                     model, upscale=(upscale == "true"), tiles=n_tiles)
+                     model, upscale=(upscale == "true"), tiles=n_tiles,
+                     protect_dark=(protect_dark == "true"))
     )
     return {"task_id": task_id}
 
@@ -562,6 +564,7 @@ async def _run_enhance(
     model: str,
     upscale: bool = False,
     tiles: int = 1,
+    protect_dark: bool = False,
 ):
     try:
         tasks[task_id].update(
@@ -623,6 +626,15 @@ async def _run_enhance(
                                                    cv2.COLOR_GRAY2BGR))
                 except Exception as e:
                     print(f"[enhance] crisp finish skipped: {e}")
+                if protect_dark and provider != "local":
+                    # OPT-IN: restore large panels that were dark in the source
+                    # but came back white (inverted/splash panels the generative
+                    # model re-drew in normal polarity).
+                    try:
+                        from core.pipeline import protect_dark_panels
+                        out = protect_dark_panels(out, img)
+                    except Exception as e:
+                        print(f"[enhance] dark-panel guard skipped: {e}")
             # HD upscale (MangaJaNai) ONLY when the toggle is on — off by default.
             if upscale:
                 tasks[task_id].update({"progress": 85,

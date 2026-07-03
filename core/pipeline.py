@@ -429,6 +429,50 @@ def preserve_dark_regions(enhanced: np.ndarray, original: np.ndarray) -> np.ndar
     return out.clip(0, 255).astype(np.uint8)
 
 
+def protect_dark_panels(ai_page: np.ndarray, original: np.ndarray) -> np.ndarray:
+    """OPT-IN guard for inverted / splash panels: a generative scan sometimes
+    RE-DRAWS a white-on-dark panel in normal polarity (dark toned field →
+    white). Find only LARGE areas that are clearly toned/dark in the source but
+    came back near-white, and restore those from the deterministically cleaned
+    source (feathered). Narrow by design — everything the AI kept dark or that
+    was paper in the source is untouched. Runs before HD upscale, so restored
+    regions get sharpened along with the rest."""
+    oh, ow = ai_page.shape[:2]
+    ref = scan_finish(cv2.cvtColor(cv2.cvtColor(original, cv2.COLOR_BGR2GRAY),
+                                   cv2.COLOR_GRAY2BGR))
+    if ref.shape[:2] != (oh, ow):
+        interp = cv2.INTER_CUBIC if oh > ref.shape[0] else cv2.INTER_AREA
+        ref = cv2.resize(ref, (ow, oh), interpolation=interp)
+    s = min(1.0, 768.0 / max(oh, ow))
+    sw, sh = max(1, int(ow * s)), max(1, int(oh * s))
+    a = cv2.cvtColor(cv2.resize(ai_page, (sw, sh), interpolation=cv2.INTER_AREA),
+                     cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(cv2.resize(ref, (sw, sh), interpolation=cv2.INTER_AREA),
+                     cv2.COLOR_BGR2GRAY).astype(np.float32)
+    a = cv2.GaussianBlur(a, (0, 0), 3)
+    b = cv2.GaussianBlur(b, (0, 0), 3)
+    flipped = ((b < 195) & (a > 215)).astype(np.uint8) * 255   # dark → white
+    flipped = cv2.morphologyEx(flipped, cv2.MORPH_OPEN,
+                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    # Keep only big connected regions (whole panels/fields, never stray dots).
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(flipped, 8)
+    keep = np.zeros((sh, sw), np.uint8)
+    min_area = 0.008 * sh * sw
+    for i in range(1, num):
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+            keep[labels == i] = 255
+    frac = float((keep > 0).mean())
+    if frac < 0.004:
+        return ai_page
+    keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
+    feather = cv2.GaussianBlur(keep.astype(np.float32) / 255.0, (0, 0), 4)
+    m = np.clip(cv2.resize(feather, (ow, oh), interpolation=cv2.INTER_LINEAR), 0, 1)[..., None]
+    out = ai_page.astype(np.float32) * (1 - m) + ref.astype(np.float32) * m
+    print(f"[dark-guard] {frac:.1%} of the page was dark in the source but came "
+          f"back white — restored those panels from the source")
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def compress_upload(data: bytes, max_dim: int = 4000, target_kb: int = 6144,
                     full: bool = False) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't

@@ -35,6 +35,12 @@ document.addEventListener("DOMContentLoaded", () => {
     tileMode.value = localStorage.getItem("manga_tile_mode") || "1";
     tileMode.addEventListener("change", () => localStorage.setItem("manga_tile_mode", tileMode.value));
   }
+  const protectDark = document.getElementById("protectDark");
+  if (protectDark) {
+    protectDark.checked = localStorage.getItem("manga_protect_dark") === "1";
+    protectDark.addEventListener("change", () =>
+      localStorage.setItem("manga_protect_dark", protectDark.checked ? "1" : "0"));
+  }
   const enhancePanel   = document.getElementById("enhancePanel");
 
   const uploadSection  = document.getElementById("uploadSection");
@@ -725,6 +731,7 @@ document.addEventListener("DOMContentLoaded", () => {
     f.append("prompt", enhancePrompt.value);
     f.append("model", enhanceModel.value);
     if (tileMode) f.append("tiles", tileMode.value);   // beta HD tile mode
+    if (protectDark && protectDark.checked) f.append("protect_dark", "true");
     // "AI Scan → HD" chains MangaJaNai after the generative scan; the HD toggle
     // also forces the upscale stage on a plain "Raw → Scan" run.
     if (workflow === "scan-upscale" || (hdUpscale && hdUpscale.checked)) {
