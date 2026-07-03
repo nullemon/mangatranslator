@@ -174,13 +174,20 @@ class ImageEnhancer:
 
         # Each tile generates SOLO — same prompt wording as the build whose
         # content was right. The only post-work is the seam join.
-        tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
-            " This is ONE tile of a larger page — keep the EXACT same framing, "
-            "crop and proportions, edge to edge; do not add borders, zoom, or "
-            "shift anything, so tiles line up seamlessly. Keep grey/toned and "
-            "black backgrounds exactly as dark as the source — never turn them "
-            "white; keep ALL text including page numbers and small margin text; "
-            "page edges clean, no dark marks or torn-paper shadows.")
+        # The preservation rule goes FIRST — a leading "pure white paper" in the
+        # user prompt otherwise wins, and a tile that is mostly a toned field
+        # (no page context) gets classified as dirty paper and bleached.
+        tile_prompt = (
+            "RULE, applies before everything else: any background or large area "
+            "that is grey, toned or black in the source MUST stay equally dark "
+            "in the result — 'white paper' only ever means areas that are blank "
+            "paper in the source. "
+            + (prompt or self.DEFAULT_PROMPT).strip()
+            + " This is ONE tile of a larger page — keep the EXACT same framing, "
+              "crop and proportions, edge to edge; do not add borders, zoom, or "
+              "shift anything, so tiles line up seamlessly. Keep ALL text "
+              "including page numbers and small margin text; page edges clean, "
+              "no dark marks or torn-paper shadows.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
         if max(h, w) >= 2600:
