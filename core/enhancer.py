@@ -59,6 +59,7 @@ class ImageEnhancer:
         provider: str,
         api_key: str,
         model: str = "",
+        refs=None,
     ) -> np.ndarray:
         if not api_key:
             raise ValueError("An API key is required for image enhancement")
@@ -70,11 +71,11 @@ class ImageEnhancer:
         model = (model or "").strip() or self.DEFAULT_MODELS.get(provider, "")
 
         if provider == "openai":
-            return self._openai(image, prompt, api_key, model)
+            return self._openai(image, prompt, api_key, model)   # refs unsupported
         if provider == "gemini":
-            return self._gemini(image, prompt, api_key, model)
+            return self._gemini(image, prompt, api_key, model, refs=refs)
         if provider == "xai":
-            return self._xai(image, prompt, api_key, model)
+            return self._xai(image, prompt, api_key, model, refs=refs)
         raise ValueError(f"Unknown enhancement provider: {provider!r}")
 
     # ── Encoding helpers ──
@@ -168,9 +169,14 @@ class ImageEnhancer:
         tile_prompt = (prompt or self.DEFAULT_PROMPT).strip() + (
             " This is ONE tile of a larger page — keep the EXACT same framing, "
             "crop and proportions, edge to edge; do not add borders, zoom, or "
-            "shift anything, so tiles line up seamlessly.")
+            "shift anything, so tiles line up seamlessly. The FIRST extra image "
+            "is the FULL page this tile comes from, and any second extra image "
+            "is a neighbouring tile that was already cleaned: match their style, "
+            "line weight, tone, contrast and level of detail EXACTLY, so every "
+            "tile looks like one consistent scan of the same page.")
         ov = max(16, int(min(h, w) * 0.08))     # shared band the seam can roam in
         S = int(round(max(1.0, out_scale)))     # integer scale → exact geometry
+        page_ref = self._shrink(image, 768)     # whole-page style reference
 
         # Prior: put each split on the lowest-ink line near its midpoint (a panel
         # gutter) so the seam usually has an easy home to begin with.
@@ -184,6 +190,7 @@ class ImageEnhancer:
 
         n, total = 0, rows * cols
         strips = []
+        prev_tile = None    # each tile follows the one before it → consistent style
         for r in range(rows):
             ey0 = max(0, ys[r] - ov) if r > 0 else 0
             ey1 = min(h, ys[r + 1] + ov) if r < rows - 1 else h
@@ -194,8 +201,16 @@ class ImageEnhancer:
                 if progress:
                     progress(n, total)
                 n += 1
-                enh = self.enhance(image[ey0:ey1, ex0:ex1], tile_prompt,
-                                   provider, api_key, model)
+                crop = image[ey0:ey1, ex0:ex1]
+                refs = [page_ref] + ([prev_tile] if prev_tile is not None else [])
+                try:
+                    enh = self.enhance(crop, tile_prompt, provider, api_key, model,
+                                       refs=refs)
+                except Exception as e:
+                    # A provider that rejects multi-image input still works solo.
+                    print(f"[enhance] tile refs rejected ({e}); retrying without")
+                    enh = self.enhance(crop, tile_prompt, provider, api_key, model)
+                prev_tile = self._shrink(enh, 768)
                 tw, th = (ex1 - ex0) * S, (ey1 - ey0) * S
                 interp = cv2.INTER_AREA if enh.shape[0] > th else cv2.INTER_CUBIC
                 pieces.append(cv2.resize(enh, (tw, th), interpolation=interp))
@@ -230,8 +245,16 @@ class ImageEnhancer:
             raise RuntimeError(f"OpenAI returned no image: {str(payload)[:300]}")
         return self._decode(base64.b64decode(items[0]["b64_json"]))
 
+    @staticmethod
+    def _shrink(img: np.ndarray, target: int = 768) -> np.ndarray:
+        """Downscale a reference image so it adds context, not payload."""
+        if max(img.shape[:2]) <= target:
+            return img
+        s = target / max(img.shape[:2])
+        return cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+
     # ── Google Gemini (2.5 Flash Image / "Nano Banana") ──
-    def _gemini(self, image, prompt, api_key, model) -> np.ndarray:
+    def _gemini(self, image, prompt, api_key, model, refs=None) -> np.ndarray:
         h, w = image.shape[:2]
         max_dim = 2048
         if max(h, w) > max_dim:
@@ -241,15 +264,18 @@ class ImageEnhancer:
         if not ok:
             raise ValueError("Failed to encode image for Gemini")
         b64 = base64.b64encode(buf.tobytes()).decode()
+        parts = [{"text": prompt},
+                 {"inlineData": {"mimeType": "image/jpeg", "data": b64}}]
+        # Style/context references (e.g. the full page, the previous tile) so
+        # every tile is rendered consistently with the others.
+        for ref in (refs or []):
+            okr, rbuf = cv2.imencode(".jpg", self._shrink(ref),
+                                     [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if okr:
+                parts.append({"inlineData": {"mimeType": "image/jpeg",
+                                             "data": base64.b64encode(rbuf.tobytes()).decode()}})
         body = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt},
-                        {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
-                    ]
-                }
-            ],
+            "contents": [{"parts": parts}],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
         url = self.GEMINI_URL.format(model=model)
@@ -275,7 +301,7 @@ class ImageEnhancer:
         raise RuntimeError(f"Gemini returned no image: {str(payload)[:300]}")
 
     # ── xAI (Grok Imagine) image-to-image edit ──
-    def _xai(self, image, prompt, api_key, model) -> np.ndarray:
+    def _xai(self, image, prompt, api_key, model, refs=None) -> np.ndarray:
         h, w = image.shape[:2]
         max_dim = 2048
         if max(h, w) > max_dim:
@@ -287,10 +313,21 @@ class ImageEnhancer:
         if not ok:
             raise ValueError("Failed to encode image for xAI")
         data_uri = "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
+        main = {"url": data_uri, "type": "image_url"}
+        # xAI multi-image edit takes up to 3 source images — main + 2 references
+        # (the full page / the previous tile) so tiles come out style-consistent.
+        images = [main]
+        for ref in (refs or [])[:2]:
+            okr, rbuf = cv2.imencode(".jpg", self._shrink(ref),
+                                     [cv2.IMWRITE_JPEG_QUALITY, 88])
+            if okr:
+                images.append({"url": "data:image/jpeg;base64,"
+                                      + base64.b64encode(rbuf.tobytes()).decode(),
+                               "type": "image_url"})
         body = {
             "model": model,
             "prompt": prompt,
-            "image": {"url": data_uri, "type": "image_url"},
+            "image": images if len(images) > 1 else main,
             "response_format": "b64_json",
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}

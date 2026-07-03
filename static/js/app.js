@@ -410,6 +410,7 @@ document.addEventListener("DOMContentLoaded", () => {
     enhanceKey.value   = localStorage.getItem(enhKeyName()) || "";
     showSaved(enhanceKeyStatus, enhanceKey.value.trim());
     enhanceKeyLabel.textContent =
+      p === "local"  ? "API key — not needed (runs on your GPU)" :
       p === "openai" ? "OpenAI API Key" :
       p === "xai"    ? "xAI (Grok) API Key" : "Gemini API Key";
   }
@@ -636,7 +637,7 @@ document.addEventListener("DOMContentLoaded", () => {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
     apiKeyInput.style.borderColor = "";
-    if (needsScan(workflow) && !enhanceKey.value.trim()) {
+    if (needsScan(workflow) && enhanceProvider.value !== "local" && !enhanceKey.value.trim()) {
       enhancePanel.scrollIntoView({ behavior: "smooth" });
       enhanceKey.focus(); enhanceKey.style.borderColor = "#f87171"; return;
     }

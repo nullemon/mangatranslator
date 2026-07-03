@@ -368,13 +368,24 @@ async def _run(
                 )
                 ai_ok = False
                 try:
-                    # Send the RAW page straight to the AI scanner. Pre-deskewing
-                    # locally here and letting the pipeline deskew again warped
-                    # the page twice and stretched it on the way back (visible
-                    # distortion). One clean pass: AI scans, pipeline deskews once.
-                    out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
-                    ai_ok = True
-                    tasks[task_id].update({"progress": 35, "message": "AI enhancement complete!"})
+                    if enhance_provider == "local":
+                        # LOCAL accurate scan: deterministic cleanup + crisp B&W —
+                        # the art is never redrawn, so it is always 1:1 faithful
+                        # (no hallucination, no restyle, no seams). No API needed.
+                        tasks[task_id].update(
+                            {"progress": 25,
+                             "message": "Cleaning locally (accurate — no AI redraw)..."})
+                        from core.pipeline import scan_finish
+                        out = scan_finish(scan_cleanup(img))
+                        tasks[task_id].update({"progress": 35, "message": "Local scan complete!"})
+                    else:
+                        # Send the RAW page straight to the AI scanner. Pre-deskewing
+                        # locally here and letting the pipeline deskew again warped
+                        # the page twice and stretched it on the way back (visible
+                        # distortion). One clean pass: AI scans, pipeline deskews once.
+                        out = enhancer.enhance(img, enhance_prompt, enhance_provider, enhance_key, enhance_model)
+                        ai_ok = True
+                        tasks[task_id].update({"progress": 35, "message": "AI enhancement complete!"})
                 except Exception as e:
                     print(f"[enhance] AI step failed, using local scan cleanup: {e}")
                     # Surface the REAL reason (bad key, quota, wrong model) so the
@@ -390,8 +401,10 @@ async def _run(
                     )
                     out = scan_cleanup(img)
                 # Snap the AI result back to the EXACT source geometry so nothing
-                # is stretched and detection boxes stay aligned.
-                if out.shape[:2] != img.shape[:2]:
+                # is stretched and detection boxes stay aligned. (AI output only —
+                # the local path may legitimately crop the photo's background, and
+                # stretching that back would distort the page.)
+                if ai_ok and out.shape[:2] != img.shape[:2]:
                     out = cv2.resize(out, (img.shape[1], img.shape[0]),
                                      interpolation=cv2.INTER_AREA)
                 # Claw back solid-black art the generative scan bleached to white
@@ -495,7 +508,7 @@ async def _run(
 async def enhance_only(
     file: UploadFile = File(...),
     provider: str = Form("gemini"),
-    api_key: str = Form(...),
+    api_key: str = Form(""),
     prompt: str = Form(""),
     model: str = Form(""),
     upscale: str = Form("false"),
@@ -503,6 +516,9 @@ async def enhance_only(
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
+    if provider != "local" and not api_key:
+        raise HTTPException(400, "api_key is required for AI scan providers "
+                                 "(pick 'Local — accurate' for no-key scanning)")
 
     task_id = str(uuid.uuid4())
     ext = Path(file.filename or "img.png").suffix or ".png"
@@ -564,7 +580,17 @@ async def _run_enhance(
             )
             ai_ok = False
             try:
-                if tiles >= 2:
+                if provider == "local":
+                    # LOCAL accurate scan: 100% deterministic — deskew/crop,
+                    # flatten lighting, denoise, white paper. The art is never
+                    # redrawn: no hallucination, no restyle, no tile seams,
+                    # always 1:1 faithful to the page. No API key needed.
+                    tasks[task_id].update(
+                        {"progress": 40,
+                         "message": "Cleaning locally (accurate — no AI redraw)..."})
+                    out = scan_cleanup(img)
+                    ai_ok = True    # apply the crisp B&W finish below
+                elif tiles >= 2:
                     # BETA tile mode: split the page, AI-scan each piece at full
                     # quality (beats the ~2K cap), then merge into a high-res page.
                     def _tp(n, total):
@@ -573,11 +599,12 @@ async def _run_enhance(
                              "message": f"AI scanning tile {n + 1}/{total} (Beta {tiles})..."})
                     out = enhancer.enhance_tiled(img, prompt, provider, api_key, model,
                                                  tiles=tiles, progress=_tp)
+                    tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
                 else:
                     # Send the RAW page to the AI scanner — like pasting it into Grok.
                     out = enhancer.enhance(img, prompt, provider, api_key, model)
+                    tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
                 ai_ok = True
-                tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
             except Exception as e:
                 print(f"[enhance] AI step failed, using local scan cleanup: {e}")
                 tasks[task_id].update(
