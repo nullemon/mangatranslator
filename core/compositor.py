@@ -280,6 +280,14 @@ class Compositor:
                 bh = min(bh, h - by)
                 if bw < 10 or bh < 10:
                     continue
+                # Better tilt logic: when the detector called this horizontal
+                # but the ORIGINAL ink is a confidently tilted elongated block
+                # (a diagonal banner / slanted title bar), typeset the
+                # translation at the ink's own angle so it sits like the source.
+                if abs(rotation) < 3:
+                    est = self._estimate_text_angle(bx, by, bw, bh)
+                    if est is not None:
+                        rotation = est
                 # Plan the region first (caption interior or refined ink box) so
                 # overlaps are rejected before anything is painted.
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=True)
@@ -888,6 +896,38 @@ class Compositor:
         if x1 - x0 < 4 or y1 - y0 < 4:
             return None
         return (x0, y0, x1 - x0, y1 - y0)
+
+    def _estimate_text_angle(self, x, y, w, h):
+        """Measure the tilt of the ORIGINAL lettering from its ink strokes, for
+        free text the detector reported as horizontal. Returns a clockwise
+        angle in degrees only when the ink is confidently a tilted, elongated
+        block (a diagonal banner / slanted bar) — otherwise None, and the
+        translation stays horizontal. Conservative by design: squarish
+        paragraphs, steep verticals and sparse ink are all rejected."""
+        if self._seg_mask is None:
+            return None
+        H, W = self._seg_mask.shape[:2]
+        x0, y0 = max(0, int(x)), max(0, int(y))
+        x1, y1 = min(W, int(x + w)), min(H, int(y + h))
+        if x1 - x0 < 24 or y1 - y0 < 12:
+            return None
+        roi = (self._seg_mask[y0:y1, x0:x1] > 0).astype(np.uint8)
+        pts = cv2.findNonZero(roi)
+        if pts is None or len(pts) < 80:
+            return None
+        (_, _), (rw, rh), ang = cv2.minAreaRect(pts)
+        if rw < rh:
+            rw, rh = rh, rw
+            ang += 90.0
+        while ang > 90.0:
+            ang -= 180.0
+        while ang <= -90.0:
+            ang += 180.0
+        if rh <= 0 or rw < 2.2 * rh:
+            return None      # not an elongated line/bar — angle unreliable
+        if not (3.0 <= abs(ang) <= 40.0):
+            return None      # horizontal enough, or too steep for English
+        return float(ang)
 
     @staticmethod
     def _rotated_aabb(rect, rotation):

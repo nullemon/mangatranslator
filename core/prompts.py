@@ -121,6 +121,9 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 
 Rules:
 - Find ALL text, including chapter titles, author credits, narration, and captions.
+- Include TINY magazine margin text — ad columns, editor notes, corner notes,
+  and the small credits running along a chapter-title bar — even when the text
+  is only a few pixels tall.
 - Translate EVERY region — including short, repeated, or faint lines (even a
   bubble that just repeats a name). Never skip a region or leave {src} text in.
 - Also catch small hand-written text drawn ON characters or artwork — tiny
@@ -162,6 +165,8 @@ REMAINING {src} text that is NOT inside a speech bubble and should be translated
 - Author names / credits
 - Narration text outside bubbles
 - Editorial notes, page captions, magazine announcements
+- TINY magazine margin/ad text and corner notes (even a few pixels tall), and
+  the small credits running along a chapter-title bar
 - Location/time labels
 - Large dramatic vertical text columns overlaid on the artwork (common in
   action scenes — e.g. a bold vertical column of kanji/kana like
