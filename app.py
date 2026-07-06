@@ -141,6 +141,53 @@ tasks: dict = {}
 # JSON status endpoint stays serializable). Reused for clean re-renders.
 MASKS: dict = {}
 
+# ---- Memory housekeeping ------------------------------------------------
+# Between jobs the loaded models sit on VRAM and torch/Python never hand
+# freed memory back on their own — on WSL2 that reads as "vmmem keeps
+# growing / GPU stays hogged" long after the last page. The server now
+# cleans up after itself: a light sweep after every job, a trim after 10
+# idle minutes, and a full model release after 30 (models lazy-reload on
+# the next job in a few seconds).
+from core import memory as memsweep
+
+LAST_JOB_TS = time.time()
+_IDLE_TRIMMED = False
+
+
+def _note_job_done():
+    global LAST_JOB_TS, _IDLE_TRIMMED
+    LAST_JOB_TS = time.time()
+    _IDLE_TRIMMED = False
+    memsweep.light_sweep()
+
+
+async def _housekeeper():
+    global LAST_JOB_TS, _IDLE_TRIMMED
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(60)
+        try:
+            if any(t.get("status") == "processing" for t in tasks.values()):
+                LAST_JOB_TS = time.time()
+                continue
+            idle = time.time() - LAST_JOB_TS
+            if idle >= 1800:
+                released = await loop.run_in_executor(None, memsweep.unload_models)
+                if released:
+                    print("[mem] idle 30 min — models released, VRAM freed "
+                          "(they reload automatically on the next job)")
+            elif idle >= 600 and not _IDLE_TRIMMED:
+                await loop.run_in_executor(None, memsweep.deep_sweep)
+                _IDLE_TRIMMED = True
+                print("[mem] idle 10 min — trimmed cached RAM/VRAM back to the OS")
+        except Exception as e:
+            print(f"[mem] housekeeper: {e}")
+
+
+@app.on_event("startup")
+async def _start_housekeeper():
+    asyncio.create_task(_housekeeper())
+
 
 @app.get("/")
 async def index(request: Request):
@@ -551,6 +598,8 @@ async def _run(
             tasks[task_id].update(
                 {"status": "error", "message": str(e), "progress": 0}
             )
+    finally:
+        _note_job_done()
 
 
 @app.post("/api/enhance")
@@ -721,6 +770,8 @@ async def _run_enhance(
             tasks[task_id].update(
                 {"status": "error", "message": str(e), "progress": 0}
             )
+    finally:
+        _note_job_done()
 
 
 @app.post("/api/upscale")
@@ -793,6 +844,8 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
             tasks[task_id].update(
                 {"status": "error", "message": str(e), "progress": 0}
             )
+    finally:
+        _note_job_done()
 
 
 @app.post("/api/endcard")
