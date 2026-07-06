@@ -679,6 +679,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
+        if (wmPlace) f.append("wm_place", wmPlace.value);
+        if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -713,6 +715,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (watermarkInput && watermarkInput.value.trim()) {
         f.append("watermark", watermarkInput.value.trim());
+        if (wmPlace) f.append("wm_place", wmPlace.value);
+        if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -1202,7 +1206,29 @@ document.addEventListener("DOMContentLoaded", () => {
       ? "GLOSSARY — translate these names/terms EXACTLY and consistently on "
         + "every page:\n" + glossary.value.trim()
       : "";
-    return [preset, gl, user].filter(Boolean).join("\n");
+    // Series context: knowing the manga stops invented names/terms.
+    const title = (mangaTitle && mangaTitle.value.trim())
+      ? `SERIES: this page is from "${mangaTitle.value.trim()}". Use that manga's `
+        + "canonical character names, place names, techniques and tone exactly "
+        + "as known from the series — never invent or re-romanize them."
+      : "";
+    return [title, preset, gl, user].filter(Boolean).join("\n");
+  }
+  const mangaTitle = document.getElementById("mangaTitle");
+  if (mangaTitle) {
+    mangaTitle.value = localStorage.getItem("manga_series_title") || "";
+    mangaTitle.addEventListener("input", () =>
+      localStorage.setItem("manga_series_title", mangaTitle.value));
+  }
+  const wmPlace = document.getElementById("wmPlace");
+  const wmOpacity = document.getElementById("wmOpacity");
+  if (wmPlace) {
+    wmPlace.value = localStorage.getItem("manga_wm_place") || "br";
+    wmPlace.addEventListener("change", () => localStorage.setItem("manga_wm_place", wmPlace.value));
+  }
+  if (wmOpacity) {
+    wmOpacity.value = localStorage.getItem("manga_wm_opacity") || "50";
+    wmOpacity.addEventListener("change", () => localStorage.setItem("manga_wm_opacity", wmOpacity.value));
   }
   if (transStyle) {
     transStyle.value = localStorage.getItem("manga_trans_style") || "natural";

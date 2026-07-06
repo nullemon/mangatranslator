@@ -71,32 +71,54 @@ def compress_output(path: str, target_kb: int = 3072) -> str:
     return jpg
 
 
-def _stamp_watermark(image_path: str, text: str):
-    """Render a repeating diagonal watermark at low opacity."""
+def _stamp_watermark(image_path: str, text: str, place: str = "br",
+                     opacity: int = 50):
+    """Watermark the finished page. `place` puts the text ONCE in a corner
+    ('br','bl','tr','tl' — the default, discreet look) or tiles it diagonally
+    across the whole page ('tile'). `opacity` is 0–100%."""
     img = cv2.imread(image_path)
     if img is None:
         return
     h, w = img.shape[:2]
-    pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    alpha = int(np.clip(int(opacity or 50), 5, 100) * 255 / 100)
+    pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).convert("RGBA")
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font_size = max(16, min(w, h) // 28)
-    try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-    except Exception:
-        font = ImageFont.load_default()
-    bb = draw.textbbox((0, 0), text, font=font)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-    step_x = tw + max(80, tw)
-    step_y = th + max(120, th * 3)
-    alpha = 28
-    for y in range(-h, h * 2, step_y):
-        for x in range(-w, w * 2, step_x):
-            draw.text((x, y), text, fill=(128, 128, 128, alpha), font=font)
-    rotated = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
-    pil = pil.convert("RGBA")
-    pil = Image.alpha_composite(pil, rotated)
+
+    def _font(size):
+        try:
+            return ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+        except Exception:
+            return ImageFont.load_default()
+
+    if place == "tile":
+        font = _font(max(16, min(w, h) // 28))
+        bb = draw.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        step_x = tw + max(80, tw)
+        step_y = th + max(120, th * 3)
+        for y in range(-h, h * 2, step_y):
+            for x in range(-w, w * 2, step_x):
+                draw.text((x, y), text, fill=(128, 128, 128, alpha), font=font)
+        overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
+    else:
+        font = _font(max(14, min(w, h) // 42))
+        bb = draw.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        m = max(10, min(w, h) // 60)
+        x = (w - tw - m) if place in ("br", "tr") else m
+        y = (h - th - m) if place in ("br", "bl") else m
+        # Readable on whatever the corner holds: white text on dark art,
+        # dark text on paper — with a thin contrasting outline either way.
+        region = img[max(0, y - 4):min(h, y + th + 4), max(0, x - 4):min(w, x + tw + 4)]
+        lum = float(cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).mean()) if region.size else 255.0
+        fill = (255, 255, 255, alpha) if lum < 128 else (25, 25, 25, alpha)
+        stroke = (25, 25, 25, alpha) if lum < 128 else (255, 255, 255, alpha)
+        draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
+                  stroke_width=max(1, font.size // 14), stroke_fill=stroke)
+
+    pil = Image.alpha_composite(pil, overlay)
     result = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
     cv2.imwrite(image_path, result)
 
@@ -217,6 +239,8 @@ async def translate(
     enhance_prompt: str = Form(""),
     enhance_model: str = Form(""),
     watermark: str = Form(""),
+    wm_place: str = Form("br"),
+    wm_opacity: str = Form("50"),
     style_prompt: str = Form(""),
     text_case: str = Form("upper"),
     finish: str = Form("clean"),
@@ -271,6 +295,8 @@ async def translate(
         "output_path": output_path,
         "font_path": font_path,
         "watermark": watermark.strip(),
+        "wm_place": wm_place.strip() or "br",
+        "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
         "text_case": text_case,
         "finish": finish,
         "enhance_provider": enhance_provider,
@@ -294,6 +320,8 @@ async def translate(
             smart_mode == "true", font_path,
             enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
             watermark=watermark.strip(),
+            wm_place=wm_place.strip() or "br",
+            wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
             style_prompt=style_prompt.strip(),
             text_case=text_case,
             finish=finish,
@@ -329,6 +357,8 @@ async def _run(
     enhance_prompt: str = "",
     enhance_model: str = "",
     watermark: str = "",
+    wm_place: str = "br",
+    wm_opacity: int = 50,
     style_prompt: str = "",
     text_case: str = "upper",
     finish: str = "clean",
@@ -470,11 +500,11 @@ async def _run(
         # pipeline). The generative model stays available as the explicit
         # "Enhance & Translate" workflow, where it produces a SEPARATE image.
 
-        # Global diagonal stamp. Skipped when "replace watermark" is on — there
-        # the user's mark is dropped in place of the erased site watermark
-        # instead of tiled across the whole page.
+        # User watermark (corner by default; tiled optional). Skipped when
+        # "replace watermark" is on — there the user's mark is dropped in place
+        # of the erased site watermark instead.
         if watermark and not replace_watermark:
-            _stamp_watermark(output_path, watermark)
+            _stamp_watermark(output_path, watermark, wm_place, wm_opacity)
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
         if compress:
@@ -1104,7 +1134,8 @@ async def rerender(task_id: str, request: Request):
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:
-            _stamp_watermark(r["output_path"], wm)
+            _stamp_watermark(r["output_path"], wm,
+                             t.get("wm_place", "br"), t.get("wm_opacity", 50))
 
     await asyncio.get_event_loop().run_in_executor(None, work)
 

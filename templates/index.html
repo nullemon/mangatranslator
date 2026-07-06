@@ -145,8 +145,23 @@
           </select>
         </div>
         <div class="setting-group">
-          <label for="watermark">Watermark</label>
+          <label for="watermark">Watermark <span class="muted">(corner stamp — pick spot &amp; opacity)</span></label>
           <input type="text" id="watermark" placeholder="e.g. @yourname" maxlength="60">
+          <div class="inline-row" style="margin-top:6px">
+            <select id="wmPlace" style="flex:1">
+              <option value="br">Corner — bottom right</option>
+              <option value="bl">Corner — bottom left</option>
+              <option value="tr">Corner — top right</option>
+              <option value="tl">Corner — top left</option>
+              <option value="tile">Tiled across whole page</option>
+            </select>
+            <input type="number" id="wmOpacity" min="10" max="100" step="5" value="50"
+                   style="width:76px" title="Opacity %">
+          </div>
+        </div>
+        <div class="setting-group">
+          <label for="mangaTitle">Manga title <span class="muted">(context — correct names, no random stuff)</span></label>
+          <input type="text" id="mangaTitle" placeholder="e.g. Blue Lock · Hunter × Hunter" maxlength="80">
         </div>
         <div class="setting-group">
           <label for="credit">Credit / TL name <span class="muted">(in the margin, movable)</span></label>
