@@ -278,6 +278,12 @@ class Compositor:
                         rect = pr
                         if not it.get("manual_rot") and abs(prot) >= 1.0:
                             rotation = prot
+                # A strip-shaped box means ONE line running along it. The model
+                # often returns the translation with hard line breaks (which the
+                # renderer honours for bubbles) — in a strip they'd stack tiny
+                # lines instead, so collapse them into a single flowing line.
+                if rect[2] >= 3 * rect[3]:
+                    text = " ".join(text.split())
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
@@ -327,6 +333,10 @@ class Compositor:
                 # refine box) so the editor handle hugs the words — "same size as
                 # the text or a touch bigger", not a giant rectangle.
                 it["bbox"] = [int(v) for v in rect]
+                # Strip-shaped region (title/credits bar): one flowing line —
+                # collapse any hard line breaks the model returned.
+                if rect[2] >= 3 * rect[3]:
+                    text = " ".join(text.split())
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
                                self._item_scale(it), self._item_glow(it)))

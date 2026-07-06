@@ -132,6 +132,8 @@ for d in ("uploads", "output", "fonts"):
     os.makedirs(d, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+# Serve the typeset fonts so the Font dropdown can PREVIEW each one.
+app.mount("/fonts", StaticFiles(directory="fonts"), name="fonts")
 templates = Jinja2Templates(directory="templates")
 
 tasks: dict = {}

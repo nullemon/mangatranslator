@@ -366,6 +366,16 @@ document.addEventListener("DOMContentLoaded", () => {
         const opt = document.createElement("option");
         opt.value = f; opt.textContent = f.replace(/\.(ttf|otf)$/i, "");
         fontSelect.appendChild(opt);
+        // Preview: render each option IN its own font (loaded lazily from /fonts).
+        try {
+          const fam = "mtfont_" + f.replace(/[^A-Za-z0-9]/g, "_");
+          const face = new FontFace(fam, `url("/fonts/${encodeURIComponent(f)}")`);
+          face.load().then(loaded => {
+            document.fonts.add(loaded);
+            opt.style.fontFamily = `"${fam}", inherit`;
+            opt.style.fontSize = "1.05em";
+          }).catch(() => {});
+        } catch (_) { /* older browser — plain names still work */ }
       }
       const savedFont = localStorage.getItem("manga_font") || "";
       if (savedFont && [...fontSelect.options].some(o => o.value === savedFont)) {
