@@ -500,6 +500,12 @@ async def _run(
             lambda: pipeline.process(translate_source, output_path, on_progress),
         )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
+        # Bound memory: full-page bubble masks are ~MBs each at high res and
+        # accumulate every page — a long batch quietly eats gigabytes and lags
+        # the machine. Keep only the most recent pages' masks; older pages
+        # re-render mask-less (bubbles are recovered from their boxes instead).
+        while len(MASKS) > 8:
+            MASKS.pop(next(iter(MASKS)), None)
 
         # NOTE: the delivered translation is NEVER run through the generative
         # enhancer. A whole-page generative pass repaints the art — it redraws
