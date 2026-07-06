@@ -45,7 +45,9 @@ class LamaInpaint:
         try:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             m = (mask > 0).astype(np.uint8) * 255
-            out = self._lama(Image.fromarray(rgb), Image.fromarray(m))
+            from .gpu_throttle import limit as _gpu_limit
+            with _gpu_limit():
+                out = self._lama(Image.fromarray(rgb), Image.fromarray(m))
             out = np.array(out.convert("RGB"))
             out = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
             if out.shape[:2] != bgr.shape[:2]:

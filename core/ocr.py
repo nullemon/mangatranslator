@@ -90,7 +90,9 @@ class MangaOCR:
             return ""
         try:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            text = (self._mocr(Image.fromarray(rgb)) or "").strip()
+            from .gpu_throttle import limit as _gpu_limit
+            with _gpu_limit():
+                text = (self._mocr(Image.fromarray(rgb)) or "").strip()
             if not _has_japanese(text):
                 return ""
             return text

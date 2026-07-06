@@ -150,7 +150,10 @@ class TextSegmenter:
         blob = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         blob = blob.transpose(2, 0, 1)[None]
         name = sess.get_inputs()[0].name
-        return sess.run(None, {name: blob}), scale, nw, nh
+        from .gpu_throttle import limit as _gpu_limit
+        with _gpu_limit():
+            outputs = sess.run(None, {name: blob})
+        return outputs, scale, nw, nh
 
     @staticmethod
     def _sig(image: np.ndarray):

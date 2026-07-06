@@ -120,10 +120,12 @@ class BubbleSegDetector:
         else:
             imgsz = min(_vram_imgsz_cap(), max(1024, (max(h, w) + 31) // 32 * 32))
         try:
-            results = self.model.predict(
-                image, conf=self.conf, device=_device(),
-                retina_masks=True, verbose=False, imgsz=imgsz,
-            )
+            from .gpu_throttle import limit as _gpu_limit
+            with _gpu_limit():
+                results = self.model.predict(
+                    image, conf=self.conf, device=_device(),
+                    retina_masks=True, verbose=False, imgsz=imgsz,
+                )
         except Exception as e:
             print(f"[bubble_seg] inference failed, CV fallback: {e}")
             return []

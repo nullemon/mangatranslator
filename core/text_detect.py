@@ -82,7 +82,9 @@ class FreeTextDetector:
         h, w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         try:
-            result = self.craft.detect_text(rgb)
+            from .gpu_throttle import limit as _gpu_limit
+            with _gpu_limit():
+                result = self.craft.detect_text(rgb)
         except Exception as e:
             print(f"[text_detect] CRAFT failed, trying CV: {e}")
             return self._detect_cv(image, existing_boxes)

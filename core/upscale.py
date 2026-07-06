@@ -185,12 +185,14 @@ class Upscaler:
                     ey0, ex0 = max(0, y0 - overlap), max(0, x0 - overlap)
                     ey1, ex1 = min(h, y1 + overlap), min(w, x1 + overlap)
                     patch = src[ey0:ey1, ex0:ex1]
-                    if gray_model:
-                        t = torch.from_numpy(patch)[None, None].to(device)
-                        sr = desc(t)[0, 0].clamp_(0, 1).cpu().numpy()
-                    else:
-                        t = torch.from_numpy(patch.transpose(2, 0, 1))[None].to(device)
-                        sr = desc(t)[0].clamp_(0, 1).cpu().numpy().transpose(1, 2, 0)
+                    from .gpu_throttle import limit as _gpu_limit
+                    with _gpu_limit():
+                        if gray_model:
+                            t = torch.from_numpy(patch)[None, None].to(device)
+                            sr = desc(t)[0, 0].clamp_(0, 1).cpu().numpy()
+                        else:
+                            t = torch.from_numpy(patch.transpose(2, 0, 1))[None].to(device)
+                            sr = desc(t)[0].clamp_(0, 1).cpu().numpy().transpose(1, 2, 0)
                     cy0, cx0 = (y0 - ey0) * scale, (x0 - ex0) * scale
                     out[y0 * scale:y1 * scale, x0 * scale:x1 * scale] = sr[
                         cy0:cy0 + (y1 - y0) * scale, cx0:cx0 + (x1 - x0) * scale

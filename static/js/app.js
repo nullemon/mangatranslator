@@ -41,6 +41,12 @@ document.addEventListener("DOMContentLoaded", () => {
     protectDark.addEventListener("change", () =>
       localStorage.setItem("manga_protect_dark", protectDark.checked ? "1" : "0"));
   }
+  const gpuCap = document.getElementById("gpuCap");
+  if (gpuCap) {
+    gpuCap.value = localStorage.getItem("manga_gpu_cap") || "100";
+    gpuCap.addEventListener("change", () =>
+      localStorage.setItem("manga_gpu_cap", gpuCap.value));
+  }
   const enhancePanel   = document.getElementById("enhancePanel");
 
   const uploadSection  = document.getElementById("uploadSection");
@@ -736,6 +742,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function buildRequest(file) {
     const f = new FormData();
     f.append("file", file);
+    const gpuCapEl = document.getElementById("gpuCap");
+    if (gpuCapEl) f.append("gpu_cap", gpuCapEl.value);
     if (isClean(workflow)) {
       // Clean only: erase all text, no translation (no API key needed).
       f.append("clean_only", "true");

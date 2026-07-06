@@ -262,9 +262,12 @@ async def translate(
     compress: str = Form("false"),
     credit: str = Form(""),
     profile: str = Form(""),
+    gpu_cap: str = Form("100"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
+    from core.gpu_throttle import set_cap as _set_gpu_cap
+    _set_gpu_cap(gpu_cap)
     is_clean = clean_only == "true"
     if not is_clean and not api_key:
         raise HTTPException(400, "api_key is required to translate")
@@ -560,9 +563,12 @@ async def enhance_only(
     upscale: str = Form("false"),
     tiles: str = Form("1"),
     protect_dark: str = Form("false"),
+    gpu_cap: str = Form("100"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
+    from core.gpu_throttle import set_cap as _set_gpu_cap
+    _set_gpu_cap(gpu_cap)
     if provider != "local" and not api_key:
         raise HTTPException(400, "api_key is required for AI scan providers "
                                  "(pick 'Local — accurate' for no-key scanning)")
@@ -718,12 +724,15 @@ async def _run_enhance(
 
 
 @app.post("/api/upscale")
-async def upscale_only(file: UploadFile = File(...)):
+async def upscale_only(file: UploadFile = File(...),
+                       gpu_cap: str = Form("100")):
     """Faithful HD upscale only — no translation, no generative redraw. Runs
     the MangaJaNai (or Real-ESRGAN fallback) model and returns the bigger,
     sharper page with the art preserved exactly."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
+    from core.gpu_throttle import set_cap as _set_gpu_cap
+    _set_gpu_cap(gpu_cap)
 
     task_id = str(uuid.uuid4())
     ext = Path(file.filename or "img.png").suffix or ".png"
