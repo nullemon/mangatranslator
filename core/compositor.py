@@ -120,7 +120,16 @@ class Compositor:
         if self.lama is not None and self.lama.ok:
             out = self.lama.inpaint(result, text_mask)
             if out is not None:
-                return out
+                # HARD GUARANTEE: LaMa re-synthesizes the WHOLE frame (its
+                # padding/rescale softens untouched art — the page came back
+                # blurred). Take its pixels ONLY inside the erase mask; every
+                # other pixel stays byte-identical to the page.
+                if out.shape[:2] != result.shape[:2]:
+                    out = cv2.resize(out, (result.shape[1], result.shape[0]),
+                                     interpolation=cv2.INTER_CUBIC)
+                m = text_mask > 0
+                result[m] = out[m]
+                return result
         return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
 
     def compose(
