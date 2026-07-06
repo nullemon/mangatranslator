@@ -1642,6 +1642,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function closeEditor() {
     const ex = moveLayer.querySelector(".edit-pop");
     if (ex) ex.remove();
+    moveLayer.querySelectorAll(".tilt-ghost").forEach(g => g.remove());
   }
   function openEditor(it, page, isAdded) {
     closeEditor();
@@ -1666,9 +1667,10 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       <div class="edit-pop-color">
         <span class="epop-clabel">Tilt&deg;</span>
-        <input type="number" class="epop-rot" min="-80" max="80" step="1"
+        <input type="range" class="epop-rot" min="-80" max="80" step="1"
                value="${(page.rotations || {})[it.id] != null ? (page.rotations || {})[it.id] : (it.rotation || 0)}"
-               style="width:64px" title="Text angle in degrees (clockwise; 0 = horizontal)">
+               style="flex:1" title="Drag to tilt — live preview on the page">
+        <span class="epop-rot-val" style="min-width:34px;text-align:right"></span>
       </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
@@ -1678,17 +1680,39 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`;
     pop.addEventListener("pointerdown", e => e.stopPropagation());
     moveLayer.appendChild(pop);
+    // LIVE tilt: dragging the slider rotates a text ghost in place over the
+    // artwork instantly — the server re-render happens once, on Save.
+    const rotEl = pop.querySelector(".epop-rot");
+    const rotVal = pop.querySelector(".epop-rot-val");
+    if (rotEl) {
+      const ghost = document.createElement("div");
+      ghost.className = "tilt-ghost";
+      ghost.style.left = (bx + off[0]) / W * 100 + "%";
+      ghost.style.top = (by + off[1]) / H * 100 + "%";
+      ghost.style.width = it.bbox[2] / W * 100 + "%";
+      ghost.style.height = it.bbox[3] / H * 100 + "%";
+      ghost.textContent = ((it.translation || "TILT") + "").replace(/\s+/g, " ");
+      moveLayer.appendChild(ghost);
+      const sync = () => {
+        const v = parseFloat(rotEl.value) || 0;
+        ghost.style.transform = "rotate(" + v + "deg)";
+        ghost.style.fontSize =
+          Math.max(9, (it.bbox[3] / H) * moveLayer.clientHeight * 0.45) + "px";
+        if (rotVal) rotVal.textContent = v + "\u00B0";
+      };
+      rotEl.addEventListener("input", sync);
+      sync();
+    }
     const ta = pop.querySelector(".edit-pop-text");
     ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
     pop.querySelector(".epop-cancel").addEventListener("click", closeEditor);
     pop.querySelector(".epop-save").addEventListener("click", () => {
       it.translation = ta.value;
-      const rotEl = pop.querySelector(".epop-rot");
-      if (rotEl) {
-        const rv = parseFloat(rotEl.value);
+      const rotSave = pop.querySelector(".epop-rot");
+      if (rotSave) {
+        const rv = parseFloat(rotSave.value);
         page.rotations = page.rotations || {};
-        if (!isNaN(rv) && rv !== (it.rotation || 0)) page.rotations[it.id] = rv;
-        else if (isNaN(rv)) delete page.rotations[it.id];
+        if (!isNaN(rv)) page.rotations[it.id] = rv;
       }
       const f = document.querySelector('.tl-edit[data-id="' + it.id + '"]');
       if (f) f.value = ta.value;

@@ -533,3 +533,15 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .font-picker-item:hover{background:var(--surface-3, rgba(128,128,128,.15))}
 .font-picker-item.active{color:var(--accent)}
+
+/* Live tilt preview — ghost box that rotates in place as the slider moves,
+   so you see the angle instantly without waiting for a server re-render. */
+.tilt-ghost{
+  position:absolute;z-index:7;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;text-align:center;
+  font-weight:800;text-transform:uppercase;line-height:1.15;color:#111;
+  background:rgba(255,255,255,.72);border:1px dashed var(--accent);
+  border-radius:2px;overflow:hidden;padding:1px 2px;
+}
+.epop-rot{accent-color:var(--accent);cursor:ew-resize}
+.epop-rot-val{font-size:.78rem;color:var(--text-dim);font-variant-numeric:tabular-nums}
