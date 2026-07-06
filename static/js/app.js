@@ -1771,9 +1771,9 @@ document.addEventListener("DOMContentLoaded", () => {
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
         line = document.createElementNS(NS, "polyline");
-        line.setAttribute("fill", "rgba(22,163,74,.15)");
+        line.setAttribute("fill", "rgba(22,163,74,.12)");
         line.setAttribute("stroke", "#16a34a");
-        line.setAttribute("stroke-width", "0.4");
+        line.setAttribute("stroke-width", "0.15");
         svg.appendChild(line);
         moveLayer.appendChild(svg);
       }
@@ -1782,7 +1782,7 @@ document.addEventListener("DOMContentLoaded", () => {
       pts.forEach(([px, py], i) => {
         const c = document.createElementNS(NS, "circle");
         c.setAttribute("cx", px); c.setAttribute("cy", py);
-        c.setAttribute("r", i === 0 ? "1.1" : "0.7");   // first point bigger = click it to close
+        c.setAttribute("r", i === 0 ? "0.45" : "0.25");   // first point bigger = click it to close
         c.setAttribute("fill", i === 0 ? "#dc2626" : "#16a34a");
         svg.appendChild(c);
       });
