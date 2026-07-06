@@ -266,6 +266,12 @@ class Compositor:
                 # bare artwork has just its strokes inpainted out (no slab).
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
                 rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
+                # Point-selected outline: the translation must sit strictly
+                # INSIDE the user's shape, not the loose bounding box.
+                if it.get("poly"):
+                    pr = self._poly_inner_rect(it["poly"], w, h)
+                    if pr is not None:
+                        rect = pr
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
@@ -896,6 +902,53 @@ class Compositor:
         if x1 - x0 < 4 or y1 - y0 < 4:
             return None
         return (x0, y0, x1 - x0, y1 - y0)
+
+    @staticmethod
+    def _poly_inner_rect(poly, w, h):
+        """Largest comfortable axis-aligned rectangle INSIDE a user-drawn
+        polygon, so a point-selected translation is typeset strictly within
+        the shape the user outlined. Grows greedily from the polygon's
+        incenter; returns (x, y, w, h) or None if the shape is too small."""
+        try:
+            pts = np.array([[int(p[0]), int(p[1])] for p in poly], np.int32)
+        except (TypeError, ValueError, IndexError):
+            return None
+        bx, by, bw, bh = cv2.boundingRect(pts)
+        bx, by = max(0, bx), max(0, by)
+        bw, bh = min(bw, w - bx), min(bh, h - by)
+        if bw < 8 or bh < 8:
+            return None
+        mask = np.zeros((bh, bw), np.uint8)
+        cv2.fillPoly(mask, [pts - [bx, by]], 255)
+        dist = cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, 5)
+        _, r, _, (cx, cy) = cv2.minMaxLoc(dist)
+        if r < 4:
+            return None
+        half = max(1, int(r * 0.7))          # inscribed square to start from
+        x0, x1 = max(0, cx - half), min(bw - 1, cx + half)
+        y0, y1 = max(0, cy - half), min(bh - 1, cy + half)
+
+        def col_ok(xx, ya, yb):
+            return 0 <= xx < bw and bool((mask[ya:yb + 1, xx] > 0).all())
+
+        def row_ok(yy, xa, xb):
+            return 0 <= yy < bh and bool((mask[yy, xa:xb + 1] > 0).all())
+
+        moved = True
+        while moved:
+            moved = False
+            if col_ok(x0 - 1, y0, y1):
+                x0 -= 1; moved = True
+            if col_ok(x1 + 1, y0, y1):
+                x1 += 1; moved = True
+            if row_ok(y0 - 1, x0, x1):
+                y0 -= 1; moved = True
+            if row_ok(y1 + 1, x0, x1):
+                y1 += 1; moved = True
+        rw, rh = x1 - x0 + 1, y1 - y0 + 1
+        if rw < 8 or rh < 8:
+            return None
+        return (bx + x0, by + y0, rw, rh)
 
     def _estimate_text_angle(self, x, y, w, h):
         """Measure the tilt of the ORIGINAL lettering from its ink strokes, for

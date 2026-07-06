@@ -72,15 +72,19 @@ def compress_output(path: str, target_kb: int = 3072) -> str:
 
 
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
-                     opacity: int = 50):
+                     opacity: int = 50, size: str = "m"):
     """Watermark the finished page. `place` puts the text ONCE in a corner
     ('br','bl','tr','tl' — the default, discreet look) or tiles it diagonally
-    across the whole page ('tile'). `opacity` is 0–100%."""
+    across the whole page ('tile'). `opacity` is 0–100%; `size` is
+    's' / 'm' / 'l'."""
     img = cv2.imread(image_path)
     if img is None:
         return
     h, w = img.shape[:2]
     alpha = int(np.clip(int(opacity or 50), 5, 100) * 255 / 100)
+    # Corner divisors: l = the old size, m/s progressively smaller.
+    corner_div = {"l": 42, "m": 58, "s": 78}.get(size, 58)
+    tile_div = {"l": 28, "m": 38, "s": 50}.get(size, 38)
     pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).convert("RGBA")
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -93,7 +97,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
             return ImageFont.load_default()
 
     if place == "tile":
-        font = _font(max(16, min(w, h) // 28))
+        font = _font(max(16, min(w, h) // tile_div))
         bb = draw.textbbox((0, 0), text, font=font)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         step_x = tw + max(80, tw)
@@ -103,7 +107,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
                 draw.text((x, y), text, fill=(128, 128, 128, alpha), font=font)
         overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
     else:
-        font = _font(max(14, min(w, h) // 42))
+        font = _font(max(10, min(w, h) // corner_div))
         bb = draw.textbbox((0, 0), text, font=font)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         m = max(10, min(w, h) // 60)
@@ -241,6 +245,7 @@ async def translate(
     watermark: str = Form(""),
     wm_place: str = Form("br"),
     wm_opacity: str = Form("50"),
+    wm_size: str = Form("m"),
     style_prompt: str = Form(""),
     text_case: str = Form("upper"),
     finish: str = Form("clean"),
@@ -297,6 +302,7 @@ async def translate(
         "watermark": watermark.strip(),
         "wm_place": wm_place.strip() or "br",
         "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+        "wm_size": wm_size.strip() or "m",
         "text_case": text_case,
         "finish": finish,
         "enhance_provider": enhance_provider,
@@ -322,6 +328,7 @@ async def translate(
             watermark=watermark.strip(),
             wm_place=wm_place.strip() or "br",
             wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+            wm_size=wm_size.strip() or "m",
             style_prompt=style_prompt.strip(),
             text_case=text_case,
             finish=finish,
@@ -359,6 +366,7 @@ async def _run(
     watermark: str = "",
     wm_place: str = "br",
     wm_opacity: int = 50,
+    wm_size: str = "m",
     style_prompt: str = "",
     text_case: str = "upper",
     finish: str = "clean",
@@ -504,7 +512,7 @@ async def _run(
         # "replace watermark" is on — there the user's mark is dropped in place
         # of the erased site watermark instead.
         if watermark and not replace_watermark:
-            _stamp_watermark(output_path, watermark, wm_place, wm_opacity)
+            _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size)
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
         if compress:
@@ -1086,6 +1094,9 @@ async def rerender(task_id: str, request: Request):
         if not bbox or not text:
             continue
         aid = str(a.get("id", f"m{len(added) + 1}"))
+        poly = a.get("poly")
+        if not (isinstance(poly, list) and len(poly) >= 3):
+            poly = None
         added.append({
             "id": aid,
             "bbox": _bbox(aid, [int(v) for v in bbox]),
@@ -1094,6 +1105,7 @@ async def rerender(task_id: str, request: Request):
             "type": "manual",
             "in_bubble": False,
             "manual": True,
+            "poly": poly,      # point-selected outline: text stays inside it
             "color": colors.get(aid, "auto"),
             "font_scale": _scale(aid),
         })
@@ -1135,7 +1147,8 @@ async def rerender(task_id: str, request: Request):
         wm = t.get("watermark", "")
         if wm:
             _stamp_watermark(r["output_path"], wm,
-                             t.get("wm_place", "br"), t.get("wm_opacity", 50))
+                             t.get("wm_place", "br"), t.get("wm_opacity", 50),
+                             t.get("wm_size", "m"))
 
     await asyncio.get_event_loop().run_in_executor(None, work)
 
@@ -1291,6 +1304,7 @@ async def ocr_translate(task_id: str, request: Request):
     model = payload.get("model", "")
     target_lang = payload.get("target_lang", "English")
     style_prompt = payload.get("style_prompt", "")
+    poly = payload.get("poly")   # optional point-selected outline (image coords)
 
     if not bbox or len(bbox) != 4:
         raise HTTPException(400, "bbox must be [x, y, w, h]")
@@ -1311,6 +1325,20 @@ async def ocr_translate(task_id: str, request: Request):
             return {"original": "", "translation": ""}
 
         crop = img[y0:y1, x0:x1]
+        # Point-selected outline: white out everything OUTSIDE the polygon so
+        # OCR / vision reads ONLY the text the user selected — neighbouring
+        # lines can't bleed into the reading.
+        if poly and isinstance(poly, list) and len(poly) >= 3:
+            try:
+                pm = np.zeros(crop.shape[:2], np.uint8)
+                pts = np.array([[int(px) - x0, int(py) - y0] for px, py in poly],
+                               np.int32)
+                cv2.fillPoly(pm, [pts], 255)
+                if cv2.countNonZero(pm):
+                    crop = crop.copy()
+                    crop[pm == 0] = (255, 255, 255)
+            except Exception as e:
+                print(f"[ocr-translate] poly mask skipped: {e}")
         translator = make_translator(provider, api_key, model, style_prompt,
                                      source_lang=t.get("source_lang", "Japanese"),
                                      translate_sfx=bool(t.get("translate_sfx", False)))

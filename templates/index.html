@@ -155,6 +155,11 @@
               <option value="tl">Corner — top left</option>
               <option value="tile">Tiled across whole page</option>
             </select>
+            <select id="wmSize" style="width:96px" title="Watermark size">
+              <option value="s">Small</option>
+              <option value="m" selected>Medium</option>
+              <option value="l">Large</option>
+            </select>
             <input type="number" id="wmOpacity" min="10" max="100" step="5" value="50"
                    style="width:76px" title="Opacity %">
           </div>
@@ -469,6 +474,7 @@
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso" title="Draw a free-form shape around anything (weird shapes) — content-aware erases it">⬡ Lasso erase</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso-add" title="Draw a free-form shape over weird-shaped/missed text — it reads &amp; translates it">⬡＋ Lasso translate</button>
+              <button class="btn btn-ghost btn-sm tool-btn" data-tool="pen-add" title="Pen select: CLICK points around the text to build a custom shape (click the first point or press Enter to close). Only what's inside is read, and the translation stays inside your shape.">⬠ Point translate</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="keep" title="Draw around the page — everything OUTSIDE the outline becomes white (removes carpet/floor/background)">⬚ Remove BG</button>
               <button class="btn btn-ghost btn-sm" id="rescanBtn" title="Re-scan this page with AI and add any text it missed (keeps your edits)">🔍 Find missed text</button>
               <button class="btn btn-ghost btn-sm" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>

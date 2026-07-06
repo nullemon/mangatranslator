@@ -681,6 +681,7 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("watermark", watermarkInput.value.trim());
         if (wmPlace) f.append("wm_place", wmPlace.value);
         if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
+        if (wmSize) f.append("wm_size", wmSize.value);
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -717,6 +718,7 @@ document.addEventListener("DOMContentLoaded", () => {
         f.append("watermark", watermarkInput.value.trim());
         if (wmPlace) f.append("wm_place", wmPlace.value);
         if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
+        if (wmSize) f.append("wm_size", wmSize.value);
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -1153,7 +1155,7 @@ document.addEventListener("DOMContentLoaded", () => {
           offsets: page.offsets || {},
           covers: page.covers || [],
           colors: page.colors || {},
-          added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, translation: a.translation })),
+          added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, poly: a.poly || null, translation: a.translation })),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
@@ -1186,6 +1188,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "lasso-add": "Draw a free-form shape over weird-shaped or missed text — it's read & translated. Edit, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
+    "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
   };
 
   toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
@@ -1229,6 +1232,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (wmOpacity) {
     wmOpacity.value = localStorage.getItem("manga_wm_opacity") || "50";
     wmOpacity.addEventListener("change", () => localStorage.setItem("manga_wm_opacity", wmOpacity.value));
+  }
+  const wmSize = document.getElementById("wmSize");
+  if (wmSize) {
+    wmSize.value = localStorage.getItem("manga_wm_size") || "m";
+    wmSize.addEventListener("change", () => localStorage.setItem("manga_wm_size", wmSize.value));
   }
   if (transStyle) {
     transStyle.value = localStorage.getItem("manga_trans_style") || "natural";
@@ -1747,7 +1755,79 @@ document.addEventListener("DOMContentLoaded", () => {
     moveLayer.addEventListener("pointercancel", finishLasso);
   })();
 
-  async function autoTranslate(page, bbox) {
+  /* pen / point selection: click points, connect them into a custom shape */
+  (function initPen() {
+    const NS = "http://www.w3.org/2000/svg";
+    let pts = [], svg = null, line = null;
+    function reset() {
+      if (svg) svg.remove();
+      svg = null; line = null; pts = [];
+    }
+    function redraw() {
+      if (!svg || !svg.isConnected) {
+        if (svg) svg.remove();
+        svg = document.createElementNS(NS, "svg");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6";
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        line = document.createElementNS(NS, "polyline");
+        line.setAttribute("fill", "rgba(22,163,74,.15)");
+        line.setAttribute("stroke", "#16a34a");
+        line.setAttribute("stroke-width", "0.4");
+        svg.appendChild(line);
+        moveLayer.appendChild(svg);
+      }
+      line.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+      svg.querySelectorAll("circle").forEach(c => c.remove());
+      pts.forEach(([px, py], i) => {
+        const c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", px); c.setAttribute("cy", py);
+        c.setAttribute("r", i === 0 ? "1.1" : "0.7");   // first point bigger = click it to close
+        c.setAttribute("fill", i === 0 ? "#dc2626" : "#16a34a");
+        svg.appendChild(c);
+      });
+    }
+    function finish() {
+      const page = getActive(), dims = curDims();
+      const myPts = pts;
+      reset();
+      if (!page || !dims || myPts.length < 3) return;
+      pushUndo(page);
+      const [W, H] = dims;
+      const polyImg = myPts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
+      const xs = polyImg.map(p => p[0]), ys = polyImg.map(p => p[1]);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+      page.covers = page.covers || [];
+      page.covers.push({ poly: polyImg });   // erase the original inside the shape
+      if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h], polyImg);
+      else buildOverlay();
+    }
+    moveLayer.addEventListener("pointerdown", e => {
+      if (tool !== "pen-add" || e.target !== moveLayer) return;
+      const page = getActive(); if (!page || !curDims()) return;
+      if (svg && !svg.isConnected) reset();   // overlay was rebuilt — stale points
+      const r = moveLayer.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width * 100;
+      const py = (e.clientY - r.top) / r.height * 100;
+      if (pts.length >= 3 && Math.hypot(px - pts[0][0], py - pts[0][1]) < 2.2) {
+        finish();   // clicked the first point — close the shape
+        return;
+      }
+      pts.push([px, py]);
+      redraw();
+    });
+    moveLayer.addEventListener("dblclick", () => {
+      if (tool === "pen-add" && pts.length >= 3) finish();
+    });
+    document.addEventListener("keydown", e => {
+      if (tool !== "pen-add" || !pts.length) return;
+      if (e.key === "Enter") { e.preventDefault(); finish(); }
+      if (e.key === "Escape") reset();
+    });
+  })();
+
+  async function autoTranslate(page, bbox, poly) {
     editHint.textContent = "Reading & translating…";
     let data = { original: "", translation: "" };
     try {
@@ -1756,11 +1836,12 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bbox,
+          poly: poly || null,   // pen outline: OCR reads ONLY inside the shape
           api_key: apiKeyInput.value.trim(),
           provider: engineSelect.value,
           model: modelSelect.value,
           target_lang: targetLang.value,
-          style_prompt: stylePrompt ? stylePrompt.value.trim() : "",
+          style_prompt: styleText(),
         }),
       });
       if (resp.ok) data = await resp.json();
@@ -1779,6 +1860,7 @@ document.addEventListener("DOMContentLoaded", () => {
       page.added.push({
         id: "m" + page.addSeq,
         bbox,
+        poly: poly || null,
         original: data.original || "",
         translation: txt.trim(),
         placed: true,
