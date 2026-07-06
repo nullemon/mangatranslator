@@ -381,7 +381,63 @@ document.addEventListener("DOMContentLoaded", () => {
       if (savedFont && [...fontSelect.options].some(o => o.value === savedFont)) {
         fontSelect.value = savedFont;
       }
+      buildFontPicker();
     } catch (_) {}
+  }
+
+  // Native <select> popups are OS widgets and ignore web fonts, so options can
+  // never preview their typeface. Replace it with a custom dropdown of real DOM
+  // rows, each rendered IN its font; the hidden <select> stays the source of
+  // truth (value + change events) so nothing else changes.
+  function buildFontPicker() {
+    const row = fontSelect.closest(".font-row");
+    if (!row) return;
+    const fam = v => 'mtfont_' + v.replace(/[^A-Za-z0-9]/g, "_");
+    let wrap = document.getElementById("fontPicker");
+    if (!wrap) {
+      fontSelect.style.display = "none";
+      wrap = document.createElement("div");
+      wrap.id = "fontPicker";
+      wrap.className = "font-picker";
+      wrap.innerHTML = '<button type="button" class="font-picker-btn"></button>' +
+                       '<div class="font-picker-list" style="display:none"></div>';
+      row.insertBefore(wrap, fontSelect);
+      const btn = wrap.querySelector(".font-picker-btn");
+      const list = wrap.querySelector(".font-picker-list");
+      btn.addEventListener("click", () => {
+        list.style.display = list.style.display === "none" ? "" : "none";
+      });
+      document.addEventListener("pointerdown", e => {
+        if (!wrap.contains(e.target)) list.style.display = "none";
+      });
+    }
+    const btn = wrap.querySelector(".font-picker-btn");
+    const list = wrap.querySelector(".font-picker-list");
+    const syncBtn = () => {
+      const o = fontSelect.options[fontSelect.selectedIndex];
+      btn.textContent = o ? o.textContent : "Auto-detect";
+      btn.style.fontFamily = (o && o.value) ? '"' + fam(o.value) + '", inherit' : "";
+      list.querySelectorAll(".font-picker-item").forEach(x =>
+        x.classList.toggle("active", x.dataset.value === fontSelect.value));
+    };
+    list.innerHTML = "";
+    [...fontSelect.options].forEach(o => {
+      const it = document.createElement("div");
+      it.className = "font-picker-item";
+      it.dataset.value = o.value;
+      it.textContent = o.textContent;
+      if (o.value) it.style.fontFamily = '"' + fam(o.value) + '", inherit';
+      it.addEventListener("click", () => {
+        fontSelect.value = it.dataset.value;
+        fontSelect.dispatchEvent(new Event("change"));
+        list.style.display = "none";
+        syncBtn();
+      });
+      list.appendChild(it);
+    });
+    syncBtn();
+    // re-sync the button once each face finishes loading
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(syncBtn);
   }
   loadFonts();
   fontUpload.addEventListener("change", async () => {

@@ -513,3 +513,23 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .crop-stage img{max-width:95%;max-height:90vh;object-fit:contain;pointer-events:none}
 .crop-sel{position:absolute;border:2px dashed var(--accent);background:rgba(37,99,235,.12);pointer-events:none;z-index:2}
 .crop-stage::after{content:"";position:absolute;inset:0;pointer-events:none}
+
+/* Font picker — custom dropdown so each font previews in its own typeface
+   (native <select> popups are OS widgets and ignore web fonts). */
+.font-picker{position:relative;flex:1;min-width:0}
+.font-picker-btn{
+  width:100%;text-align:left;background:var(--surface-2);border:1px solid var(--border);
+  color:var(--text);padding:.3rem .55rem;border-radius:var(--r-sm);font-size:.82rem;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.font-picker-btn:hover{border-color:var(--border-strong)}
+.font-picker-btn::after{content:"▾";float:right;color:var(--text-faint);font-family:inherit}
+.font-picker-list{
+  position:absolute;left:0;right:0;top:calc(100% + 3px);z-index:60;max-height:320px;
+  overflow:auto;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--r-sm);box-shadow:var(--shadow-lg);
+}
+.font-picker-item{padding:.4rem .6rem;cursor:pointer;font-size:1.02rem;line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.font-picker-item:hover{background:var(--surface-3, rgba(128,128,128,.15))}
+.font-picker-item.active{color:var(--accent)}
