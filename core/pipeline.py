@@ -554,6 +554,92 @@ def _overlap_frac(a, b) -> float:
     return inter / smaller
 
 
+def tidy_free_text(items, remove_watermark=True):
+    """Post-detection cleanup for OUT-OF-BUBBLE text — the three ways a busy
+    title page comes out scrambled:
+      1. a scanlator handle / URL stamped on the raw is never typeset as manga
+         text — it becomes a watermark (erased) or is left untouched;
+      2. a free-text detection that duplicates a line already translated inside
+         a bubble (both passes finding the same text) is dropped;
+      3. fragments of ONE bar (chapter title + credits strip) are merged into a
+         single region, so the translation is typeset once along the bar
+         instead of scattered pieces with smears between them.
+    Bubbles and SFX are never touched."""
+    import re as _re
+    import difflib as _dl
+
+    def norm(s):
+        return _re.sub(r"[\W_]+", "", str(s or "")).lower()
+
+    def is_handle(it):
+        t = f'{it.get("original", "")} {it.get("translation", "")}'
+        return bool(_re.search(r"@[A-Za-z0-9_]{3,}", t)
+                    or _re.search(r"(?:www\.|https?://|\.(?:com|net|org|io)\b)", t, _re.I))
+
+    bubble_texts = [norm(it.get("original")) for it in items
+                    if it.get("in_bubble") is not False]
+    out = []
+    for it in items:
+        if (it.get("in_bubble") is False and it.get("type") != "watermark"
+                and is_handle(it)):
+            if remove_watermark:
+                out.append(dict(it, type="watermark", translation=""))
+            # else: drop — leave the raw's handle as-is, never typeset it
+            continue
+        o = norm(it.get("original"))
+        if (it.get("in_bubble") is False and len(o) >= 3
+                and any(o == b or (len(o) >= 4 and (o in b or b in o))
+                        or _dl.SequenceMatcher(None, o, b).ratio() >= 0.8
+                        for b in bubble_texts if b)):
+            continue      # same line already translated inside a bubble
+        out.append(it)
+
+    MERGE_TYPES = {"title", "credit", "caption", "narration"}
+
+    def mergeable(a, b):
+        if a.get("in_bubble") is not False or b.get("in_bubble") is not False:
+            return False
+        if (a.get("type") or "") not in MERGE_TYPES or (b.get("type") or "") not in MERGE_TYPES:
+            return False
+        if abs(float(a.get("rotation", 0) or 0) - float(b.get("rotation", 0) or 0)) > 6:
+            return False
+        ax, ay, aw, ah = a["bbox"]
+        bx, by, bw, bh = b["bbox"]
+        if min(ah, bh) <= 0 or max(ah, bh) > 1.8 * min(ah, bh):
+            return False
+        ov = min(ay + ah, by + bh) - max(ay, by)
+        if ov < 0.55 * min(ah, bh):
+            return False      # not on the same line/bar
+        gap = max(bx - (ax + aw), ax - (bx + bw))
+        return gap <= 1.6 * min(ah, bh)
+
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                a, b = out[i], out[j]
+                if not mergeable(a, b):
+                    continue
+                lo, hi = (a, b) if a["bbox"][0] <= b["bbox"][0] else (b, a)
+                x0 = min(a["bbox"][0], b["bbox"][0])
+                y0 = min(a["bbox"][1], b["bbox"][1])
+                x1 = max(a["bbox"][0] + a["bbox"][2], b["bbox"][0] + b["bbox"][2])
+                y1 = max(a["bbox"][1] + a["bbox"][3], b["bbox"][1] + b["bbox"][3])
+                a["bbox"] = [int(x0), int(y0), int(x1 - x0), int(y1 - y0)]
+                a["original"] = " ".join(
+                    s for s in (lo.get("original", ""), hi.get("original", "")) if s)
+                a["translation"] = " ".join(
+                    s.strip() for s in (lo.get("translation", ""), hi.get("translation", ""))
+                    if s and s.strip())
+                out.pop(j)
+                merged = True
+                break
+            if merged:
+                break
+    return out
+
+
 def make_detector(use_seg: bool = True):
     """Prefer the GPU segmentation model; fall back to CV when it's unavailable."""
     if use_seg:
@@ -887,6 +973,17 @@ class TranslationPipeline:
             items, ann_path, masks = self._smart_detect(image, output_path, update)
         else:
             items, ann_path, masks = self._standard_detect(image, output_path, update)
+        # Understand the page, not just the boxes: drop free text that
+        # duplicates a bubble line, merge fragments of one title/credit bar,
+        # and never typeset a scanlator handle from the raw.
+        try:
+            before = len(items)
+            items = tidy_free_text(items, self.remove_watermark)
+            if len(items) != before:
+                print(f"[pipeline] tidy: {before} -> {len(items)} regions "
+                      f"(deduped duplicates / merged bar fragments)")
+        except Exception as e:
+            print(f"[pipeline] tidy pass skipped: {e}")
         self.last_masks = masks
 
         if self.credit:
