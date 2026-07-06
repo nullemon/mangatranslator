@@ -1035,6 +1035,12 @@ async def rerender(task_id: str, request: Request):
     colors = {str(k): v for k, v in (payload.get("colors") or {}).items()}
     font_scales = {str(k): v for k, v in (payload.get("font_scales") or {}).items()}
     boxes = {str(k): v for k, v in (payload.get("boxes") or {}).items()}
+    rotations = {}
+    for k, v in (payload.get("rotations") or {}).items():
+        try:
+            rotations[str(k)] = max(-80.0, min(80.0, float(v)))
+        except (TypeError, ValueError):
+            pass
 
     def _scale(nid):
         try:
@@ -1078,7 +1084,8 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
             "color": colors.get(nid, "auto"),
-            "rotation": it.get("rotation", 0),
+            "rotation": rotations.get(nid, it.get("rotation", 0)),
+            "manual_rot": nid in rotations,
             "font_scale": _scale(nid),
             "glow": nid in glows,
             # A box the user resized by hand is authoritative — the compositor
@@ -1106,6 +1113,8 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": False,
             "manual": True,
             "poly": poly,      # point-selected outline: text stays inside it
+            "rotation": rotations.get(aid, 0),
+            "manual_rot": aid in rotations,
             "color": colors.get(aid, "auto"),
             "font_scale": _scale(aid),
         })

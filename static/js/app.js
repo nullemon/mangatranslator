@@ -1154,6 +1154,7 @@ document.addEventListener("DOMContentLoaded", () => {
           boxes: page.boxes || {},
           offsets: page.offsets || {},
           covers: page.covers || [],
+          rotations: page.rotations || {},
           colors: page.colors || {},
           added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, poly: a.poly || null, translation: a.translation })),
         }),
@@ -1273,6 +1274,7 @@ document.addEventListener("DOMContentLoaded", () => {
       glows: [...(page.glows || [])], offsets: page.offsets || {},
       colors: page.colors || {}, fontScales: page.fontScales || {},
       boxes: page.boxes || {}, covers: page.covers || [],
+      rotations: JSON.parse(JSON.stringify(page.rotations || {})),
       added: (page.added || []).map(a => ({ ...a })),
       trans: (page.items || []).map(it => it.translation || ""),
     });
@@ -1282,6 +1284,7 @@ document.addEventListener("DOMContentLoaded", () => {
     page.excluded = new Set(s.excluded); page.erased = new Set(s.erased);
     page.glows = new Set(s.glows); page.offsets = s.offsets; page.colors = s.colors;
     page.fontScales = s.fontScales; page.boxes = s.boxes; page.covers = s.covers;
+    page.rotations = s.rotations || {};
     page.added = s.added;
     (page.items || []).forEach((it, i) => { if (i < s.trans.length) it.translation = s.trans[i]; });
   }
@@ -1595,6 +1598,12 @@ document.addEventListener("DOMContentLoaded", () => {
         <button class="clr-opt${curClr === "black" ? " active" : ""}" data-c="black"><span class="clr-dot" style="background:#111"></span> Black</button>
         <button class="clr-opt${curClr === "white" ? " active" : ""}" data-c="white"><span class="clr-dot" style="background:#fff;border-color:#999"></span> White</button>
       </div>
+      <div class="edit-pop-color">
+        <span class="epop-clabel">Tilt&deg;</span>
+        <input type="number" class="epop-rot" min="-80" max="80" step="1"
+               value="${(page.rotations || {})[it.id] != null ? (page.rotations || {})[it.id] : (it.rotation || 0)}"
+               style="width:64px" title="Text angle in degrees (clockwise; 0 = horizontal)">
+      </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
         <span class="spacer"></span>
@@ -1608,6 +1617,13 @@ document.addEventListener("DOMContentLoaded", () => {
     pop.querySelector(".epop-cancel").addEventListener("click", closeEditor);
     pop.querySelector(".epop-save").addEventListener("click", () => {
       it.translation = ta.value;
+      const rotEl = pop.querySelector(".epop-rot");
+      if (rotEl) {
+        const rv = parseFloat(rotEl.value);
+        page.rotations = page.rotations || {};
+        if (!isNaN(rv) && rv !== (it.rotation || 0)) page.rotations[it.id] = rv;
+        else if (isNaN(rv)) delete page.rotations[it.id];
+      }
       const f = document.querySelector('.tl-edit[data-id="' + it.id + '"]');
       if (f) f.value = ta.value;
       closeEditor();

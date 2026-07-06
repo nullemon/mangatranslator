@@ -244,9 +244,12 @@ class Compositor:
             bx, by, bw, bh = [int(v) for v in bbox]
 
             rotation = float(it.get("rotation", 0))
-            # English text at steep angles (>45°) is unreadable sideways;
-            # render it horizontally in the (tall-narrow) rect instead.
-            if abs(rotation) > 45:
+            if it.get("manual_rot"):
+                # User-set tilt: honour it as-is (safety-capped only).
+                rotation = max(-80.0, min(80.0, rotation))
+            elif abs(rotation) > 45:
+                # English text at steep angles (>45°) is unreadable sideways;
+                # render it horizontally in the (tall-narrow) rect instead.
                 rotation = 0
 
             # Manually added text, OR any box the user resized by hand: erase
@@ -266,12 +269,15 @@ class Compositor:
                 # bare artwork has just its strokes inpainted out (no slab).
                 cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
                 rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
-                # Point-selected outline: the translation must sit strictly
-                # INSIDE the user's shape, not the loose bounding box.
+                # Point-selected outline: the translation must sit inside the
+                # user's shape — and a strip-shaped selection runs ALONG the
+                # strip at its own angle (a tilted banner gets tilted text).
                 if it.get("poly"):
-                    pr = self._poly_inner_rect(it["poly"], w, h)
+                    pr, prot = self._poly_placement(it["poly"], w, h)
                     if pr is not None:
                         rect = pr
+                        if not it.get("manual_rot") and abs(prot) >= 1.0:
+                            rotation = prot
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
@@ -383,7 +389,8 @@ class Compositor:
 
             edited_rects.append(tuple(int(v) for v in bb))
             color = self._pick_color(dark, it)
-            placements.append((offset_rect(it, rect), text, color, ital, 0,
+            placements.append((offset_rect(it, rect), text, color, ital,
+                               rotation if it.get("manual_rot") else 0,
                                self._item_scale(it), self._item_glow(it)))
             it["placed"] = True
 
@@ -949,6 +956,38 @@ class Compositor:
         if rw < 8 or rh < 8:
             return None
         return (bx + x0, by + y0, rw, rh)
+
+    def _poly_placement(self, poly, w, h):
+        """Placement for a point-selected shape. If the outline is an elongated
+        TILTED strip (a slanted title bar), return the strip's OWN box and
+        angle so the text runs along the selection, filling it — the largest
+        axis-aligned rectangle inside a thin diagonal strip is a tiny square,
+        which crammed the text into one end. Otherwise fall back to the
+        largest axis-aligned inside rectangle. Returns (rect_or_None, angle)."""
+        try:
+            pts = np.array([[float(p[0]), float(p[1])] for p in poly], np.float32)
+        except (TypeError, ValueError):
+            return None, 0.0
+        if len(pts) < 3:
+            return None, 0.0
+        (cx, cy), (rw, rh), ang = cv2.minAreaRect(pts)
+        if rw < rh:
+            rw, rh = rh, rw
+            ang += 90.0
+        while ang > 90.0:
+            ang -= 180.0
+        while ang <= -90.0:
+            ang += 180.0
+        if rw >= 1.7 * rh and abs(ang) <= 40.0:
+            # Elongated strip (title bar / banner) — even a 1-2° tilt makes the
+            # axis-aligned inside-rectangle collapse to a small box at the
+            # strip's high end. Use the strip's OWN full-length box, at its own
+            # angle, so the text runs along the whole selection.
+            bw, bh = rw * 0.94, rh * 0.72
+            rect = (int(cx - bw / 2), int(cy - bh / 2),
+                    max(int(bw), 8), max(int(bh), 8))
+            return rect, (float(ang) if abs(ang) >= 1.0 else 0.0)
+        return self._poly_inner_rect(poly, w, h), 0.0
 
     def _estimate_text_angle(self, x, y, w, h):
         """Measure the tilt of the ORIGINAL lettering from its ink strokes, for
