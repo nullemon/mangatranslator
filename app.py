@@ -1200,8 +1200,11 @@ async def rerender(task_id: str, request: Request):
         # outside. Kept separate from erase covers so compose ignores them.
         keep_polys = [c["keep_poly"] for c in covers
                       if isinstance(c, dict) and c.get("keep_poly")]
+        restore_polys = [c["restore_poly"] for c in covers
+                         if isinstance(c, dict) and c.get("restore_poly")]
         erase_covers = [c for c in covers
-                        if not (isinstance(c, dict) and c.get("keep_poly"))]
+                        if not (isinstance(c, dict)
+                                and (c.get("keep_poly") or c.get("restore_poly")))]
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"),
                           translate_sfx=bool(t.get("translate_sfx", False)),
@@ -1222,6 +1225,28 @@ async def rerender(task_id: str, request: Request):
                     cv2.fillPoly(mask, [pts], 255)
             if cv2.countNonZero(mask):
                 out[mask == 0] = (255, 255, 255)   # background → white (no crop, keeps coords aligned)
+        if restore_polys:
+            # Restore eraser: put the ORIGINAL pixels back wherever the user
+            # outlined — undoes content-aware fills that chewed the art. The
+            # source is the pre-clean base (original art, original text); it
+            # gets the same page finish as the rest so tones match seamlessly.
+            h, w = out.shape[:2]
+            rmask = np.zeros((h, w), np.uint8)
+            for poly in restore_polys:
+                pts = np.array(poly, np.int32).reshape(-1, 2)
+                if len(pts) >= 3:
+                    cv2.fillPoly(rmask, [pts], 255)
+            if cv2.countNonZero(rmask):
+                orig_p = r.get("base_path", "")
+                src = cv2.imread(orig_p) if orig_p and os.path.exists(orig_p) else None
+                if src is None:
+                    src = base_img
+                if src.shape[:2] != (h, w):
+                    src = cv2.resize(src, (w, h), interpolation=cv2.INTER_AREA)
+                if t.get("finish", "clean") in ("clean", "api"):
+                    src = scan_finish(src)
+                rm = rmask > 0
+                out[rm] = src[rm]
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:

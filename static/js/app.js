@@ -1264,6 +1264,7 @@ document.addEventListener("DOMContentLoaded", () => {
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
+    restore: "Draw around a damaged spot — the ORIGINAL art comes back exactly as drawn (undoes content-aware cleaning there; original text returns too). Then Apply & Re-render.",
   };
 
   toolBtns.forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
@@ -1486,6 +1487,23 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("fill", "none");
         pg.setAttribute("stroke", "#2563eb");
         pg.setAttribute("stroke-width", "0.6");
+        pg.setAttribute("stroke-dasharray", "2 1.5");
+        svg.appendChild(pg);
+        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        moveLayer.appendChild(svg);
+        return;
+      }
+      if (cb && cb.restore_poly) {   // restore-original outline
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        const pg = document.createElementNS(NS, "polygon");
+        pg.setAttribute("points", cb.restore_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
+        pg.setAttribute("fill", "rgba(245,158,11,.14)");
+        pg.setAttribute("stroke", "#f59e0b");
+        pg.setAttribute("stroke-width", "0.5");
         pg.setAttribute("stroke-dasharray", "2 1.5");
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
@@ -1804,19 +1822,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const NS = "http://www.w3.org/2000/svg";
     let drawing = false, pts = [], svg = null, poly = null;
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "lasso" && tool !== "lasso-add" && tool !== "keep") return;
+      if (tool !== "lasso" && tool !== "lasso-add" && tool !== "keep" && tool !== "restore") return;
       if (e.target !== moveLayer) return;
       const page = getActive(); if (!page || !curDims()) return;
       drawing = true; pts = [];
       const add = tool === "lasso-add";
       const keep = tool === "keep";
+      const restore = tool === "restore";
       svg = document.createElementNS(NS, "svg");
       svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6";
       svg.setAttribute("viewBox", "0 0 100 100");
       svg.setAttribute("preserveAspectRatio", "none");
       poly = document.createElementNS(NS, "polyline");
-      poly.setAttribute("fill", keep ? "rgba(37,99,235,.12)" : add ? "rgba(22,163,74,.18)" : "rgba(220,38,38,.18)");
-      poly.setAttribute("stroke", keep ? "#2563eb" : add ? "#16a34a" : "#dc2626");
+      poly.setAttribute("fill", restore ? "rgba(245,158,11,.18)" : keep ? "rgba(37,99,235,.12)" : add ? "rgba(22,163,74,.18)" : "rgba(220,38,38,.18)");
+      poly.setAttribute("stroke", restore ? "#f59e0b" : keep ? "#2563eb" : add ? "#16a34a" : "#dc2626");
       poly.setAttribute("stroke-width", "0.5");
       svg.appendChild(poly); moveLayer.appendChild(svg);
       const r = moveLayer.getBoundingClientRect();
@@ -1841,7 +1860,15 @@ document.addEventListener("DOMContentLoaded", () => {
       const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
       const wasAdd = tool === "lasso-add";
       const wasKeep = tool === "keep";
+      const wasRestore = tool === "restore";
       pts = [];
+      if (wasRestore) {
+        // Restore eraser: original pixels come back inside this outline.
+        page.covers = page.covers || [];
+        page.covers.push({ restore_poly: polyImg });
+        buildOverlay();
+        return;
+      }
       if (wasKeep) {
         // Remove BG: keep inside this outline, white out everything else.
         page.covers = page.covers || [];
