@@ -329,6 +329,15 @@ class Compositor:
                         pad = max(3, min(bw, bh) // 12)
                         rect = (bx + pad, by + pad,
                                 max(bw - 2 * pad, 8), max(bh - 2 * pad, 8))
+                # Vertical source column (すごい… style): a tall-narrow rect
+                # width-crushes horizontal English into a tiny font. Re-shape it
+                # into a horizontal box at the column's center, sized to the
+                # SOURCE glyphs, growing sideways only over quiet background.
+                if abs(rotation) < 3 and not it.get("manual_rot"):
+                    wided = self._widen_vertical_rect(rect, result, used_boxes)
+                    if wided != tuple(int(v) for v in rect):
+                        rect = wided
+                        used_boxes.append(tuple(int(v) for v in rect))
                 # Store the TIGHT text rect as the region's box (not the ballooned
                 # refine box) so the editor handle hugs the words — "same size as
                 # the text or a touch bigger", not a giant rectangle.
@@ -1044,6 +1053,46 @@ class Compositor:
         rh = int(w * s + h * c) + 4
         cx, cy = x + w // 2, y + h // 2
         return (cx - rw // 2, cy - rh // 2, rw, rh)
+
+    def _widen_vertical_rect(self, rect, result, used_boxes):
+        """A tall-narrow free-text rect means the SOURCE was a vertical
+        Japanese column. English renders horizontally, so auto-fitting it
+        into the column forces a width-constrained, near-invisible font.
+        Convert to a horizontal box: keep the column's center, make the box
+        about two source glyphs tall (column width ~= one JP character, so
+        the fitted English matches the source presence), and grow sideways
+        only while the cleaned page under the band stays quiet — art strokes
+        and panel borders stop the growth. Returns the original rect when
+        the shape isn't a column or there's no room to win."""
+        x, y, rw, rh = [int(v) for v in rect]
+        orig = (x, y, rw, rh)
+        H, W = result.shape[:2]
+        if rw < 8 or rh < int(1.8 * rw):
+            return orig
+        char = rw
+        cy = y + rh // 2
+        nh = int(min(rh, max(2.6 * char, 24)))
+        ny = max(0, min(cy - nh // 2, H - nh))
+        band = cv2.cvtColor(result[ny:ny + nh], cv2.COLOR_BGR2GRAY)
+        quiet = (band < 160).mean(axis=0) < 0.10
+        limit = int(5 * char)
+        left = x
+        while left > max(0, x - limit) and quiet[left - 1]:
+            left -= 1
+        right = x + rw
+        while right < min(W, x + rw + limit) and quiet[right]:
+            right += 1
+        pad = max(2, char // 8)
+        left, right = left + pad, right - pad
+        if right - left <= rw * 1.5:
+            return orig
+        cand = (int(left), int(ny), int(right - left), int(nh))
+        for ub in used_boxes:
+            if self._overlaps(orig, ub):
+                continue  # our own planned box
+            if self._overlaps(cand, ub):
+                return orig
+        return cand
 
     def _overlaps(self, a, b) -> bool:
         ax, ay, aw, ah = a
