@@ -1698,6 +1698,13 @@ document.addEventListener("DOMContentLoaded", () => {
                style="flex:1" title="Drag to tilt — live preview on the page">
         <span class="epop-rot-val" style="min-width:34px;text-align:right"></span>
       </div>
+      <div class="edit-pop-color">
+        <span class="epop-clabel">Size</span>
+        <input type="range" class="epop-fs" min="40" max="300" step="5"
+               value="${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}"
+               style="flex:1" title="Drag to grow/shrink this text — live preview on the page">
+        <span class="epop-fs-val" style="min-width:34px;text-align:right"></span>
+      </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
         <span class="spacer"></span>
@@ -1710,6 +1717,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // artwork instantly — the server re-render happens once, on Save.
     const rotEl = pop.querySelector(".epop-rot");
     const rotVal = pop.querySelector(".epop-rot-val");
+    const fsEl = pop.querySelector(".epop-fs");
+    const fsVal = pop.querySelector(".epop-fs-val");
     if (rotEl) {
       const ghost = document.createElement("div");
       ghost.className = "tilt-ghost";
@@ -1721,12 +1730,15 @@ document.addEventListener("DOMContentLoaded", () => {
       moveLayer.appendChild(ghost);
       const sync = () => {
         const v = parseFloat(rotEl.value) || 0;
+        const fscale = fsEl ? (parseFloat(fsEl.value) || 100) / 100 : 1;
         ghost.style.transform = "rotate(" + v + "deg)";
         ghost.style.fontSize =
-          Math.max(9, (it.bbox[3] / H) * moveLayer.clientHeight * 0.45) + "px";
+          Math.max(6, (it.bbox[3] / H) * moveLayer.clientHeight * 0.45 * fscale) + "px";
         if (rotVal) rotVal.textContent = v + "\u00B0";
+        if (fsVal) fsVal.textContent = Math.round(fscale * 100) + "%";
       };
       rotEl.addEventListener("input", sync);
+      if (fsEl) fsEl.addEventListener("input", sync);
       sync();
     }
     const ta = pop.querySelector(".edit-pop-text");
@@ -1739,6 +1751,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const rv = parseFloat(rotSave.value);
         page.rotations = page.rotations || {};
         if (!isNaN(rv)) page.rotations[it.id] = rv;
+      }
+      const fsSave = pop.querySelector(".epop-fs");
+      if (fsSave) {
+        const fv = (parseFloat(fsSave.value) || 100) / 100;
+        page.fontScales = page.fontScales || {};
+        if (fv === 1.0) delete page.fontScales[it.id];
+        else page.fontScales[it.id] = fv;
+        const span = document.querySelector('.tl-fsv[data-id="' + it.id + '"]');
+        if (span) span.textContent = Math.round(fv * 100) + "%";
       }
       const f = document.querySelector('.tl-edit[data-id="' + it.id + '"]');
       if (f) f.value = ta.value;
