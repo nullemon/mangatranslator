@@ -266,9 +266,14 @@ class TextRenderer:
         alpha = layer.split()[3]
         if not alpha.getbbox():          # nothing drawn
             return image
-        spread = max(3, int(rect[3] * 0.012) | 1)   # halo thickness ~ text size
-        halo = alpha.filter(ImageFilter.MaxFilter(spread)).filter(
-            ImageFilter.GaussianBlur(spread))
+        # Tight stroke that hugs the letterforms (pro style): ~11% of the
+        # fitted glyph size, with only a 1px soften — not a wide soft cloud.
+        f = float(getattr(self, "_last_font_size", 0) or 0)
+        if f <= 0:
+            f = max(12.0, rect[3] * 0.5)
+        stroke = int(max(2, min(10, round(f * 0.11))))
+        halo = alpha.filter(ImageFilter.MaxFilter(2 * stroke + 1)).filter(
+            ImageFilter.GaussianBlur(1.0))
         solid = Image.new("RGB", image.size, glow_color)
         image.paste(solid, (0, 0), halo)   # paint the halo
         image.paste(solid, (0, 0), halo)   # twice → a bit more intensity
@@ -360,6 +365,9 @@ class TextRenderer:
             cap = max(inner_w, inner_h)
             font_size = max(self.min_font_size,
                             min(int(round(font_size * self._size_scale)), cap))
+        # Remembered so the glow pass can size its stroke to the GLYPHS,
+        # not to the box (a box-sized halo spreads into a wide cloud).
+        self._last_font_size = font_size
         font = self._get_font(font_size)
         sw = max(1, font_size // 18) * 2
         wrap_w = max(inner_w - sw, 8)
