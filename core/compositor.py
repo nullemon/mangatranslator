@@ -535,14 +535,105 @@ class Compositor:
         x, y, w, h = cv2.boundingRect(poly)
         if w < 3 or h < 3:
             return None
+        # Fill from a LOCAL padded window and write back ONLY the masked
+        # pixels — the rest of the page is never resampled or repainted.
+        pad = int(np.clip(0.5 * max(w, h), 24, 200))
+        wx0, wy0 = max(0, x - pad), max(0, y - pad)
+        wx1, wy1 = min(W, x + w + pad), min(H, y + h + pad)
+        sub = result[wy0:wy1, wx0:wx1]
+        mwin = mask[wy0:wy1, wx0:wx1]
+        out = None
         if self.lama is not None and self.lama.ok:
-            out = self.lama.inpaint(result, mask)
-            if out is not None:
-                result[:] = out
-                return (x, y, w, h)
-        inp = cv2.inpaint(result, mask, 5, cv2.INPAINT_TELEA)
-        result[:] = inp
+            out = self.lama.inpaint(sub, mwin)
+        if out is None:
+            out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
+        m = mwin > 0
+        sub[m] = out[m]
         return (x, y, w, h)
+
+    def _stroke_halo_mask(self, gray_roi, seg_roi=None):
+        """Tight mask of the LETTERING ONLY: glyph strokes plus their white
+        outline/glow — and nothing else.
+
+        The deviation mask marks ink of either polarity, but that includes
+        ART lines running through the box, and inpainting those is exactly
+        how a busy panel turns to mush. So the mask is built around a TEXT
+        ANCHOR: the GPU seg strokes when available, else the bright glow
+        mass (free text over art always wears one — that's what keeps it
+        readable). Only deviation components touching the anchor survive;
+        stray art lines away from the lettering are left alone. When there
+        is no anchor and the background is flat paper (nothing to protect),
+        every deviation is text and all of it is taken."""
+        dev = self._ink_mask(gray_roi)
+        h_, w_ = gray_roi.shape[:2]
+        have_seg = seg_roi is not None and cv2.countNonZero(seg_roi) >= 10
+        if cv2.countNonZero(dev) == 0 and not have_seg:
+            return np.zeros((h_, w_), np.uint8)
+        sigma = max(3.0, min(h_, w_) / 6.0)
+        bg = cv2.GaussianBlur(cv2.medianBlur(gray_roi, 3), (0, 0), sigma)
+        delta = gray_roi.astype(np.int16) - bg.astype(np.int16)
+        # Glow = genuinely WHITE pixels that stand off the background. Big
+        # dark glyphs drag the blurred background estimate down, which makes
+        # plain mid-gray tone "deviate" — requiring near-white keeps tone out.
+        glow = (((delta > 8) & (gray_roi >= 225) & (dev > 0)) * 255).astype(np.uint8)
+
+        anchor = None
+        if have_seg:
+            anchor = cv2.bitwise_or(seg_roi, glow)
+        elif cv2.countNonZero(glow) >= 30:
+            anchor = glow
+        if anchor is not None:
+            near = cv2.dilate(anchor, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (13, 13)))
+            # Candidates exclude the glow itself: glyph cores are then islands
+            # inside their halo rings, cleanly separated from any surrounding
+            # tone/art deviation they'd otherwise be 8-connected to.
+            cand = cv2.bitwise_and(dev, cv2.bitwise_not(glow))
+            n, labels, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
+            strokes = anchor.copy()
+            for i in range(1, n):
+                cx_, cy_, cw_, ch_ = (int(stats[i, cv2.CC_STAT_LEFT]),
+                                      int(stats[i, cv2.CC_STAT_TOP]),
+                                      int(stats[i, cv2.CC_STAT_WIDTH]),
+                                      int(stats[i, cv2.CC_STAT_HEIGHT]))
+                comp = labels[cy_:cy_ + ch_, cx_:cx_ + cw_] == i
+                # MOSTLY inside the anchor zone — an art line whose END pokes
+                # into the glow must not drag its whole length into the mask.
+                inside = float((near[cy_:cy_ + ch_, cx_:cx_ + cw_][comp] > 0).mean())
+                if inside >= 0.45:
+                    strokes[cy_:cy_ + ch_, cx_:cx_ + cw_][comp] = 255
+        else:
+            strokes = dev.copy()
+            flat = gray_roi[dev == 0]
+            if flat.size and float(np.std(flat)) > 14:
+                # Textured art, no anchor to lean on: at least drop the
+                # obvious long thin lines that cross most of the region.
+                n, labels, stats, _ = cv2.connectedComponentsWithStats(dev, 8)
+                long_side = max(h_, w_)
+                for i in range(1, n):
+                    span = max(int(stats[i, cv2.CC_STAT_WIDTH]),
+                               int(stats[i, cv2.CC_STAT_HEIGHT]))
+                    area = int(stats[i, cv2.CC_STAT_AREA])
+                    if span > 0.6 * long_side and area / max(span, 1) < 4.5:
+                        strokes[labels == i] = 0
+        if cv2.countNonZero(strokes) == 0:
+            return strokes
+
+        # Halo band: catch the soft outer edge of the glow that falls under
+        # the deviation threshold (left behind, it reads as a ghostly white
+        # ring once the strokes vanish). Radius follows stroke thickness —
+        # big title glyphs wear big glows. Only pixels BRIGHTER than the
+        # local background are admitted, so dark art lines running next to
+        # the text are never swallowed.
+        dist = cv2.distanceTransform((strokes > 0).astype(np.uint8), cv2.DIST_L2, 3)
+        vals = dist[dist > 0]
+        r = int(np.clip(3.0 * float(np.median(vals)), 2, 24)) if vals.size else 3
+        band = cv2.dilate(strokes, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+        halo = np.where((delta > 8) & (gray_roi >= 210), band, 0).astype(np.uint8)
+        mask = cv2.bitwise_or(strokes, halo)
+        return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                          iterations=1)
 
     def _inpaint_text(self, result, x, y, w, h, contain=False):
         """Remove text from a free-text region. Builds the stroke mask from where
@@ -561,32 +652,50 @@ class Compositor:
         if x1 <= x0 or y1 <= y0:
             return None
         touched = (x0, y0, x1 - x0, y1 - y0)
-        roi = result[y0:y1, x0:x1]
-        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        strokes = self._ink_mask(gray_roi)
-        # Union with the GPU stroke mask: the model marks whole characters
-        # (including thick fills the deviation heuristic under-covers).
-        has_seg = self._seg_mask is not None
-        if has_seg:
-            strokes = cv2.bitwise_or(strokes, self._seg_mask[y0:y1, x0:x1])
-        # When we have the precise GPU stroke mask, keep the dilation tight so a
-        # content-aware fill touches ONLY the lettering — the surrounding art and
-        # screentone are preserved (matters for big text over detailed panels).
-        # The looser ink-deviation fallback needs a bit more to cover halos.
-        base_it = 2 if has_seg else 3
-        text_mask = cv2.dilate(strokes, kernel, iterations=base_it)
+        gray_roi = cv2.cvtColor(result[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+        seg_roi = self._seg_mask[y0:y1, x0:x1] if self._seg_mask is not None else None
+        tight = self._stroke_halo_mask(gray_roi, seg_roi)
+        if cv2.countNonZero(tight) == 0:
+            return touched
 
-        if self.lama is not None and self.lama.ok:
-            full_mask = np.zeros(result.shape[:2], np.uint8)
-            full_mask[y0:y1, x0:x1] = cv2.dilate(text_mask, kernel,
-                                                 iterations=1 if has_seg else 2)
-            out = self.lama.inpaint(result, full_mask)
-            if out is not None:
-                result[:] = out
-                return touched
-        inpainted = cv2.inpaint(roi, text_mask, 5, cv2.INPAINT_TELEA)
-        result[y0:y1, x0:x1] = inpainted
+        # Letter groups: close small gaps so a column/line of glyphs shares one
+        # LOCAL window (the closing shapes the windows, never the fill mask).
+        # Each group is content-aware filled from its own padded surroundings:
+        # the model sees the art right around the glyphs and continues its
+        # lines through the thin stroke holes. Only masked pixels are written
+        # back — the art between and around characters is never resampled.
+        # (The old single whole-page pass replaced the ENTIRE page with the
+        # model's resynthesis and turned huge text regions into flat mush.)
+        gk = int(np.clip(max(x1 - x0, y1 - y0) // 40, 5, 31)) | 1
+        groups = cv2.morphologyEx(tight, cv2.MORPH_CLOSE, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (gk, gk)))
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(groups, 8)
+        boxes = [(int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]),
+                  int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
+                 for i in range(1, n)]
+        if not boxes or len(boxes) > 12:
+            boxes = [(0, 0, x1 - x0, y1 - y0)]
+
+        tight_full = np.zeros((H, W), np.uint8)
+        tight_full[y0:y1, x0:x1] = tight
+        done = np.zeros((H, W), np.uint8)
+        use_lama = self.lama is not None and self.lama.ok
+        for bx, by, bw2, bh2 in boxes:
+            gx, gy = x0 + bx, y0 + by
+            wpad = int(np.clip(0.5 * max(bw2, bh2), 24, 160))
+            wx0, wy0 = max(0, gx - wpad), max(0, gy - wpad)
+            wx1, wy1 = min(W, gx + bw2 + wpad), min(H, gy + bh2 + wpad)
+            mwin = tight_full[wy0:wy1, wx0:wx1]
+            fresh = cv2.bitwise_and(mwin, cv2.bitwise_not(done[wy0:wy1, wx0:wx1]))
+            if cv2.countNonZero(fresh) == 0:
+                continue
+            sub = result[wy0:wy1, wx0:wx1]
+            out = self.lama.inpaint(sub, mwin) if use_lama else None
+            if out is None:
+                out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
+            m = mwin > 0
+            sub[m] = out[m]
+            done[wy0:wy1, wx0:wx1] |= mwin
         return touched
 
     def _refine_free_bbox(self, gray, x, y, w, h):
@@ -757,6 +866,19 @@ class Compositor:
             return None
         dens = float(np.count_nonzero(field[by:by + bh, bx:bx + bw])) / float(bw * bh)
         if dens < 0.6:
+            return None
+        # A real caption interior is enclosed by a DRAWN FRAME — verify the ink
+        # ring is actually there. Bright haze on artwork (the glow around free
+        # lettering, a hazy sky) also forms enclosed-looking blobs, but their
+        # boundary is mid-gray tone, not a near-black line; stamping solid
+        # white over those was the "correction slab" behind free text and
+        # erased watermarks. Sample a thin ring just outside the component.
+        comp = (labels == pick).astype(np.uint8) * 255
+        ring = cv2.subtract(cv2.dilate(comp, np.ones((7, 7), np.uint8)), comp)
+        ring_vals = roi[ring > 0]
+        # Frame lines are INK (near-black) — mid-gray art or tone around a
+        # bright patch is not a frame, however enclosed the patch looks.
+        if ring_vals.size < 20 or float((ring_vals < 90).mean()) < 0.55:
             return None
         return (X0 + bx, Y0 + by, bw, bh, False)
 
