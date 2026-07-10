@@ -533,8 +533,13 @@ class Compositor:
         mask = np.zeros((H, W), np.uint8)
         cv2.fillPoly(mask, [poly], 255)
         x, y, w, h = cv2.boundingRect(poly)
-        if w < 3 or h < 3:
+        # Clamp to the page: a lasso drawn partly (or fully) off-page must
+        # not produce an empty window slice and crash the whole compose.
+        x0c, y0c = max(0, x), max(0, y)
+        x1c, y1c = min(W, x + w), min(H, y + h)
+        if x1c - x0c < 3 or y1c - y0c < 3:
             return None
+        x, y, w, h = x0c, y0c, x1c - x0c, y1c - y0c
         # Fill from a LOCAL padded window and write back ONLY the masked
         # pixels — the rest of the page is never resampled or repainted.
         pad = int(np.clip(0.5 * max(w, h), 24, 200))
@@ -542,6 +547,8 @@ class Compositor:
         wx1, wy1 = min(W, x + w + pad), min(H, y + h + pad)
         sub = result[wy0:wy1, wx0:wx1]
         mwin = mask[wy0:wy1, wx0:wx1]
+        if cv2.countNonZero(mwin) == 0:
+            return (x, y, w, h)
         out = None
         if self.lama is not None and self.lama.ok:
             out = self.lama.inpaint(sub, mwin)
@@ -557,83 +564,168 @@ class Compositor:
 
         The deviation mask marks ink of either polarity, but that includes
         ART lines running through the box, and inpainting those is exactly
-        how a busy panel turns to mush. So the mask is built around a TEXT
-        ANCHOR: the GPU seg strokes when available, else the bright glow
-        mass (free text over art always wears one — that's what keeps it
-        readable). Only deviation components touching the anchor survive;
-        stray art lines away from the lettering are left alone. When there
-        is no anchor and the background is flat paper (nothing to protect),
-        every deviation is text and all of it is taken."""
-        dev = self._ink_mask(gray_roi)
+        how a busy panel turns to mush. Decision tree:
+
+        - FLAT paper background (low spread, sparse deviation): everything
+          that deviates is lettering — take all of it. This also covers big
+          bold text on white pages, where the blurred background estimate
+          gets dragged down and even plain paper "deviates".
+        - TEXTURED art: drop long thin lines crossing the region (art
+          strokes, speed lines), then anchor on real lettering — the GPU seg
+          strokes when substantial, else the near-white glow mass free text
+          wears over art — and keep only deviation groups near that anchor.
+          The proximity radius scales with the anchor's stroke thickness so
+          bold glyph cores aren't orphaned.
+        - No anchor on textured art: best effort — the long-thin filter
+          alone (the historical behavior minus obvious art lines).
+        """
         h_, w_ = gray_roi.shape[:2]
-        have_seg = seg_roi is not None and cv2.countNonZero(seg_roi) >= 10
-        if cv2.countNonZero(dev) == 0 and not have_seg:
-            return np.zeros((h_, w_), np.uint8)
+        if h_ < 3 or w_ < 3:
+            return np.zeros((max(h_, 1), max(w_, 1)), np.uint8)
+        # One background estimate shared by deviation, glow and halo (it was
+        # computed twice per region before — the dominant CPU cost here).
         sigma = max(3.0, min(h_, w_) / 6.0)
         bg = cv2.GaussianBlur(cv2.medianBlur(gray_roi, 3), (0, 0), sigma)
-        delta = gray_roi.astype(np.int16) - bg.astype(np.int16)
-        # Glow = genuinely WHITE pixels that stand off the background. Big
-        # dark glyphs drag the blurred background estimate down, which makes
-        # plain mid-gray tone "deviate" — requiring near-white keeps tone out.
-        glow = (((delta > 8) & (gray_roi >= 225) & (dev > 0)) * 255).astype(np.uint8)
+        diff = cv2.absdiff(gray_roi, bg)
+        _, dev = cv2.threshold(diff, 14, 255, cv2.THRESH_BINARY)
+        dev = cv2.morphologyEx(
+            dev, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+        have_seg = seg_roi is not None and cv2.countNonZero(seg_roi) >= 10
+        dev_px = cv2.countNonZero(dev)
+        gsrc = gray_roi
+        if dev_px > 0.45 * h_ * w_:
+            # Deviation fires on nearly half the region — classic screentone:
+            # every dot "deviates", the map is useless, and treating it as
+            # text wipes the whole tone field flat. Melt the periodic texture
+            # with an escalating median and re-measure; only structures
+            # thicker than the tone dots (i.e. the lettering) survive.
+            bk_ = 31 if min(h_, w_) >= 31 else (min(h_, w_) // 2 * 2 + 1)
+            for mk_ in (5, 7, 9):
+                gs_ = cv2.medianBlur(gray_roi, mk_)
+                # Large-MEDIAN background: unlike a Gaussian mean it doesn't
+                # dip next to big dark lettering, so the paper around the
+                # text doesn't spuriously "deviate" and get wiped with it.
+                bg_ = cv2.medianBlur(gs_, bk_)
+                dv_ = cv2.absdiff(gs_, bg_)
+                _, dv_ = cv2.threshold(dv_, 24, 255, cv2.THRESH_BINARY)
+                # Safety net for glyph cores wider than the background window
+                # (the median absorbs them): near-black ink is always text
+                # on a melted mid/bright field.
+                dv_ = cv2.bitwise_or(dv_, ((gs_ < 70) * 255).astype(np.uint8))
+                dv_ = cv2.morphologyEx(
+                    dv_, cv2.MORPH_OPEN,
+                    cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+                gsrc, bg, dev = gs_, bg_, dv_
+                dev_px = cv2.countNonZero(dev)
+                if dev_px <= 0.30 * h_ * w_:
+                    break
+        if dev_px == 0 and not have_seg:
+            return np.zeros((h_, w_), np.uint8)
+        delta = gsrc.astype(np.int16) - bg.astype(np.int16)
+        long_side = max(h_, w_)
 
-        anchor = None
-        if have_seg:
-            anchor = cv2.bitwise_or(seg_roi, glow)
-        elif cv2.countNonZero(glow) >= 30:
-            anchor = glow
-        if anchor is not None:
-            near = cv2.dilate(anchor, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (13, 13)))
-            # Candidates exclude the glow itself: glyph cores are then islands
-            # inside their halo rings, cleanly separated from any surrounding
-            # tone/art deviation they'd otherwise be 8-connected to.
-            cand = cv2.bitwise_and(dev, cv2.bitwise_not(glow))
-            n, labels, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
-            strokes = anchor.copy()
-            for i in range(1, n):
-                cx_, cy_, cw_, ch_ = (int(stats[i, cv2.CC_STAT_LEFT]),
-                                      int(stats[i, cv2.CC_STAT_TOP]),
-                                      int(stats[i, cv2.CC_STAT_WIDTH]),
-                                      int(stats[i, cv2.CC_STAT_HEIGHT]))
-                comp = labels[cy_:cy_ + ch_, cx_:cx_ + cw_] == i
-                # MOSTLY inside the anchor zone — an art line whose END pokes
-                # into the glow must not drag its whole length into the mask.
-                inside = float((near[cy_:cy_ + ch_, cx_:cx_ + cw_][comp] > 0).mean())
-                if inside >= 0.45:
-                    strokes[cy_:cy_ + ch_, cx_:cx_ + cw_][comp] = 255
+        nontext = gsrc[dev == 0]
+        flat = (nontext.size > 0 and float(np.std(nontext)) <= 14
+                and dev_px <= 0.35 * h_ * w_)
+        if flat:
+            # Even on flat paper, a long thin line crossing the region is a
+            # panel border or art stroke passing through — not lettering.
+            strokes = self._drop_long_thin(dev, long_side)
         else:
-            strokes = dev.copy()
-            flat = gray_roi[dev == 0]
-            if flat.size and float(np.std(flat)) > 14:
-                # Textured art, no anchor to lean on: at least drop the
-                # obvious long thin lines that cross most of the region.
-                n, labels, stats, _ = cv2.connectedComponentsWithStats(dev, 8)
-                long_side = max(h_, w_)
-                for i in range(1, n):
-                    span = max(int(stats[i, cv2.CC_STAT_WIDTH]),
-                               int(stats[i, cv2.CC_STAT_HEIGHT]))
-                    area = int(stats[i, cv2.CC_STAT_AREA])
-                    if span > 0.6 * long_side and area / max(span, 1) < 4.5:
-                        strokes[labels == i] = 0
+            base = self._drop_long_thin(dev, long_side)
+            # Glow = genuinely WHITE pixels standing off the background (big
+            # dark glyphs drag the background estimate down, so requiring
+            # near-white keeps plain tone out). Long-thin filtering keeps
+            # white speed lines on dark panels from posing as glow.
+            glow = (((delta > 8) & (gsrc >= 225) & (dev > 0)) * 255).astype(np.uint8)
+            glow = self._drop_long_thin(glow, long_side)
+            if cv2.countNonZero(glow) > 0.35 * h_ * w_:
+                # A "glow" covering a third of the region is background paper
+                # showing between tone dots, not a text halo.
+                glow = np.zeros_like(glow)
+            seg_px = cv2.countNonZero(seg_roi) if have_seg else 0
+            anchor = None
+            if have_seg and seg_px >= 60 and seg_px >= 0.05 * max(dev_px, 1):
+                anchor = seg_roi
+            elif cv2.countNonZero(glow) >= 30:
+                anchor = glow
+            if anchor is not None:
+                # Proximity radius scales with the anchor's stroke thickness
+                # so the middle of a fat bold stroke still counts as "near".
+                adist = cv2.distanceTransform((anchor > 0).astype(np.uint8),
+                                              cv2.DIST_L2, 3)
+                avals = adist[adist > 0]
+                t = float(np.median(avals)) if avals.size else 2.0
+                k = int(np.clip(13 + 6 * t, 13, 61)) | 1
+                near = cv2.dilate(anchor, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (k, k)))
+                # Candidates exclude the glow: glyph cores become islands
+                # inside their halo rings, cleanly separated from tone/art
+                # deviation they'd otherwise be 8-connected to.
+                cand = cv2.bitwise_and(base, cv2.bitwise_not(glow))
+                n, labels, _st, _c = cv2.connectedComponentsWithStats(cand, 8)
+                lab = labels.ravel()
+                tot = np.bincount(lab, minlength=n).astype(np.float64)
+                ins = np.bincount(lab, weights=(near.ravel() > 0).astype(np.float64),
+                                  minlength=n)
+                frac = ins / np.maximum(tot, 1)
+                keep = frac >= 0.30
+                keep[0] = False
+                kept = (keep[labels] * 255).astype(np.uint8)
+                strokes = cv2.bitwise_or(anchor, kept)
+            else:
+                strokes = base
+        if have_seg:
+            strokes = cv2.bitwise_or(strokes, seg_roi)
         if cv2.countNonZero(strokes) == 0:
             return strokes
 
         # Halo band: catch the soft outer edge of the glow that falls under
         # the deviation threshold (left behind, it reads as a ghostly white
         # ring once the strokes vanish). Radius follows stroke thickness —
-        # big title glyphs wear big glows. Only pixels BRIGHTER than the
-        # local background are admitted, so dark art lines running next to
-        # the text are never swallowed.
+        # big title glyphs wear big glows. Only near-white pixels brighter
+        # than the local background are admitted, so dark art lines running
+        # next to the text are never swallowed.
         dist = cv2.distanceTransform((strokes > 0).astype(np.uint8), cv2.DIST_L2, 3)
         vals = dist[dist > 0]
         r = int(np.clip(3.0 * float(np.median(vals)), 2, 24)) if vals.size else 3
         band = cv2.dilate(strokes, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
-        halo = np.where((delta > 8) & (gray_roi >= 210), band, 0).astype(np.uint8)
+        # Gate the band against ITS OWN surroundings: the feathered outer
+        # skirt of a glow sits under the deviation threshold (the blurred
+        # background estimate absorbs the glow) but is still clearly brighter
+        # than the tone just outside the band — left behind it reads as a
+        # ghost ring. Absolute floor 160 keeps mid-gray art on dark panels
+        # from being swallowed.
+        ring = cv2.subtract(cv2.dilate(band, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (9, 9))), band)
+        rvals = gsrc[ring > 0]
+        localbg = float(np.median(rvals)) if rvals.size else float(np.median(gsrc))
+        gate = max(localbg + 10.0, 160.0)
+        halo = np.where((band > 0) & (gsrc.astype(np.float32) > gate), 255, 0).astype(np.uint8)
         mask = cv2.bitwise_or(strokes, halo)
         return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
                           iterations=1)
+
+    def _drop_long_thin(self, mask, long_side):
+        """Remove components that run most of the way across the region while
+        staying thin — art lines, speed lines, panel borders."""
+        if cv2.countNonZero(mask) == 0:
+            return mask
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+        keep = np.ones(n, bool)
+        keep[0] = False
+        dropped = False
+        for i in range(1, n):
+            span = max(int(stats[i, cv2.CC_STAT_WIDTH]),
+                       int(stats[i, cv2.CC_STAT_HEIGHT]))
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if span > 0.6 * long_side and area / max(span, 1) < 8.0:
+                keep[i] = False
+                dropped = True
+        if not dropped:
+            return mask
+        return (keep[labels] * 255).astype(np.uint8)
 
     def _inpaint_text(self, result, x, y, w, h, contain=False):
         """Remove text from a free-text region. Builds the stroke mask from where
@@ -676,26 +768,31 @@ class Compositor:
         if not boxes or len(boxes) > 12:
             boxes = [(0, 0, x1 - x0, y1 - y0)]
 
-        tight_full = np.zeros((H, W), np.uint8)
-        tight_full[y0:y1, x0:x1] = tight
-        done = np.zeros((H, W), np.uint8)
+        done = np.zeros_like(tight)      # roi-sized; the mask lives in the roi
         use_lama = self.lama is not None and self.lama.ok
         for bx, by, bw2, bh2 in boxes:
             gx, gy = x0 + bx, y0 + by
             wpad = int(np.clip(0.5 * max(bw2, bh2), 24, 160))
             wx0, wy0 = max(0, gx - wpad), max(0, gy - wpad)
             wx1, wy1 = min(W, gx + bw2 + wpad), min(H, gy + bh2 + wpad)
-            mwin = tight_full[wy0:wy1, wx0:wx1]
-            fresh = cv2.bitwise_and(mwin, cv2.bitwise_not(done[wy0:wy1, wx0:wx1]))
-            if cv2.countNonZero(fresh) == 0:
+            # overlap of the (context-padded) window with the roi
+            ox0, oy0 = max(wx0, x0), max(wy0, y0)
+            ox1, oy1 = min(wx1, x1), min(wy1, y1)
+            if ox1 <= ox0 or oy1 <= oy0:
                 continue
+            tsub = tight[oy0 - y0:oy1 - y0, ox0 - x0:ox1 - x0]
+            dsub = done[oy0 - y0:oy1 - y0, ox0 - x0:ox1 - x0]
+            if cv2.countNonZero(cv2.bitwise_and(tsub, cv2.bitwise_not(dsub))) == 0:
+                continue
+            mwin = np.zeros((wy1 - wy0, wx1 - wx0), np.uint8)
+            mwin[oy0 - wy0:oy1 - wy0, ox0 - wx0:ox1 - wx0] = tsub
             sub = result[wy0:wy1, wx0:wx1]
             out = self.lama.inpaint(sub, mwin) if use_lama else None
             if out is None:
                 out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
             m = mwin > 0
             sub[m] = out[m]
-            done[wy0:wy1, wx0:wx1] |= mwin
+            dsub |= tsub
         return touched
 
     def _refine_free_bbox(self, gray, x, y, w, h):
@@ -874,11 +971,14 @@ class Compositor:
         # white over those was the "correction slab" behind free text and
         # erased watermarks. Sample a thin ring just outside the component.
         comp = (labels == pick).astype(np.uint8) * 255
-        ring = cv2.subtract(cv2.dilate(comp, np.ones((7, 7), np.uint8)), comp)
-        ring_vals = roi[ring > 0]
+        ring = cv2.subtract(cv2.dilate(comp, np.ones((3, 3), np.uint8)), comp)
         # Frame lines are INK (near-black) — mid-gray art or tone around a
         # bright patch is not a frame, however enclosed the patch looks.
-        if ring_vals.size < 20 or float((ring_vals < 90).mean()) < 0.55:
+        # Sample the DARKEST pixel within 2px of each boundary point so even
+        # a crisp 1px frame registers everywhere along the ring.
+        gmin = cv2.erode(roi, np.ones((5, 5), np.uint8))
+        ring_vals = gmin[ring > 0]
+        if ring_vals.size < 20 or float((ring_vals < 90).mean()) < 0.6:
             return None
         return (X0 + bx, Y0 + by, bw, bh, False)
 
