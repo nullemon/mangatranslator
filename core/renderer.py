@@ -257,6 +257,10 @@ class TextRenderer:
         (e.g. glowing Japanese narration). The text is rendered to a transparent
         layer, a blurred halo is built from its shape and painted under it, then
         the crisp text goes on top. Works on the page's RGB image in place."""
+        # Halo must CONTRAST the letters: white behind dark text, near-black
+        # behind light text (a white halo around white letters is invisible).
+        if color is not None and sum(color[:3]) >= 384:
+            glow_color = (18, 18, 18)
         layer = Image.new("RGBA", (image.width, image.height), (0, 0, 0, 0))
         self.draw_in_rect(layer, rect, text, color, italic, rotation, scale, glow=False)
         alpha = layer.split()[3]

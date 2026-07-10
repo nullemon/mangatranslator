@@ -226,8 +226,16 @@ class Compositor:
                         rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
                         edited_rects.append(tuple(int(v) for v in touched))
                         if self.replace_watermark and self.watermark_text:
-                            placements.append((rect, self.watermark_text,
-                                               self._pick_color(dark, it), False, 0, 1.0, False))
+                            # Modest, single line, with a halo — never a giant
+                            # slab-filling banner in the middle of the art.
+                            wh_cap = max(16, int(0.035 * h))
+                            wx_, wy_, ww_, whh_ = rect
+                            if whh_ > wh_cap:
+                                wy_ += (whh_ - wh_cap) // 2
+                                whh_ = wh_cap
+                            placements.append(((wx_, wy_, ww_, whh_),
+                                               " ".join(self.watermark_text.split()),
+                                               self._pick_color(dark, it), False, 0, 1.0, True))
                         it["placed"] = True
                 continue
 
@@ -286,8 +294,12 @@ class Compositor:
                     text = " ".join(text.split())
                 edited_rects.append(tuple(int(v) for v in touched))
                 color = self._pick_color(dark, it)
+                # Same halo rule as auto free text: floating letters get a
+                # contrasting stroke; only a light caption fill stays plain.
+                mglow = (self._item_glow(it) or cap is None
+                         or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), self._item_glow(it)))
+                               self._item_scale(it), mglow))
                 it["placed"] = True
                 continue
 
@@ -333,10 +345,31 @@ class Compositor:
                 # width-crushes horizontal English into a tiny font. Re-shape it
                 # into a horizontal box at the column's center, sized to the
                 # SOURCE glyphs, growing sideways only over quiet background.
+                src_rect = tuple(int(v) for v in rect)
+                own_boxes = [tuple(int(v) for v in bb),
+                             tuple(int(v) for v in rect)]
                 if abs(rotation) < 3 and not it.get("manual_rot"):
-                    wided = self._widen_vertical_rect(rect, result, used_boxes)
+                    wided = self._widen_vertical_rect(rect, result, used_boxes,
+                                                      own_boxes)
                     if wided != tuple(int(v) for v in rect):
                         rect = wided
+                        used_boxes.append(tuple(int(v) for v in rect))
+                        own_boxes.append(tuple(int(v) for v in rect))
+                # Pro presence: grow the box over quiet background until the
+                # English renders at ~70% of the source glyph size. Never for
+                # SFX (pros keep those small beside the art), and never into
+                # the box of an item that hasn't been placed yet — a bubble
+                # processed later must not find its spot already eaten.
+                if (abs(rotation) <= 20 and not it.get("manual_rot")
+                        and kind not in SFX_TYPES):
+                    avoid = used_boxes + [
+                        tuple(int(v) for v in o["bbox"]) for o in items
+                        if o is not it and o.get("bbox") and not o.get("placed")
+                    ]
+                    grown = self._grow_for_presence(rect, src_rect, text, it,
+                                                    result, avoid, own_boxes)
+                    if grown != tuple(int(v) for v in rect):
+                        rect = grown
                         used_boxes.append(tuple(int(v) for v in rect))
                 # Store the TIGHT text rect as the region's box (not the ballooned
                 # refine box) so the editor handle hugs the words — "same size as
@@ -347,8 +380,13 @@ class Compositor:
                 if rect[2] >= 3 * rect[3]:
                     text = " ".join(text.split())
                 color = self._pick_color(dark, it)
+                # Floating text always wears a contrasting stroke halo, like
+                # every pro release — bare letters vanish into the art. Only
+                # a light caption fill (clean paper behind) stays plain.
+                fglow = (self._item_glow(it) or cap is None
+                         or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), self._item_glow(it)))
+                               self._item_scale(it), fglow))
                 it["placed"] = True
                 continue
 
@@ -1276,7 +1314,98 @@ class Compositor:
         cx, cy = x + w // 2, y + h // 2
         return (cx - rw // 2, cy - rh // 2, rw, rh)
 
-    def _widen_vertical_rect(self, rect, result, used_boxes):
+    @staticmethod
+    def _est_fit(text, w, h):
+        """Rough estimate of the font size draw_in_rect will settle on for
+        `text` in a w x h box (avg glyph width ~0.62em, line height ~1.22em)."""
+        t = " ".join((text or "").split())
+        if not t or w < 8 or h < 8:
+            return 0.0
+        n = max(len(t), 1)
+        best = 0.0
+        for lines in range(1, 13):
+            f = min(h / (lines * 1.22), w * lines / (n * 0.62))
+            best = max(best, f)
+        return best
+
+    def _grow_for_presence(self, rect, src_rect, text, it, result, used_boxes,
+                           own_boxes=()):
+        """Scanlators size free text to the SOURCE lettering's visual weight,
+        not to whatever sliver the detector found. Estimate the source glyph
+        size from the original region and its character count; if the English
+        would auto-fit well below ~70% of that, grow the box over quiet
+        cleaned background — stopping at art, panel borders and other
+        translations — until it can render at the target size."""
+        x, y, rw, rh = [int(v) for v in rect]
+        orig = (x, y, rw, rh)
+        t = " ".join((text or "").split())
+        if not t or rw < 8 or rh < 8:
+            return orig
+        H, W = result.shape[:2]
+        sx, sy, sw, sh = [int(v) for v in src_rect]
+        src = (it.get("original") or "").strip()
+        n_src = max(sum(1 for c in src if not c.isspace()), 1)
+        char_px = (max(sw, 1) * max(sh, 1) / n_src) ** 0.5
+        char_px = float(min(max(char_px, 14.0), 110.0))
+        target = 0.70 * char_px
+        if self._est_fit(t, rw, rh) >= 0.92 * target:
+            return orig
+        # How far may we grow? Scan quiet rows/cols on the cleaned page.
+        Lx, Ly = int(rw * 1.8) + 24, int(rh * 1.2) + 24
+        wx0, wy0 = max(0, x - Lx), max(0, y - Ly)
+        wx1, wy1 = min(W, x + rw + Lx), min(H, y + rh + Ly)
+        if wx1 - wx0 < 8 or wy1 - wy0 < 8:
+            return orig
+        win = cv2.cvtColor(result[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
+        rows = slice(max(y, wy0) - wy0, max(min(y + rh, wy1) - wy0, max(y, wy0) - wy0 + 1))
+        cols = slice(max(x, wx0) - wx0, max(min(x + rw, wx1) - wx0, max(x, wx0) - wx0 + 1))
+        quiet_col = (win[rows] < 160).mean(axis=0) < 0.10
+        quiet_row = (win[:, cols] < 160).mean(axis=1) < 0.10
+        left, right = x, x + rw
+        while left - 1 >= wx0 and quiet_col[left - 1 - wx0]:
+            left -= 1
+        while right < wx1 and quiet_col[right - wx0]:
+            right += 1
+        top, bot = y, y + rh
+        while top - 1 >= wy0 and quiet_row[top - 1 - wy0]:
+            top -= 1
+        while bot < wy1 and quiet_row[bot - wy0]:
+            bot += 1
+        pad = max(3, int(char_px) // 8)
+        left, right = left + pad, right - pad
+        top, bot = top + pad, bot - pad
+        availW, availH = right - left, bot - top
+        if availW <= rw and availH <= rh:
+            return orig
+        # Smallest box that reaches the target size (prefer fewer lines).
+        need = None
+        for lines in range(1, 13):
+            nw = int(len(t) * 0.62 * target / lines) + 4
+            nh = int(lines * 1.22 * target) + 4
+            if nw <= availW and nh <= availH:
+                need = (nw, nh)
+                break
+        if need is None:
+            if self._est_fit(t, availW, availH) <= self._est_fit(t, rw, rh):
+                return orig
+            need = (availW, availH)
+        nw = max(need[0], min(rw, availW))
+        nh = max(need[1], min(rh, availH))
+        # Centered on the source text, clamped to the allowed extents.
+        cx, cy = x + rw / 2.0, y + rh / 2.0
+        nx = int(min(max(left, cx - nw / 2.0), right - nw))
+        ny = int(min(max(top, cy - nh / 2.0), bot - nh))
+        cand = (nx, ny, int(nw), int(nh))
+        own = {tuple(int(v) for v in b) for b in (own_boxes or ())}
+        own.add(orig)
+        for ub in used_boxes:
+            if tuple(int(v) for v in ub) in own:
+                continue  # our own planned/widened box, not a neighbor
+            if self._overlaps(cand, ub):
+                return orig
+        return cand
+
+    def _widen_vertical_rect(self, rect, result, used_boxes, own_boxes=()):
         """A tall-narrow free-text rect means the SOURCE was a vertical
         Japanese column. English renders horizontally, so auto-fitting it
         into the column forces a width-constrained, near-invisible font.
@@ -1309,9 +1438,11 @@ class Compositor:
         if right - left <= rw * 1.5:
             return orig
         cand = (int(left), int(ny), int(right - left), int(nh))
+        own = {tuple(int(v) for v in b) for b in (own_boxes or ())}
+        own.add(orig)
         for ub in used_boxes:
-            if self._overlaps(orig, ub):
-                continue  # our own planned box
+            if tuple(int(v) for v in ub) in own:
+                continue  # our own planned box, not a neighbor
             if self._overlaps(cand, ub):
                 return orig
         return cand
