@@ -434,6 +434,14 @@ class Compositor:
                 if rr[2] == 0 or rr[3] == 0:
                     mask = None
 
+            # Balloon seg sometimes claims big haloed display text as a
+            # "bubble"; flat-filling that mask stamps a giant blob over the
+            # art. Only wipe interiors that really look like balloon paper —
+            # anything else goes through the free-text machinery below.
+            if mask is not None and not self._is_real_balloon(gray, mask):
+                mask = None
+
+            fglow = False
             if mask is not None:
                 bb = cv2.boundingRect(mask)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
@@ -444,26 +452,49 @@ class Compositor:
                 if rect is None:
                     rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
             else:
-                # No reliable bubble shape. Don't draw a big white ellipse
-                # (that's what put boxes in random / out-of-bounds places).
-                # Instead clear just the original text strokes inside the box
-                # and place the translation there — tight and always in-bounds.
-                bb = (bx, by, bw, bh)
-                if any(self._overlaps(bb, ub) for ub in used_boxes):
+                # No reliable balloon. Treat like floating text: framed white
+                # interiors still get a clean caption fill; text over art has
+                # only its strokes healed, sized to the source, with a halo.
+                cap, pb = self._plan_free_region(gray, bx, by, bw, bh, refine=True)
+                if any(self._overlaps(pb, ub) for ub in used_boxes):
                     continue
-                used_boxes.append(bb)
-                touched = self._inpaint_text(result, bx, by, bw, bh)
-                if touched:
-                    bb = touched
-                dark = self._is_dark_region(gray, bx, by, bw, bh)
-                pad = max(2, min(bw, bh) // 16)
-                rect = (bx + pad, by + pad, bw - 2 * pad, bh - 2 * pad)
+                used_boxes.append(pb)
+                rect, dark, touched = self._apply_free_region(result, gray, cap, pb)
+                bb = tuple(int(v) for v in touched)
+                if cap is None:
+                    seg_r = self._seg_text_rect(bx, by, bw, bh)
+                    if seg_r is not None:
+                        sx2, sy2, sw2, sh2 = seg_r
+                        p2 = max(3, min(sw2, sh2) // 10)
+                        rect = (sx2 - p2, sy2 - p2,
+                                max(sw2 + 2 * p2, 8), max(sh2 + 2 * p2, 8))
+                if it.get("src_rect") and len(it["src_rect"]) == 4:
+                    src_rect = tuple(int(v) for v in it["src_rect"])
+                else:
+                    src_rect = tuple(int(v) for v in rect)
+                    it["src_rect"] = list(src_rect)
+                if not it.get("manual_rot") and kind not in SFX_TYPES:
+                    avoid = used_boxes + [
+                        tuple(int(v) for v in o["bbox"]) for o in items
+                        if o is not it and o.get("bbox") and not o.get("placed")
+                    ]
+                    grown = self._grow_for_presence(
+                        rect, src_rect, text, it, result, avoid,
+                        [tuple(int(v) for v in pb), tuple(int(v) for v in rect)])
+                    if grown != tuple(int(v) for v in rect):
+                        rect = grown
+                        used_boxes.append(tuple(int(v) for v in rect))
+                it["bbox"] = [int(v) for v in rect]
+                if rect[2] >= 3 * rect[3]:
+                    text = " ".join(text.split())
+                fglow = (self._item_glow(it) or cap is None
+                         or (cap is not None and cap[4]))
 
             edited_rects.append(tuple(int(v) for v in bb))
             color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color, ital,
                                rotation if it.get("manual_rot") else 0,
-                               self._item_scale(it), self._item_glow(it)))
+                               self._item_scale(it), fglow or self._item_glow(it)))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
@@ -523,6 +554,28 @@ class Compositor:
         if ov == "black":
             return (0, 0, 0)
         return (255, 255, 255) if dark else (0, 0, 0)
+
+    def _is_real_balloon(self, gray, mask):
+        """A real balloon's interior (minus the text strokes) is near-uniform
+        paper enclosed by an inked outline. Balloon segmentation sometimes
+        claims big haloed DISPLAY TEXT as a bubble — its "interior" is art —
+        and flat-filling that stamps a giant blob over the panel."""
+        if mask is None or cv2.countNonZero(mask) < 40:
+            return False
+        inner = cv2.erode(mask, np.ones((5, 5), np.uint8))
+        if cv2.countNonZero(inner) < 40:
+            inner = mask
+        vals = gray[inner > 0]
+        med = float(np.median(vals))
+        if med >= 165:
+            body = vals[vals > 120]     # paper side, strokes excluded
+        elif med <= 90:
+            body = vals[vals < 120]     # black balloon
+        else:
+            return False                # mid-gray interior = artwork
+        if body.size < 50:
+            return False
+        return float(np.std(body)) <= 22.0
 
     def _wipe(self, result, mask, dark):
         """Fill the bubble interior, pulling the fill boundary well inside the
@@ -1462,40 +1515,61 @@ class Compositor:
         left, right = left + pad, right - pad
         top, bot = top + pad, bot - pad
         availW, availH = right - left, bot - top
-        if availW <= rw and availH <= rh:
-            return orig
-        # Smallest box that reaches the target size (prefer fewer lines).
-        need = None
+        cx, cy = x + rw / 2.0, y + rh / 2.0
+        own = {tuple(int(v) for v in b) for b in (own_boxes or ())}
+        own.add(orig)
+
+        def clear_of_others(c):
+            for ub in used_boxes:
+                if tuple(int(v) for v in ub) in own:
+                    continue  # our own planned/widened box, not a neighbor
+                if self._overlaps(c, ub):
+                    return False
+            return True
+
+        # Tier 1: the smallest box that reaches the target size using QUIET
+        # background only (prefer fewer lines).
+        quiet = None
+        if availW > rw or availH > rh:
+            need = None
+            for lines in range(1, 13):
+                nw = int(len(t) * em * target / lines) + 4
+                nh = int(lines * 1.22 * target) + 4
+                if nw <= availW and nh <= availH:
+                    need = (nw, nh)
+                    break
+            if need is None and self._est_fit(t, availW, availH) > self._est_fit(t, rw, rh):
+                need = (availW, availH)
+            if need is not None:
+                nw, nh = need
+                nx = int(min(max(left, cx - nw / 2.0), right - nw))
+                ny = int(min(max(top, cy - nh / 2.0), bot - nh))
+                cand = (nx, ny, int(nw), int(nh))
+                croi = win[max(ny, wy0) - wy0:max(ny + int(nh), wy0) - wy0,
+                           max(nx, wx0) - wx0:max(nx + int(nw), wx0) - wx0]
+                if croi.size and float((croi < 160).mean()) < 0.10 and clear_of_others(cand):
+                    quiet = cand
+        best = quiet if quiet is not None else orig
+        if self._est_fit(t, best[2], best[3]) >= 0.55 * target:
+            return best
+        # Tier 2: no quiet room anywhere (dense crowd/detail panels). Pros
+        # typeset AT SIZE right on the art and let the stroke halo carry
+        # readability — tiny fine-print in a busy panel reads far worse than
+        # haloed text over it. Center the needed box on the source; only
+        # other text still blocks it.
+        bx0, by0 = wx0 + 4, wy0 + 4
+        bx1, by1 = wx1 - 4, wy1 - 4
         for lines in range(1, 13):
             nw = int(len(t) * em * target / lines) + 4
             nh = int(lines * 1.22 * target) + 4
-            if nw <= availW and nh <= availH:
-                need = (nw, nh)
+            if nw <= bx1 - bx0 and nh <= by1 - by0:
+                nx = int(min(max(bx0, cx - nw / 2.0), bx1 - nw))
+                ny = int(min(max(by0, cy - nh / 2.0), by1 - nh))
+                cand2 = (nx, ny, int(nw), int(nh))
+                if clear_of_others(cand2):
+                    return cand2
                 break
-        if need is None:
-            if self._est_fit(t, availW, availH) <= self._est_fit(t, rw, rh):
-                return orig
-            need = (availW, availH)
-        # Exactly the needed box — inheriting the original's extra height or
-        # width hands the auto-fit spare room and it overshoots the target.
-        nw, nh = need
-        # Centered on the source text, clamped to the allowed extents.
-        cx, cy = x + rw / 2.0, y + rh / 2.0
-        nx = int(min(max(left, cx - nw / 2.0), right - nw))
-        ny = int(min(max(top, cy - nh / 2.0), bot - nh))
-        cand = (nx, ny, int(nw), int(nh))
-        croi = win[max(ny, wy0) - wy0:max(ny + int(nh), wy0) - wy0,
-                   max(nx, wx0) - wx0:max(nx + int(nw), wx0) - wx0]
-        if croi.size == 0 or float((croi < 160).mean()) >= 0.10:
-            return orig
-        own = {tuple(int(v) for v in b) for b in (own_boxes or ())}
-        own.add(orig)
-        for ub in used_boxes:
-            if tuple(int(v) for v in ub) in own:
-                continue  # our own planned/widened box, not a neighbor
-            if self._overlaps(cand, ub):
-                return orig
-        return cand
+        return best
 
     def _widen_vertical_rect(self, rect, result, used_boxes, own_boxes=()):
         """A tall-narrow free-text rect means the SOURCE was a vertical

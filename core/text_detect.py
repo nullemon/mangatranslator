@@ -39,6 +39,29 @@ def _load_craft():
     try:
         _patch_torchvision_vgg()
         from craft_text_detector import Craft
+        # craft crashes on numpy>=1.24 when a page yields polygons with
+        # differing vertex counts (np.array on a ragged list now raises).
+        # Give its predict module an np whose array() falls back to
+        # dtype=object — the historical numpy behaviour craft was built on.
+        # Worst case the shim fails and the existing CV fallback still runs.
+        try:
+            from craft_text_detector import predict as _cpredict
+            import numpy as _np
+
+            class _RaggedNP:
+                def __getattr__(self, name):
+                    return getattr(_np, name)
+
+                @staticmethod
+                def array(obj, *a, **k):
+                    try:
+                        return _np.array(obj, *a, **k)
+                    except ValueError:
+                        return _np.array(obj, dtype=object)
+
+            _cpredict.np = _RaggedNP()
+        except Exception:
+            pass
         import torch
         _CRAFT = Craft(
             output_dir=None,
