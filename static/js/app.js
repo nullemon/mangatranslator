@@ -1707,6 +1707,7 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
+        ${isAdded ? "" : `<button class="btn btn-ghost btn-sm epop-erase" title="Delete this translation AND wipe the bubble clean — empty bubble, no text">Empty</button>`}
         <span class="spacer"></span>
         <button class="btn btn-ghost btn-sm epop-cancel">Cancel</button>
         <button class="btn btn-primary btn-sm epop-save">Save</button>
@@ -1779,6 +1780,15 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         page.excluded.add(String(it.id));
       }
+      closeEditor();
+      applyChanges(editApply);
+    });
+    const eraseBtn = pop.querySelector(".epop-erase");
+    if (eraseBtn) eraseBtn.addEventListener("click", () => {
+      pushUndo(page);
+      page.erased = page.erased || new Set();
+      page.erased.add(String(it.id));
+      page.excluded.delete(String(it.id));
       closeEditor();
       applyChanges(editApply);
     });
