@@ -1153,6 +1153,7 @@ async def rerender(task_id: str, request: Request):
             "type": it.get("type", ""),
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
+            "src_rect": it.get("src_rect"),
             "color": colors.get(nid, "auto"),
             "rotation": rotations.get(nid, it.get("rotation", 0)),
             "manual_rot": nid in rotations,
@@ -1264,6 +1265,7 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": it["in_bubble"], "dark": it.get("dark", False),
             "placed": it.get("placed", False),
             "rotation": it.get("rotation", 0),
+            "src_rect": it.get("src_rect"),
         }
         for it in items
     ]

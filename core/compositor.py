@@ -236,6 +236,7 @@ class Compositor:
                             placements.append(((wx_, wy_, ww_, whh_),
                                                " ".join(self.watermark_text.split()),
                                                self._pick_color(dark, it), False, 0, 1.0, True))
+                            used_boxes.append((int(wx_), int(wy_), int(ww_), int(whh_)))
                         it["placed"] = True
                 continue
 
@@ -337,6 +338,12 @@ class Compositor:
                         pad = max(3, min(sw, sh) // 10)
                         rect = (sx - pad, sy - pad,
                                 max(sw + 2 * pad, 8), max(sh + 2 * pad, 8))
+                    elif it.get("src_rect"):
+                        # Re-render of a box WE computed: take it as-is. The
+                        # inset below is for raw AI boxes; applying it again
+                        # every render shrank the box a few px per edit until
+                        # it re-grew — a visible breathing loop.
+                        rect = (bx, by, bw, bh)
                     else:
                         pad = max(3, min(bw, bh) // 12)
                         rect = (bx + pad, by + pad,
@@ -345,7 +352,15 @@ class Compositor:
                 # width-crushes horizontal English into a tiny font. Re-shape it
                 # into a horizontal box at the column's center, sized to the
                 # SOURCE glyphs, growing sideways only over quiet background.
-                src_rect = tuple(int(v) for v in rect)
+                # Stable source basis: the FIRST pass's tight rect, persisted
+                # on the item. Without it, a re-render would measure the
+                # source glyphs from the already-grown box and grow again —
+                # every edit inflating the caption until it spans the page.
+                if it.get("src_rect") and len(it["src_rect"]) == 4:
+                    src_rect = tuple(int(v) for v in it["src_rect"])
+                else:
+                    src_rect = tuple(int(v) for v in rect)
+                    it["src_rect"] = list(src_rect)
                 own_boxes = [tuple(int(v) for v in bb),
                              tuple(int(v) for v in rect)]
                 if abs(rotation) < 3 and not it.get("manual_rot"):
@@ -1314,17 +1329,36 @@ class Compositor:
         cx, cy = x + w // 2, y + h // 2
         return (cx - rw // 2, cy - rh // 2, rw, rh)
 
-    @staticmethod
-    def _est_fit(text, w, h):
+    def _em_ratio(self):
+        """Average glyph advance of the ACTIVE font in em, measured once.
+        The box math used to assume 0.62em; comic display faces run much
+        narrower (Anton ~0.40) and the auto-fit then overshot the target
+        size by 30-45%."""
+        emr = getattr(self, "_emr", None)
+        if emr is not None:
+            return emr
+        emr = 0.62
+        try:
+            font = self.renderer._get_font(100)
+            sample = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            adv = font.getlength(sample) / len(sample)
+            emr = float(min(0.8, max(0.3, adv / 100.0 * 1.12)))
+        except Exception:
+            pass
+        self._emr = emr
+        return emr
+
+    def _est_fit(self, text, w, h):
         """Rough estimate of the font size draw_in_rect will settle on for
-        `text` in a w x h box (avg glyph width ~0.62em, line height ~1.22em)."""
+        `text` in a w x h box (measured glyph advance, line height ~1.22em)."""
         t = " ".join((text or "").split())
         if not t or w < 8 or h < 8:
             return 0.0
+        em = self._em_ratio()
         n = max(len(t), 1)
         best = 0.0
         for lines in range(1, 13):
-            f = min(h / (lines * 1.22), w * lines / (n * 0.62))
+            f = min(h / (lines * 1.22), w * lines / (n * em))
             best = max(best, f)
         return best
 
@@ -1344,12 +1378,46 @@ class Compositor:
         H, W = result.shape[:2]
         sx, sy, sw, sh = [int(v) for v in src_rect]
         src = (it.get("original") or "").strip()
+        if not src:
+            # No OCR text -> no glyph-size estimate. Guessing from the region
+            # alone maximizes the target and blows up short interjections.
+            return orig
         n_src = max(sum(1 for c in src if not c.isspace()), 1)
         char_px = (max(sw, 1) * max(sh, 1) / n_src) ** 0.5
         char_px = float(min(max(char_px, 14.0), 110.0))
-        target = 0.70 * char_px
-        if self._est_fit(t, rw, rh) >= 0.92 * target:
+        em = self._em_ratio()
+        # Pros conserve the source block's FOOTPRINT: cap the target so the
+        # English occupies at most ~1.5x the source lettering's area. A
+        # two-character hand-lettered aside (huge glyphs) translated into a
+        # full sentence must not become a five-line 76px paragraph.
+        n_en = max(len(t), 1)
+        f_area = ((1.5 * max(sw, 1) * max(sh, 1)) / (em * 1.22 * n_en)) ** 0.5
+        target = min(0.70 * char_px, f_area)
+        if target < 11:
             return orig
+        cur = self._est_fit(t, rw, rh)
+        if cur >= 0.92 * target:
+            # Wide acceptance band: re-renders re-pad the stored box a
+            # little each time, and a tight band makes grow/shrink ping-pong.
+            if cur <= 1.45 * target:
+                return orig
+            # The box is far too roomy (e.g. a widened column) and the
+            # auto-fit would overshoot the source size — shrink to the
+            # needed box, centered inside the current one. Always safe:
+            # a subset of an already-approved box.
+            for lines in range(1, 13):
+                nw = int(len(t) * em * target / lines) + 4
+                nh = int(lines * 1.22 * target) + 4
+                if nw <= rw and nh <= rh:
+                    return (int(x + (rw - nw) / 2),
+                            int(y + (rh - nh) / 2), nw, nh)
+            return orig
+        # Deterministic growth: from here on, anchor every computation on
+        # the STABLE source basis, so repeated re-renders derive the exact
+        # same box instead of ping-ponging between wrap arrangements as the
+        # stored (already grown, then re-refined) bbox mutates each pass.
+        x, y = sx, sy
+        rw, rh = max(sw, 8), max(sh, 8)
         # How far may we grow? Scan quiet rows/cols on the cleaned page.
         Lx, Ly = int(rw * 1.8) + 24, int(rh * 1.2) + 24
         wx0, wy0 = max(0, x - Lx), max(0, y - Ly)
@@ -1371,6 +1439,25 @@ class Compositor:
             top -= 1
         while bot < wy1 and quiet_row[bot - wy0]:
             bot += 1
+        # Second pass over the FULL bands the box will actually occupy —
+        # the first walk only checked the original rect's rows/columns, so
+        # art sitting diagonally (new rows x new columns) slipped through.
+        rows2 = slice(max(top, wy0) - wy0, max(min(bot, wy1) - wy0,
+                                               max(top, wy0) - wy0 + 1))
+        quiet_col = (win[rows2] < 160).mean(axis=0) < 0.10
+        left, right = x, x + rw
+        while left - 1 >= wx0 and quiet_col[left - 1 - wx0]:
+            left -= 1
+        while right < wx1 and quiet_col[right - wx0]:
+            right += 1
+        cols2 = slice(max(left, wx0) - wx0, max(min(right, wx1) - wx0,
+                                                max(left, wx0) - wx0 + 1))
+        quiet_row = (win[:, cols2] < 160).mean(axis=1) < 0.10
+        top, bot = y, y + rh
+        while top - 1 >= wy0 and quiet_row[top - 1 - wy0]:
+            top -= 1
+        while bot < wy1 and quiet_row[bot - wy0]:
+            bot += 1
         pad = max(3, int(char_px) // 8)
         left, right = left + pad, right - pad
         top, bot = top + pad, bot - pad
@@ -1380,7 +1467,7 @@ class Compositor:
         # Smallest box that reaches the target size (prefer fewer lines).
         need = None
         for lines in range(1, 13):
-            nw = int(len(t) * 0.62 * target / lines) + 4
+            nw = int(len(t) * em * target / lines) + 4
             nh = int(lines * 1.22 * target) + 4
             if nw <= availW and nh <= availH:
                 need = (nw, nh)
@@ -1389,13 +1476,18 @@ class Compositor:
             if self._est_fit(t, availW, availH) <= self._est_fit(t, rw, rh):
                 return orig
             need = (availW, availH)
-        nw = max(need[0], min(rw, availW))
-        nh = max(need[1], min(rh, availH))
+        # Exactly the needed box — inheriting the original's extra height or
+        # width hands the auto-fit spare room and it overshoots the target.
+        nw, nh = need
         # Centered on the source text, clamped to the allowed extents.
         cx, cy = x + rw / 2.0, y + rh / 2.0
         nx = int(min(max(left, cx - nw / 2.0), right - nw))
         ny = int(min(max(top, cy - nh / 2.0), bot - nh))
         cand = (nx, ny, int(nw), int(nh))
+        croi = win[max(ny, wy0) - wy0:max(ny + int(nh), wy0) - wy0,
+                   max(nx, wx0) - wx0:max(nx + int(nw), wx0) - wx0]
+        if croi.size == 0 or float((croi < 160).mean()) >= 0.10:
+            return orig
         own = {tuple(int(v) for v in b) for b in (own_boxes or ())}
         own.add(orig)
         for ub in used_boxes:
