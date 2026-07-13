@@ -1497,6 +1497,14 @@ class TranslationPipeline:
         # 1) Snap each precise bubble to the LLM translation that overlaps it.
         for reg in seg_regions:
             rb = [int(v) for v in reg.bbox]
+            # A balloon exists to hold lettering. If the text-pixel model sees
+            # none inside, this "bubble" is a prop (headset mic, round eye,
+            # black ornament) — snapping a translation onto it stamps English
+            # on the art. Drop the region; the LLM det it would have consumed
+            # stays unmatched and is handled as (evidence-gated) free text.
+            if not self._box_text_evidence(image, rb):
+                print(f"[pipeline] balloon at {rb} has no lettering — dropped")
+                continue
             best, best_ov = None, 0.0
             for it in llm_items:
                 if id(it) in matched or it.get("in_bubble") is False:

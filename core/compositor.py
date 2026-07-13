@@ -439,6 +439,12 @@ class Compositor:
             # art. Only wipe interiors that really look like balloon paper —
             # anything else goes through the free-text machinery below.
             if mask is not None and not self._is_real_balloon(gray, mask):
+                # Not a balloon (headset mic, ornament, art blob). If nothing
+                # was ever OCR'd here there is no text to move — placing the
+                # LLM's stray translation would stamp English on a prop. Skip
+                # the item and leave the art alone.
+                if not (it.get("original") or "").strip():
+                    continue
                 mask = None
 
             fglow = False
@@ -571,6 +577,11 @@ class Compositor:
             body = vals[vals > 120]     # paper side, strokes excluded
         elif med <= 90:
             body = vals[vals < 120]     # black balloon
+            # A black BALLOON carries light lettering; a solid black prop
+            # (headset mic, silhouette) doesn't. No light strokes = not a
+            # bubble.
+            if float((vals > 180).mean()) < 0.02:
+                return False
         else:
             return False                # mid-gray interior = artwork
         if body.size < 50:
