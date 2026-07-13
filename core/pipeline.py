@@ -1141,6 +1141,31 @@ class TranslationPipeline:
             print(f"[pipeline] text-block free-text pass failed: {e}")
         return items
 
+    def _box_text_evidence(self, image, box) -> bool:
+        """Positive evidence that a claimed region contains LETTERING: the
+        manga-trained text-pixel model must light up inside it. Kills the
+        hallucinated detections that stamp translations on bare artwork —
+        vision-LLM boxes on art (local OCR reads nothing there, so the
+        mismatch check never fires) and manga-ocr 'reading' Japanese into
+        texture. Permissive when the seg model is unavailable."""
+        if self.text_seg is None or not self.text_seg.ok:
+            return True
+        try:
+            m = self.text_seg.mask(image)
+        except Exception:
+            return True
+        if m is None:
+            return True
+        x, y, bw, bh = [int(v) for v in box]
+        h, w = m.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(w, x + bw), min(h, y + bh)
+        if x1 <= x0 or y1 <= y0:
+            return False
+        roi = m[y0:y1, x0:x1]
+        px = int(cv2.countNonZero(roi))
+        return px >= max(40, int(0.004 * roi.size))
+
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
         """Vision-LLM free-text detection: returns box + original + translation
         in a single call. Reads the vertical / dramatic text the CV pass misses."""
@@ -1187,7 +1212,8 @@ class TranslationPipeline:
                                           or _is_watermark(jp) or _is_watermark(tr)):
                 box = [bx, by, bw, bh]
                 if (not any(_boxes_overlap(box, bb) for bb in bubble_boxes)
-                        and not any(_boxes_overlap(box, u) for u in used)):
+                        and not any(_boxes_overlap(box, u) for u in used)
+                        and self._box_text_evidence(image, box)):
                     used.append(box)
                     items.append({
                         "id": next_id, "bbox": box, "original": (jp or tr),
@@ -1231,6 +1257,10 @@ class TranslationPipeline:
                     print(f"[pipeline] LLM box mismatch (claims {jp[:12]!r}, "
                           f"box reads {seen[:12]!r}) — dropped")
                     continue
+            if not self._box_text_evidence(image, box):
+                print(f"[pipeline] LLM box on bare art (claims {jp[:12]!r}) "
+                      f"— dropped")
+                continue
             used.append(box)
 
             rotation = 0.0
@@ -1354,6 +1384,8 @@ class TranslationPipeline:
         box_map: Dict[int, tuple] = {}
 
         for box in free_boxes:
+            if not self._box_text_evidence(image, box):
+                continue
             jp = self.ocr.read_region(image, box, None)
             if not jp:
                 continue

@@ -575,7 +575,24 @@ class Compositor:
             return False                # mid-gray interior = artwork
         if body.size < 50:
             return False
-        return float(np.std(body)) <= 22.0
+        if float(np.std(body)) > 22.0:
+            return False
+        # Decisive signature: a balloon keeps a clean paper MARGIN between
+        # its lettering and the outline; artwork's lines run right across
+        # that ring. Without this, line art on white paper reads as "flat
+        # paper + strokes" and gets flat-filled into a giant blob.
+        if med >= 165:
+            _, _, mw, mh = cv2.boundingRect(mask)
+            depth = max(6, int(0.08 * min(mw, mh)))
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                          (2 * depth + 1, 2 * depth + 1))
+            core = cv2.erode(mask, k)
+            ring = (inner > 0) & (core == 0)
+            if int(ring.sum()) >= 40:
+                ring_dark = float((gray[ring] < 120).mean())
+                if ring_dark > 0.06:
+                    return False
+        return True
 
     def _wipe(self, result, mask, dark):
         """Fill the bubble interior, pulling the fill boundary well inside the
