@@ -941,6 +941,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderActivePage() {
     const p = getActive();
     if (!p) return;
+    const rawFx = document.getElementById("rawFxBtn");
+    if (rawFx) {
+      rawFx.classList.toggle("btn-primary", !!p.rawEffect);
+      rawFx.classList.toggle("btn-ghost", !p.rawEffect);
+    }
     // Result is image-only (no translation) for the scan / upscale workflows —
     // label the panes accordingly so it never says "Translated" when it didn't.
     const noTranslate = !needsTranslate(workflow);
@@ -1206,6 +1211,16 @@ document.addEventListener("DOMContentLoaded", () => {
     URL.revokeObjectURL(a.href);
   });
 
+  const rawFxBtn = document.getElementById("rawFxBtn");
+  if (rawFxBtn) rawFxBtn.addEventListener("click", () => {
+    const page = getActive();
+    if (!page || !page.taskId) return;
+    page.rawEffect = !page.rawEffect;
+    rawFxBtn.classList.toggle("btn-primary", !!page.rawEffect);
+    rawFxBtn.classList.toggle("btn-ghost", !page.rawEffect);
+    applyChanges(rawFxBtn);
+  });
+
   applyBtn.addEventListener("click", () => applyChanges());
   async function applyChanges(btn) {
     const page = getActive();
@@ -1222,6 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           excluded: [...page.excluded], erased: [...(page.erased || [])],
+          raw_effect: !!page.rawEffect,
           glows: [...(page.glows || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},

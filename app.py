@@ -39,6 +39,7 @@ from PIL import Image, ImageDraw, ImageFont
 from core.pipeline import (TranslationPipeline, scan_cleanup, compress_upload,
                            preserve_dark_regions, probe_components)
 from core.compositor import Compositor
+from core.effects import raw_scan
 from core.enhancer import ImageEnhancer
 
 
@@ -1098,6 +1099,7 @@ async def rerender(task_id: str, request: Request):
     excluded = {str(i) for i in payload.get("excluded", [])}
     erased = {str(i) for i in payload.get("erased", [])}
     glows = {str(i) for i in payload.get("glows", [])}
+    raw_effect = bool(payload.get("raw_effect", False))
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
@@ -1248,6 +1250,8 @@ async def rerender(task_id: str, request: Request):
                     src = scan_finish(src)
                 rm = rmask > 0
                 out[rm] = src[rm]
+        if raw_effect:
+            out = raw_scan(out)
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:
