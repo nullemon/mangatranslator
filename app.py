@@ -810,7 +810,8 @@ async def upscale_only(file: UploadFile = File(...),
 
 
 @app.post("/api/rawify")
-async def rawify_only(file: UploadFile = File(...)):
+async def rawify_only(file: UploadFile = File(...),
+                      strength: str = Form("1.0")):
     """Scan → Raw: make a clean page look like a rough magazine raw (tan
     paper, grain, vignette, dust). Pure deterministic CV — no models, no
     translation, art and lettering untouched."""
@@ -828,11 +829,16 @@ async def rawify_only(file: UploadFile = File(...)):
         "upload_path": upload_path, "name": file.filename or "page.png",
         "mode": "rawify",
     }
-    asyncio.create_task(_run_rawify(task_id, upload_path, output_path))
+    try:
+        stren = float(strength)
+    except (TypeError, ValueError):
+        stren = 1.0
+    asyncio.create_task(_run_rawify(task_id, upload_path, output_path, stren))
     return {"task_id": task_id}
 
 
-async def _run_rawify(task_id: str, image_path: str, output_path: str):
+async def _run_rawify(task_id: str, image_path: str, output_path: str,
+                      strength: float = 1.0):
     try:
         tasks[task_id].update({"step": 1, "progress": 30,
                                "message": "Roughing the paper..."})
@@ -841,7 +847,7 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str):
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
-            out = raw_scan(img)
+            out = raw_scan(img, strength=strength)
             cv2.imwrite(output_path, out)
             return out.shape
 
@@ -1152,6 +1158,10 @@ async def rerender(task_id: str, request: Request):
     erased = {str(i) for i in payload.get("erased", [])}
     glows = {str(i) for i in payload.get("glows", [])}
     raw_effect = bool(payload.get("raw_effect", False))
+    try:
+        raw_strength = float(payload.get("raw_strength", 1.0))
+    except (TypeError, ValueError):
+        raw_strength = 1.0
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
@@ -1303,7 +1313,7 @@ async def rerender(task_id: str, request: Request):
                 rm = rmask > 0
                 out[rm] = src[rm]
         if raw_effect:
-            out = raw_scan(out)
+            out = raw_scan(out, strength=raw_strength)
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:

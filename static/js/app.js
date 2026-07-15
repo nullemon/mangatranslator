@@ -284,6 +284,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw";
   const isUpscaleOnly = wf => wf === "upscale-only";
   const isRawify = wf => wf === "scan-raw";
+  const rawStrength = document.getElementById("rawStrength");
+  const rawStrengthVal = document.getElementById("rawStrengthVal");
+  const rawIntensityPanel = document.getElementById("rawIntensityPanel");
+  if (rawStrength) {
+    rawStrength.value = localStorage.getItem("manga_raw_strength") || "1";
+    if (rawStrengthVal) rawStrengthVal.textContent = parseFloat(rawStrength.value).toFixed(1);
+    rawStrength.addEventListener("input", () => {
+      if (rawStrengthVal) rawStrengthVal.textContent = parseFloat(rawStrength.value).toFixed(1);
+      localStorage.setItem("manga_raw_strength", rawStrength.value);
+    });
+  }
 
   /* ══ THEME ══ */
   function applyTheme(t) {
@@ -315,6 +326,7 @@ document.addEventListener("DOMContentLoaded", () => {
     workflow = wf;
     wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
     enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
+    if (rawIntensityPanel) rawIntensityPanel.style.display = isRawify(wf) ? "" : "none";
     // Keep the Settings panel always visible (it's collapsible) so the top menu
     // never disappears when switching to Raw → Scan / upscale workflows.
     document.querySelector(".settings-bar").style.display = "";
@@ -810,6 +822,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
+      f.append("strength", rawStrength ? rawStrength.value : "1");
       return { url: "/api/rawify", form: f };
     }
     f.append("provider", enhanceProvider.value);
@@ -1247,6 +1260,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           excluded: [...page.excluded], erased: [...(page.erased || [])],
           raw_effect: !!page.rawEffect,
+          raw_strength: rawStrength ? parseFloat(rawStrength.value) : 1.0,
           glows: [...(page.glows || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
