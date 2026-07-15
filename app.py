@@ -3,6 +3,7 @@ import io
 import os
 import time
 import uuid
+import random
 import zipfile
 from pathlib import Path
 
@@ -112,8 +113,28 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         bb = draw.textbbox((0, 0), text, font=font)
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         m = max(10, min(w, h) // 60)
-        x = (w - tw - m) if place in ("br", "tr") else m
-        y = (h - th - m) if place in ("br", "bl") else m
+        if place == "random":
+            # Fresh roll on every render — hit Apply again to move it, or
+            # switch to a fixed corner. Samples a dozen spots and takes the
+            # QUIETEST one, so the stamp lands on flat art or paper instead
+            # of across a face or lettering.
+            gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            x_lo, x_hi = int(0.06 * w), max(int(0.94 * w) - tw, int(0.06 * w) + 1)
+            y_lo, y_hi = int(0.06 * h), max(int(0.94 * h) - th, int(0.06 * h) + 1)
+            best_xy, best_score = (m, m), 1e18
+            for _ in range(12):
+                cx = random.randint(x_lo, x_hi)
+                cy = random.randint(y_lo, y_hi)
+                reg = gray_full[cy:cy + th, cx:cx + tw]
+                if reg.size == 0:
+                    continue
+                score = float(reg.std())
+                if score < best_score:
+                    best_score, best_xy = score, (cx, cy)
+            x, y = best_xy
+        else:
+            x = (w - tw - m) if place in ("br", "tr") else m
+            y = (h - th - m) if place in ("br", "bl") else m
         # Readable on whatever the corner holds: white text on dark art,
         # dark text on paper — with a thin contrasting outline either way.
         region = img[max(0, y - 4):min(h, y + th + 4), max(0, x - 4):min(w, x + tw + 4)]
@@ -811,7 +832,8 @@ async def upscale_only(file: UploadFile = File(...),
 
 @app.post("/api/rawify")
 async def rawify_only(file: UploadFile = File(...),
-                      strength: str = Form("1.0")):
+                      strength: str = Form("1.0"),
+                      style: str = Form("photo")):
     """Scan → Raw: make a clean page look like a rough magazine raw (tan
     paper, grain, vignette, dust). Pure deterministic CV — no models, no
     translation, art and lettering untouched."""
@@ -833,12 +855,14 @@ async def rawify_only(file: UploadFile = File(...),
         stren = float(strength)
     except (TypeError, ValueError):
         stren = 1.0
-    asyncio.create_task(_run_rawify(task_id, upload_path, output_path, stren))
+    wstyle = style if style in ("photo", "scan") else "photo"
+    asyncio.create_task(_run_rawify(task_id, upload_path, output_path,
+                                    stren, wstyle))
     return {"task_id": task_id}
 
 
 async def _run_rawify(task_id: str, image_path: str, output_path: str,
-                      strength: float = 1.0):
+                      strength: float = 1.0, style: str = "photo"):
     try:
         tasks[task_id].update({"step": 1, "progress": 30,
                                "message": "Roughing the paper..."})
@@ -847,7 +871,7 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
-            out = raw_scan(img, strength=strength)
+            out = raw_scan(img, strength=strength, style=style)
             cv2.imwrite(output_path, out)
             return out.shape
 
@@ -1162,6 +1186,8 @@ async def rerender(task_id: str, request: Request):
         raw_strength = float(payload.get("raw_strength", 1.0))
     except (TypeError, ValueError):
         raw_strength = 1.0
+    raw_style = payload.get("raw_style")
+    raw_style = raw_style if raw_style in ("photo", "scan") else "photo"
     edits = {str(k): v for k, v in (payload.get("edits") or {}).items()}
     font_scale = float(payload.get("font_scale") or 1.0)
     offsets = {str(k): v for k, v in (payload.get("offsets") or {}).items()}
@@ -1313,7 +1339,7 @@ async def rerender(task_id: str, request: Request):
                 rm = rmask > 0
                 out[rm] = src[rm]
         if raw_effect:
-            out = raw_scan(out, strength=raw_strength)
+            out = raw_scan(out, strength=raw_strength, style=raw_style)
         cv2.imwrite(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:

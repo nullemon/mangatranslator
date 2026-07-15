@@ -154,6 +154,7 @@
               <option value="tr">Corner — top right</option>
               <option value="tl">Corner — top left</option>
               <option value="tile">Tiled across whole page</option>
+              <option value="random">Random spot (re-rolls each render)</option>
             </select>
             <select id="wmSize" style="width:96px" title="Watermark size">
               <option value="s">Small</option>
@@ -336,6 +337,10 @@
         </label>
       </div>
       <div class="size-control" id="rawIntensityPanel" style="display:none; margin-top:10px">
+        <select id="rawStyle" style="width:210px" title="Raw style">
+          <option value="photo" selected>Photo leak (Jump page photo)</option>
+          <option value="scan">Aged scan (tan paper, dust)</option>
+        </select>
         <label for="rawStrength">Raw intensity</label>
         <input type="range" id="rawStrength" min="0.4" max="2" step="0.1" value="1">
         <span id="rawStrengthVal">1.0</span>

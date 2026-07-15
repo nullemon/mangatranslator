@@ -284,6 +284,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw";
   const isUpscaleOnly = wf => wf === "upscale-only";
   const isRawify = wf => wf === "scan-raw";
+  const rawStyle = document.getElementById("rawStyle");
+  if (rawStyle) {
+    rawStyle.value = localStorage.getItem("manga_raw_style") || "photo";
+    rawStyle.addEventListener("change", () => localStorage.setItem("manga_raw_style", rawStyle.value));
+  }
   const rawStrength = document.getElementById("rawStrength");
   const rawStrengthVal = document.getElementById("rawStrengthVal");
   const rawIntensityPanel = document.getElementById("rawIntensityPanel");
@@ -823,6 +828,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
       f.append("strength", rawStrength ? rawStrength.value : "1");
+      f.append("style", rawStyle ? rawStyle.value : "photo");
       return { url: "/api/rawify", form: f };
     }
     f.append("provider", enhanceProvider.value);
@@ -1261,6 +1267,7 @@ document.addEventListener("DOMContentLoaded", () => {
           excluded: [...page.excluded], erased: [...(page.erased || [])],
           raw_effect: !!page.rawEffect,
           raw_strength: rawStrength ? parseFloat(rawStrength.value) : 1.0,
+          raw_style: rawStyle ? rawStyle.value : "photo",
           glows: [...(page.glows || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
