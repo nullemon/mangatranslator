@@ -281,8 +281,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
   const isClean = wf => wf === "clean";
-  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean";
+  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw";
   const isUpscaleOnly = wf => wf === "upscale-only";
+  const isRawify = wf => wf === "scan-raw";
 
   /* ══ THEME ══ */
   function applyTheme(t) {
@@ -321,6 +322,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
       "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
+      "scan-raw": "Make it Raw",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
   }
@@ -806,6 +808,10 @@ document.addEventListener("DOMContentLoaded", () => {
       // Faithful HD upscale, no translation and no API keys needed.
       return { url: "/api/upscale", form: f };
     }
+    if (isRawify(workflow)) {
+      // Deterministic rough-raw effect: no models, no API keys.
+      return { url: "/api/rawify", form: f };
+    }
     f.append("provider", enhanceProvider.value);
     f.append("api_key", enhanceKey.value.trim());
     f.append("prompt", enhancePrompt.value);
@@ -949,13 +955,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // Result is image-only (no translation) for the scan / upscale workflows —
     // label the panes accordingly so it never says "Translated" when it didn't.
     const noTranslate = !needsTranslate(workflow);
-    const leftLabel = (workflow === "raw-scan" || workflow === "scan-upscale") ? "Rough" : "Original";
+    const leftLabel = (workflow === "raw-scan" || workflow === "scan-upscale") ? "Rough"
+                    : workflow === "scan-raw" ? "Clean" : "Original";
     const rightLabel = workflow === "upscale-only" ? "Upscaled HD"
                      : workflow === "scan-upscale" ? "Scan + HD"
                      : workflow === "raw-scan" ? "Manga Scan"
+                     : workflow === "scan-raw" ? "Raw feel"
                      : "Translated";
     const tabLabel = workflow === "raw-scan" ? "Scan"
                    : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"
+                   : workflow === "scan-raw" ? "Raw"
                    : "Translated";
 
     if (p.status === "done") {

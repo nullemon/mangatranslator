@@ -809,6 +809,58 @@ async def upscale_only(file: UploadFile = File(...),
     return {"task_id": task_id}
 
 
+@app.post("/api/rawify")
+async def rawify_only(file: UploadFile = File(...)):
+    """Scan → Raw: make a clean page look like a rough magazine raw (tan
+    paper, grain, vignette, dust). Pure deterministic CV — no models, no
+    translation, art and lettering untouched."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_raw.png"
+    content = compress_upload(await file.read())
+    with open(upload_path, "wb") as f:
+        f.write(content)
+    tasks[task_id] = {
+        "status": "processing", "step": 1, "message": "Queued", "progress": 0,
+        "upload_path": upload_path, "name": file.filename or "page.png",
+        "mode": "rawify",
+    }
+    asyncio.create_task(_run_rawify(task_id, upload_path, output_path))
+    return {"task_id": task_id}
+
+
+async def _run_rawify(task_id: str, image_path: str, output_path: str):
+    try:
+        tasks[task_id].update({"step": 1, "progress": 30,
+                               "message": "Roughing the paper..."})
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            out = raw_scan(img)
+            cv2.imwrite(output_path, out)
+            return out.shape
+
+        shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        tasks[task_id].update({
+            "status": "done", "step": 2, "progress": 100,
+            "message": f"Raw look ready! ({shape[1]}×{shape[0]})",
+            "result": {"output_path": output_path, "translations": {}},
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        })
+    except Exception as e:
+        if task_id in tasks:
+            tasks[task_id].update(
+                {"status": "error", "message": str(e), "progress": 0})
+    finally:
+        _note_job_done()
+
+
 async def _run_upscale(task_id: str, image_path: str, output_path: str):
     try:
         from core.upscale import Upscaler
