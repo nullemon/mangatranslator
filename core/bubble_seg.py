@@ -156,7 +156,22 @@ class BubbleSegDetector:
             return None
         cnt = max(cnts, key=cv2.contourArea)
         x, y, bw, bh = cv2.boundingRect(cnt)
-        if bw < 12 or bh < 12:
+
+        # Page-relative minimum-size gate. A FIXED 12px floor is meaningless
+        # across scan sizes (~1.4% of an 850px page but ~0.6% of a 2000px page),
+        # so on hi-res scans the segmenter's hallucinated background specks
+        # (30-50px blobs over art / screentone) sailed straight through and got
+        # a translation stamped on them. Gate on fractions of the ACTUAL page,
+        # chosen well below the smallest real bubble (a lone 'え?' / '?!'
+        # reaction balloon is ~0.0012 of page area, short side ~3-4% — a 2x+
+        # margin) so genuine tiny bubbles always survive. Lettering-free art of
+        # any size is caught separately downstream by the text-evidence gate.
+        ph, pw = raw_mask.shape[:2]
+        page_area = ph * pw
+        balloon_area = float(cv2.contourArea(cnt))
+        min_area_floor = max(0.0005 * page_area, 250.0)   # ~0.05% of the page
+        min_dim_floor = max(0.013 * min(ph, pw), 10)      # ~1.3% of short side
+        if balloon_area < min_area_floor or min(bw, bh) < min_dim_floor:
             return None
 
         # Solid balloon footprint (fill any seg holes).

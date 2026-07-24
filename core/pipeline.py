@@ -1494,26 +1494,91 @@ class TranslationPipeline:
         items: List[dict] = []
         matched = set()
 
-        # 1) Snap each precise bubble to the LLM translation that overlaps it.
+        # 1) Assign each precise balloon to the LLM translation that truly
+        #    belongs to it, using GLOBAL best-first matching (not greedy in seg
+        #    order). Greedy let the first-visited bubble grab a det belonging to
+        #    its neighbour: a loose det whose box lands in the overlap of two
+        #    bubble bboxes scored ~1.0 (intersection / smaller-area) for BOTH,
+        #    so reading order decided the winner and the loser took the wrong
+        #    leftover det — a full swap under right-to-left reading order
+        #    ("bubble 1's translation shows up in bubble 2"). Fix: score EVERY
+        #    (bubble, det) pair with a scale-aware metric whose centre term
+        #    breaks that tie, gate out pairs that don't plausibly belong
+        #    together, then assign highest-score-first, each used at most once.
+        def _pair_score(rb, db):
+            """Confidence (0..~1.05) that LLM det box `db` belongs to balloon
+            box `rb` (both x,y,w,h), or None if the pair is not eligible — a
+            far/corner-clipping det that must NOT be snapped and is left to the
+            free-text path instead."""
+            ax, ay, aw, ah = rb
+            bx, by, bw, bh = db
+            xi, yi = max(ax, bx), max(ay, by)
+            xf, yf = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+            if xi >= xf or yi >= yf:
+                return None                      # no overlap at all
+            inter = (xf - xi) * (yf - yi)
+            area_a = max(aw * ah, 1)
+            area_b = max(bw * bh, 1)
+            frac_det = inter / area_b            # how much of the det is inside
+            frac_bub = inter / area_a            # how much of the balloon covered
+            iou = inter / (area_a + area_b - inter)
+            acx, acy = ax + aw / 2.0, ay + ah / 2.0
+            bcx, bcy = bx + bw / 2.0, by + bh / 2.0
+            det_center_in = (ax <= bcx <= ax + aw) and (ay <= bcy <= ay + ah)
+            # Eligibility: the det centre sits inside the balloon, OR at least
+            # half the det is inside, OR it covers at least half the balloon.
+            # Otherwise the boxes merely clip corners -> not a member.
+            if not (det_center_in or frac_det >= 0.5 or frac_bub >= 0.5):
+                return None
+            # Centre closeness normalised by the balloon's own size — THE term
+            # that separates two bubbles whose bboxes both contain a small det.
+            diag = (aw * aw + ah * ah) ** 0.5 or 1.0
+            dist = ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+            center_close = max(0.0, 1.0 - dist / (0.5 * diag))
+            score = 0.4 * iou + 0.3 * max(frac_det, frac_bub) + 0.3 * center_close
+            if det_center_in:
+                score += 0.05                    # tie-break toward containment
+            return score
+
+        MATCH_MIN = 0.15   # even an eligible pair below this is too weak to snap
+
+        # Balloons that actually hold lettering (prop shapes — headset mic,
+        # round eye, black ornament — dropped here so they neither consume a det
+        # nor get an English stamp on bare art).
+        text_regions = []
         for reg in seg_regions:
             rb = [int(v) for v in reg.bbox]
-            # A balloon exists to hold lettering. If the text-pixel model sees
-            # none inside, this "bubble" is a prop (headset mic, round eye,
-            # black ornament) — snapping a translation onto it stamps English
-            # on the art. Drop the region; the LLM det it would have consumed
-            # stays unmatched and is handled as (evidence-gated) free text.
             if not self._box_text_evidence(image, rb):
                 print(f"[pipeline] balloon at {rb} has no lettering — dropped")
                 continue
-            best, best_ov = None, 0.0
-            for it in llm_items:
-                if id(it) in matched or it.get("in_bubble") is False:
+            text_regions.append((reg, rb))
+
+        # Rank every eligible (bubble, det) pair, best first, then assign 1-to-1.
+        pairs = []
+        for ri, (reg, rb) in enumerate(text_regions):
+            for di, it in enumerate(llm_items):
+                if it.get("in_bubble") is False:
                     continue
-                ov = _overlap_frac(rb, it["bbox"])
-                if ov > best_ov:
-                    best, best_ov = it, ov
-            if best is not None and best_ov >= 0.2:
-                matched.add(id(best))
+                s = _pair_score(rb, it["bbox"])
+                if s is not None and s >= MATCH_MIN:
+                    pairs.append((s, ri, di))
+        pairs.sort(key=lambda p: p[0], reverse=True)
+
+        assigned = {}                    # region-index -> llm item
+        used_reg, used_det = set(), set()
+        for s, ri, di in pairs:
+            if ri in used_reg or di in used_det:
+                continue
+            used_reg.add(ri)
+            used_det.add(di)
+            assigned[ri] = llm_items[di]
+            matched.add(id(llm_items[di]))
+
+        # Emit one item per lettering balloon: the assigned translation, else a
+        # local OCR + translate fallback for a bubble the LLM missed entirely.
+        for ri, (reg, rb) in enumerate(text_regions):
+            best = assigned.get(ri)
+            if best is not None:
                 items.append({
                     "id": reg.id, "bbox": rb,
                     "original": best.get("original", ""),
@@ -1580,10 +1645,14 @@ class TranslationPipeline:
                 if hit is not None:
                     a_ex = hit["bbox"][2] * hit["bbox"][3]
                     # The block detector found a MUCH bigger region here — a giant
-                    # title/SFX the LLM under-boxed or mistook for a bubble. Adopt
-                    # the big box and erase it as free text (keep the better
-                    # wording). Normal bubbles (block box is smaller) are kept.
-                    if a_new > 1.6 * a_ex:
+                    # title/SFX the LLM under-boxed. Adopt the big box and erase
+                    # it as free text (keep the better wording). Only ever adopt
+                    # onto an existing FREE-TEXT item: adopting onto a masked
+                    # bubble would tear that bubble's dialogue out of its balloon
+                    # and stamp it across the art (a source of "bubble 1's text
+                    # in the wrong place"). A block overlapping only a bubble is
+                    # left alone. Normal bubbles (block box smaller) are kept.
+                    if a_new > 1.6 * a_ex and hit.get("in_bubble") is False:
                         hit["bbox"] = [int(v) for v in it["bbox"]]
                         hit["in_bubble"] = False
                         hit["rotation"] = it.get("rotation", hit.get("rotation", 0))
@@ -1591,6 +1660,17 @@ class TranslationPipeline:
                             hit["translation"] = it.get("translation", "")
                         masks.pop(hit["id"], None)
                         added += 1
+                    continue
+                # No geometric overlap, but the same narration/title can come
+                # back from BOTH the smart-detect call and this free-text call
+                # at slightly different coordinates — placed twice, it reads as
+                # "random" duplicate text. Drop it if its source text already
+                # matches an existing free-text item.
+                jp_new = (it.get("original") or "").strip()
+                if len(jp_new) >= 4 and any(
+                        ex.get("in_bubble") is False
+                        and _texts_match(jp_new, ex.get("original", ""))
+                        for ex in items):
                     continue
                 it["id"] = next_id
                 next_id += 1
