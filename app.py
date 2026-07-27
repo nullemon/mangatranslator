@@ -933,8 +933,8 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
 
 @app.post("/api/endcard")
 async def end_card(
-    scanlation: str = Form("BorutoTBV Scanlations"),
-    discord: str = Form("discord.gg/borutotbv"),
+    scanlation: str = Form("Kaisuki"),
+    discord: str = Form(""),
     show_discord: str = Form("true"),
     style: str = Form("royal"),
     theme: str = Form(""),

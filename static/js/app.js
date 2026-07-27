@@ -2419,11 +2419,14 @@ document.addEventListener("DOMContentLoaded", () => {
     endCardBtn.textContent = "Making…";
     try {
       const f = new FormData();
-      f.append("scanlation", (endScan && endScan.value.trim()) || "BorutoTBV Scanlations");
-      // Discord is omitted entirely when the toggle is off (clean page).
-      const showDiscord = !endShowDiscord || endShowDiscord.checked;
+      f.append("scanlation", (endScan && endScan.value.trim()) || "Kaisuki");
+      // Discord shows only when the toggle is on AND a link is typed — a blank
+      // field never stamps a stale/default link, so whatever you enter (and it
+      // persists between sessions) is exactly what appears. Change it anytime.
+      const showDiscord = (!endShowDiscord || endShowDiscord.checked)
+                          && !!(endDiscord && endDiscord.value.trim());
       f.append("show_discord", showDiscord ? "true" : "false");
-      f.append("discord", showDiscord ? ((endDiscord && endDiscord.value.trim()) || "discord.gg/borutotbv") : "");
+      f.append("discord", showDiscord ? endDiscord.value.trim() : "");
       if (endMessage && endMessage.value.trim()) f.append("footer", endMessage.value.trim());
       f.append("style", endTheme ? endTheme.value : "royal");
       if (endUseColor && endUseColor.checked && endColor) f.append("accent", endColor.value);

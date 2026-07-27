@@ -583,8 +583,8 @@ def _draw_stack(img, st, m, scanlation, discord, heading, kicker, footer):
 
 # ─────────────────────────────── public API ─────────────────────────────
 def make_end_card(
-    scanlation: str = "BorutoTBV Scanlations",
-    discord: str = "discord.gg/borutotbv",
+    scanlation: str = "Kaisuki",
+    discord: str = "",
     width: int = 1200,
     height: int = 1700,
     style: str = "royal",
