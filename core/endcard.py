@@ -550,17 +550,15 @@ def _draw_stack(img, st, m, scanlation, discord, heading, kicker, footer):
         _center(d, cx, cy, scanlation, nf, accent)
     cy += _text_h(nf, scanlation) + int(H * 0.066)
 
-    # Discord pill
+    # Link pill — whatever link was provided, shown as-is. No label, no
+    # platform wording: if a link is set it appears, if not the pill is skipped.
     if discord:
-        label = "JOIN OUR DISCORD"
-        lf = _font(st["f_body"], int(H * 0.0235))
         df = _fit(st["f_body"], discord, inner_w * 0.8, int(H * 0.030))
-        pad_x, pad_y = int(W * 0.05), int(H * 0.022)
-        gap = int(H * 0.010)
-        lw, dw = _text_w(lf, label), _text_w(df, discord)
-        lhh, dhh = _text_h(lf, label), _text_h(df, discord)
-        pill_w = max(lw, dw) + 2 * pad_x
-        pill_h = lhh + dhh + gap + 2 * pad_y
+        pad_x, pad_y = int(W * 0.05), int(H * 0.024)
+        dw = _text_w(df, discord)
+        dhh = _text_h(df, discord)
+        pill_w = dw + 2 * pad_x
+        pill_h = dhh + 2 * pad_y
         x0, y0 = cx - pill_w / 2, cy
         box = [x0, y0, x0 + pill_w, y0 + pill_h]
         rad = int(pill_h * 0.30)
@@ -570,9 +568,7 @@ def _draw_stack(img, st, m, scanlation, discord, heading, kicker, footer):
             img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(12)))
             d = ImageDraw.Draw(img)
         d.rounded_rectangle(box, radius=rad, fill=st["pill"])
-        _center(d, cx, y0 + pad_y - lf.getbbox(label)[1], label, lf,
-                st["pill_ink"], tracking=int(H * 0.003))
-        _center(d, cx, y0 + pad_y + lhh + gap - df.getbbox(discord)[1], discord, df, st["pill_ink"])
+        _center(d, cx, y0 + pad_y - df.getbbox(discord)[1], discord, df, st["pill_ink"])
         cy = y0 + pill_h
 
     # Footer

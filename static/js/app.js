@@ -2391,7 +2391,6 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ══ END PAGE (one-click "thanks for reading" last page) ══ */
   const endScan    = document.getElementById("endScan");
   const endDiscord = document.getElementById("endDiscord");
-  const endShowDiscord = document.getElementById("endShowDiscord");
   const endMessage = document.getElementById("endMessage");
   const endTheme   = document.getElementById("endTheme");
   const endUseColor = document.getElementById("endUseColor");
@@ -2402,14 +2401,12 @@ document.addEventListener("DOMContentLoaded", () => {
     endDiscord.value = localStorage.getItem("manga_end_discord") || "";
     endTheme.value   = localStorage.getItem("manga_end_style")   || "royal";
     if (endMessage) endMessage.value = localStorage.getItem("manga_end_message") || "";
-    if (endShowDiscord) endShowDiscord.checked = localStorage.getItem("manga_end_showdiscord") !== "0";
     if (endColor)    endColor.value = localStorage.getItem("manga_end_color") || "#d4af5a";
     if (endUseColor) endUseColor.checked = localStorage.getItem("manga_end_usecolor") === "1";
     endScan.addEventListener("input",    () => localStorage.setItem("manga_end_scan", endScan.value));
     endDiscord.addEventListener("input", () => localStorage.setItem("manga_end_discord", endDiscord.value));
     endTheme.addEventListener("change",  () => localStorage.setItem("manga_end_style", endTheme.value));
     if (endMessage) endMessage.addEventListener("input", () => localStorage.setItem("manga_end_message", endMessage.value));
-    if (endShowDiscord) endShowDiscord.addEventListener("change", () => localStorage.setItem("manga_end_showdiscord", endShowDiscord.checked ? "1" : "0"));
     if (endColor)    endColor.addEventListener("input", () => localStorage.setItem("manga_end_color", endColor.value));
     if (endUseColor) endUseColor.addEventListener("change", () => localStorage.setItem("manga_end_usecolor", endUseColor.checked ? "1" : "0"));
   }
@@ -2420,13 +2417,11 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const f = new FormData();
       f.append("scanlation", (endScan && endScan.value.trim()) || "Kaisuki");
-      // Discord shows only when the toggle is on AND a link is typed — a blank
-      // field never stamps a stale/default link, so whatever you enter (and it
-      // persists between sessions) is exactly what appears. Change it anytime.
-      const showDiscord = (!endShowDiscord || endShowDiscord.checked)
-                          && !!(endDiscord && endDiscord.value.trim());
-      f.append("show_discord", showDiscord ? "true" : "false");
-      f.append("discord", showDiscord ? endDiscord.value.trim() : "");
+      // The link shows when you type one, and is omitted when the field is
+      // blank — no toggle, no default. Whatever you enter is exactly what
+      // appears, and the field persists between sessions so you set it once.
+      const link = (endDiscord && endDiscord.value.trim()) || "";
+      f.append("discord", link);
       if (endMessage && endMessage.value.trim()) f.append("footer", endMessage.value.trim());
       f.append("style", endTheme ? endTheme.value : "royal");
       if (endUseColor && endUseColor.checked && endColor) f.append("accent", endColor.value);
