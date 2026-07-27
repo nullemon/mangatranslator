@@ -73,6 +73,18 @@ def compress_output(path: str, target_kb: int = 3072) -> str:
     return jpg
 
 
+_WM_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_WM_FONT_CANDIDATES = [
+    os.path.join(_WM_FONT_DIR, "ComicNeue-Bold.ttf"),   # bundled, keeps case
+    os.path.join(_WM_FONT_DIR, "BebasNeue-Regular.ttf"),
+    os.path.join(_WM_FONT_DIR, "Anton-Regular.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+
+
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
                      opacity: int = 50, size: str = "m"):
     """Watermark the finished page. `place` puts the text ONCE in a corner
@@ -92,9 +104,20 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
     draw = ImageDraw.Draw(overlay)
 
     def _font(size):
+        # Prefer a BUNDLED font (always ships with the app) so the watermark
+        # renders at the right size everywhere. The old hardcoded system path
+        # was absent on many setups (Windows, minimal Linux, some servers), and
+        # PIL's load_default() fallback ignores `size` — so the stamp was drawn
+        # but microscopic, i.e. effectively invisible. Bundle first, then common
+        # system fonts, then the tiny default only as a last resort.
+        for p in _WM_FONT_CANDIDATES:
+            try:
+                if os.path.exists(p):
+                    return ImageFont.truetype(p, size)
+            except Exception:
+                continue
         try:
-            return ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+            return ImageFont.truetype("DejaVuSans-Bold.ttf", size)
         except Exception:
             return ImageFont.load_default()
 
