@@ -654,11 +654,10 @@ document.addEventListener("DOMContentLoaded", () => {
     let drawing = false, start = null, cur = null;
     let lasso = [];              // in-progress lasso points (normalised)
 
-    // The Cut button shows only for the translate-on-page workflows with SBS on.
+    // The Cut button shows for any translate workflow when SBS is on.
     function cutApplicable() {
-      const wf = workflow;
       const sbs = sbsMode && sbsMode.checked;
-      return sbs && (wf === "scan-translate" || wf === "raw-translate");
+      return !!sbs && needsTranslate(workflow);
     }
     window.updateCutBtn = function () {
       if (!btn) return;
