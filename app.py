@@ -355,6 +355,7 @@ async def translate(
     credit: str = Form(""),
     profile: str = Form(""),
     gpu_cap: str = Form("100"),
+    cut_regions: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -439,6 +440,7 @@ async def translate(
             isolate_page=(isolate_page == "true"),
             compress=(compress == "true"),
             credit=credit.strip(),
+            cut_regions=cut_regions,
         )
     )
 
@@ -477,9 +479,20 @@ async def _run(
     isolate_page: bool = False,
     compress: bool = False,
     credit: str = "",
+    cut_regions: str = "",
 ):
     try:
         loop = asyncio.get_event_loop()
+        # SBS "cut into pieces": parse the drawn regions (normalised polygons).
+        pieces = []
+        if cut_regions:
+            try:
+                import json as _json
+                parsed = _json.loads(cut_regions)
+                if isinstance(parsed, list):
+                    pieces = [r for r in parsed if isinstance(r, list) and len(r) >= 3]
+            except Exception as e:
+                print(f"[run] bad cut_regions ignored: {e}")
 
         # Default: translate on the exact uploaded pixels. The Scan workflows
         # below redirect this to the cleaned/enhanced page.
@@ -590,10 +603,19 @@ async def _run(
         def on_progress(update):
             tasks[task_id].update(update)
 
-        result = await loop.run_in_executor(
-            None,
-            lambda: pipeline.process(translate_source, output_path, on_progress),
-        )
+        # "Cut into pieces" (SBS): translate each drawn region on its own and
+        # merge back, when regions were provided and we're actually translating.
+        if pieces and not clean_only:
+            result = await loop.run_in_executor(
+                None,
+                lambda: pipeline.process_pieces(
+                    translate_source, output_path, pieces, on_progress),
+            )
+        else:
+            result = await loop.run_in_executor(
+                None,
+                lambda: pipeline.process(translate_source, output_path, on_progress),
+            )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
         # Bound memory: full-page bubble masks are ~MBs each at high res and
         # accumulate every page — a long batch quietly eats gigabytes and lags

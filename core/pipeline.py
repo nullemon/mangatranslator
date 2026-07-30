@@ -1007,6 +1007,142 @@ class TranslationPipeline:
 
         return self._result(output_path, base_path, items, ann_path)
 
+    def process_pieces(self, image_path, output_path, regions,
+                       progress_cb=None, translate_all=True):
+        """SBS 'cut into pieces': translate each user-drawn region on its OWN
+        (localised detection = far better bubble/translation assignment on a
+        dense page), then composite every result back onto the original page in
+        ONE pass so the seams are invisible and the editor still sees one page.
+
+        `regions` is a list of polygons in normalised [0..1] page coords:
+        [[[x,y],[x,y],...], ...]. Boxes and slice-strips are just 4-point
+        polygons; a lasso is an n-point polygon. Anything with text that no
+        region covers is translated as a final 'rest of page' piece when
+        translate_all is on, so nothing is missed."""
+        def update(step, msg, pct):
+            if progress_cb:
+                progress_cb({"step": step, "message": msg, "progress": pct})
+
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Cannot load image: {image_path}")
+        # NOTE: no auto_crop here — the regions are normalised against the
+        # image the user drew on, so the origin must not shift. A uniform
+        # max-dim resize is fine (normalised coords scale with it).
+        h0, w0 = image.shape[:2]
+        max_dim = 10000 if self.max_quality else 4000
+        if max(h0, w0) > max_dim:
+            s = max_dim / max(h0, w0)
+            image = cv2.resize(image, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+        h, w = image.shape[:2]
+
+        base_path = self._base_path(output_path)
+        cv2.imwrite(base_path, image)
+
+        detect = (self._smart_detect if self.use_smart_detection
+                  else self._standard_detect)
+        noop = lambda *a, **k: None
+        tmp_out = self._suffix_path(output_path, "piece")
+
+        # Normalised polygons → clamped pixel polygons; drop degenerate ones.
+        polys = []
+        for reg in (regions or []):
+            pts = []
+            for p in reg:
+                try:
+                    px = int(round(float(p[0]) * w))
+                    py = int(round(float(p[1]) * h))
+                except (TypeError, ValueError, IndexError):
+                    continue
+                pts.append([max(0, min(px, w - 1)), max(0, min(py, h - 1))])
+            if len(pts) >= 3:
+                polys.append(np.array(pts, np.int32))
+
+        # Reading order: coarse top→bottom rows, right→left within a row (manga).
+        def _key(poly):
+            x, y, bw, bh = cv2.boundingRect(poly)
+            return (y // max(1, h // 12), -x)
+        polys.sort(key=_key)
+
+        all_items, all_masks = [], {}
+        covered = np.zeros((h, w), np.uint8)
+        next_id = 1
+
+        for i, poly in enumerate(polys):
+            update(2, f"Translating piece {i + 1} of {len(polys)}...",
+                   18 + int(62 * i / max(1, len(polys))))
+            x, y, bw, bh = cv2.boundingRect(poly)
+            x2, y2 = min(w, x + bw), min(h, y + bh)
+            # Skip degenerate / accidental specks (also guarded frontend-side).
+            if x2 - x < 8 or y2 - y < 8 or (x2 - x) * (y2 - y) < 0.003 * w * h:
+                continue
+            crop = image[y:y2, x:x2].copy()
+            region_mask = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(region_mask, [poly], 255)
+            try:
+                items, _ann, masks = detect(crop, tmp_out, noop)
+            except Exception as e:
+                print(f"[pieces] piece {i + 1} failed: {e}")
+                continue
+            masks = masks or {}
+            for it in items:
+                bx, by, bbw, bbh = [int(v) for v in it["bbox"]]
+                gx, gy = bx + x, by + y
+                cx = min(w - 1, max(0, gx + bbw // 2))
+                cy = min(h - 1, max(0, gy + bbh // 2))
+                # Keep only items whose centre lands inside the drawn shape, so
+                # a lasso/box crop's bounding-rect overscan doesn't grab a
+                # neighbour's text.
+                if region_mask[cy, cx] == 0:
+                    continue
+                old = it["id"]
+                it["id"] = next_id
+                it["bbox"] = [gx, gy, bbw, bbh]
+                m = masks.get(old)
+                if m is not None:
+                    full = np.zeros((h, w), np.uint8)
+                    mh, mw = m.shape[:2]
+                    ch, cw = min(mh, h - y), min(mw, w - x)
+                    full[y:y + ch, x:x + cw] = m[:ch, :cw]
+                    all_masks[next_id] = cv2.bitwise_and(full, region_mask)
+                all_items.append(it)
+                next_id += 1
+            covered = cv2.bitwise_or(covered, region_mask)
+
+        # Leftover: any page area with text that no piece covered.
+        if translate_all:
+            leftover = cv2.bitwise_not(covered)
+            if int(cv2.countNonZero(leftover)) > 0.01 * h * w:
+                update(2, "Translating the rest of the page...", 82)
+                try:
+                    items, _ann, masks = detect(image.copy(), tmp_out, noop)
+                    masks = masks or {}
+                    for it in items:
+                        bx, by, bbw, bbh = [int(v) for v in it["bbox"]]
+                        cx = min(w - 1, max(0, bx + bbw // 2))
+                        cy = min(h - 1, max(0, by + bbh // 2))
+                        if leftover[cy, cx] == 0:
+                            continue
+                        old = it["id"]
+                        it["id"] = next_id
+                        m = masks.get(old)
+                        if m is not None:
+                            all_masks[next_id] = cv2.bitwise_and(m, leftover)
+                        all_items.append(it)
+                        next_id += 1
+                except Exception as e:
+                    print(f"[pieces] leftover pass failed: {e}")
+
+        update(4, "Merging translated pieces...", 92)
+        result = self.compositor.compose(image.copy(), all_items, all_masks)
+        if self.finish in ("clean", "api"):
+            result = scan_finish(result)
+        cv2.imwrite(output_path, result)
+        self.last_masks = all_masks
+        update(5, f"Done — {len(all_items)} translations across "
+               f"{len(polys)} pieces", 100)
+        return self._result(output_path, base_path, all_items, "")
+
     # ── Detection strategies → (items, annotated_path, masks) ──
     def _standard_detect(self, image, output_path, update):
         update(1, f"Detecting balloons with {self.detector_name}...", 10)

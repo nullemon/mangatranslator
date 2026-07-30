@@ -126,8 +126,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const sbsMode = document.getElementById("sbsMode");
   if (sbsMode) {
     sbsMode.checked = localStorage.getItem("manga_sbs") === "1";
-    sbsMode.addEventListener("change", () =>
-      localStorage.setItem("manga_sbs", sbsMode.checked ? "1" : "0"));
+    sbsMode.addEventListener("change", () => {
+      localStorage.setItem("manga_sbs", sbsMode.checked ? "1" : "0");
+      if (window.updateCutBtn) window.updateCutBtn();
+    });
   }
 
   if (translateSfx) {
@@ -342,6 +344,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "scan-raw": "Make it Raw",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
+    if (window.updateCutBtn) window.updateCutBtn();
   }
   wfCards.forEach(card => card.addEventListener("click", () => setWorkflow(card.dataset.wf)));
   setWorkflow(localStorage.getItem("manga_workflow") || "scan-translate");
@@ -600,6 +603,7 @@ document.addEventListener("DOMContentLoaded", () => {
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
         excluded: new Set(), erased: new Set(), glows: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+        cutRegions: [],
       });
     }
 
@@ -624,9 +628,171 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     dropZone.style.display = "none";
     previewRow.style.display = "flex";
+    if (window.updateCutBtn) window.updateCutBtn();
   }
 
   clearBtn.addEventListener("click", resetAll);
+
+  /* ══ CUT INTO PIECES (SBS) ══ */
+  (function initCutEditor() {
+    const btn = document.getElementById("cutBtn");
+    const modal = document.getElementById("cutModal");
+    const stage = document.getElementById("cutStage");
+    const img = document.getElementById("cutImg");
+    const canvas = document.getElementById("cutCanvas");
+    if (!btn || !modal || !stage || !img || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    const countEl = document.getElementById("cutCount");
+    const navEl = document.getElementById("cutNav");
+    const pageLabel = document.getElementById("cutPageLabel");
+    const cutAll = document.getElementById("cutAll");
+    const hint = document.getElementById("cutHint");
+    const MAX = 6;
+
+    let tool = "box";
+    let idx = 0;                 // which staged page is being cut
+    let drawing = false, start = null, cur = null;
+    let lasso = [];              // in-progress lasso points (normalised)
+
+    // The Cut button shows only for the translate-on-page workflows with SBS on.
+    function cutApplicable() {
+      const wf = workflow;
+      const sbs = sbsMode && sbsMode.checked;
+      return sbs && (wf === "scan-translate" || wf === "raw-translate");
+    }
+    window.updateCutBtn = function () {
+      if (!btn) return;
+      const show = cutApplicable() && pages.length > 0;
+      btn.style.display = show ? "" : "none";
+      if (show) {
+        const n = pages.reduce((a, p) => a + ((p.cutRegions || []).length ? 1 : 0), 0);
+        btn.textContent = n ? `✂ Cut pieces (${n})` : "✂ Cut pieces";
+      }
+    };
+
+    function regions() { return pages[idx].cutRegions || (pages[idx].cutRegions = []); }
+    function refreshCount() {
+      countEl.textContent = `${regions().length} / ${MAX}`;
+      const multi = pages.length > 1;
+      navEl.style.display = multi ? "inline-flex" : "none";
+      if (multi) pageLabel.textContent = `${idx + 1} / ${pages.length}`;
+    }
+
+    function loadPage(i) {
+      idx = Math.max(0, Math.min(i, pages.length - 1));
+      lasso = [];
+      img.onload = () => { fitCanvas(); redraw(); refreshCount(); };
+      img.src = pages[idx].thumb;
+      if (img.complete && img.naturalWidth) { fitCanvas(); redraw(); refreshCount(); }
+    }
+    function fitCanvas() {
+      // The image is centred in the stage (object-fit: contain), so align the
+      // overlay canvas to the image's actual on-screen box, not the stage origin.
+      canvas.width = img.clientWidth; canvas.height = img.clientHeight;
+      canvas.style.width = img.clientWidth + "px";
+      canvas.style.height = img.clientHeight + "px";
+      canvas.style.left = img.offsetLeft + "px";
+      canvas.style.top = img.offsetTop + "px";
+    }
+    function toNorm(ev) {
+      const r = img.getBoundingClientRect();
+      let x = (ev.clientX - r.left) / r.width;
+      let y = (ev.clientY - r.top) / r.height;
+      return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))];
+    }
+    function polyFor(a, b) {
+      // Build a normalised polygon for the current tool from two drag points.
+      const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
+      const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+      if (tool === "hslice") return [[0, y0], [1, y0], [1, y1], [0, y1]];
+      if (tool === "vslice") return [[x0, 0], [x0, 1], [x1, 1], [x1, 0]];
+      return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];   // box
+    }
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const W = canvas.width, H = canvas.height;
+      const drawPoly = (poly, fill, stroke) => {
+        if (poly.length < 2) return;
+        ctx.beginPath();
+        poly.forEach((p, i) => { const X = p[0] * W, Y = p[1] * H; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+        ctx.closePath();
+        ctx.fillStyle = fill; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = stroke; ctx.stroke();
+      };
+      regions().forEach((poly, i) => {
+        drawPoly(poly, "rgba(80,120,255,0.18)", "rgba(90,130,255,0.95)");
+        const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length * W;
+        const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length * H;
+        ctx.fillStyle = "#fff"; ctx.font = "bold 15px sans-serif";
+        ctx.textAlign = "center"; ctx.fillText(String(i + 1), cx, cy);
+      });
+      if (drawing && start && cur && tool !== "lasso") {
+        drawPoly(polyFor(start, cur), "rgba(255,180,60,0.20)", "rgba(255,180,60,0.95)");
+      }
+      if (tool === "lasso" && lasso.length) {
+        ctx.beginPath();
+        lasso.forEach((p, i) => { const X = p[0] * W, Y = p[1] * H; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+        ctx.lineWidth = 2; ctx.strokeStyle = "rgba(255,180,60,0.95)"; ctx.stroke();
+        lasso.forEach(p => { ctx.beginPath(); ctx.arc(p[0] * W, p[1] * H, 4, 0, 7); ctx.fillStyle = "#ffb43c"; ctx.fill(); });
+      }
+    }
+    function addRegion(poly) {
+      if (regions().length >= MAX) { hint.textContent = `Max ${MAX} pieces per page — Undo to change.`; return; }
+      // ignore too-tiny regions
+      const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+      if ((Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys)) < 0.004) return;
+      regions().push(poly); redraw(); refreshCount(); window.updateCutBtn();
+    }
+
+    // Pointer handling on the canvas' parent stage.
+    stage.addEventListener("pointerdown", (e) => {
+      if (e.target !== img && e.target !== canvas && e.target !== stage) return;
+      const pt = toNorm(e);
+      if (tool === "lasso") {
+        if (lasso.length >= 3) {
+          const f = lasso[0];
+          if (Math.hypot(pt[0] - f[0], pt[1] - f[1]) < 0.03) { addRegion(lasso.slice()); lasso = []; redraw(); return; }
+        }
+        lasso.push(pt); redraw(); return;
+      }
+      drawing = true; start = pt; cur = pt; redraw();
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (tool === "lasso") { if (lasso.length) { cur = toNorm(e); } return; }
+      if (!drawing) return; cur = toNorm(e); redraw();
+    });
+    window.addEventListener("pointerup", (e) => {
+      if (!drawing || tool === "lasso") { drawing = false; return; }
+      drawing = false; cur = toNorm(e);
+      if (start && cur) addRegion(polyFor(start, cur));
+      start = cur = null;
+    });
+
+    document.querySelectorAll(".cut-tool").forEach(b => b.addEventListener("click", () => {
+      document.querySelectorAll(".cut-tool").forEach(x => x.classList.remove("active"));
+      b.classList.add("active"); tool = b.dataset.tool; lasso = []; redraw();
+      hint.textContent = tool === "lasso"
+        ? "Click points around a region; click near the first point to close."
+        : "Drag to draw. Each region is translated on its own, then merged back.";
+    }));
+    document.getElementById("cutUndo").addEventListener("click", () => { regions().pop(); redraw(); refreshCount(); window.updateCutBtn(); });
+    document.getElementById("cutClear").addEventListener("click", () => { pages[idx].cutRegions = []; lasso = []; redraw(); refreshCount(); window.updateCutBtn(); });
+    document.getElementById("cutPrev").addEventListener("click", () => loadPage(idx - 1));
+    document.getElementById("cutNext").addEventListener("click", () => loadPage(idx + 1));
+    document.getElementById("cutDone").addEventListener("click", () => {
+      if (cutAll && cutAll.checked) {
+        const src = regions().map(p => p.map(q => q.slice()));
+        pages.forEach(p => { p.cutRegions = src.map(poly => poly.map(q => q.slice())); });
+      }
+      modal.style.display = "none"; window.updateCutBtn();
+    });
+    btn.addEventListener("click", () => {
+      if (!pages.length) return;
+      modal.style.display = "flex";
+      loadPage(0);
+    });
+    window.addEventListener("resize", () => { if (modal.style.display !== "none") { fitCanvas(); redraw(); } });
+  })();
 
   /* ══ CROP ══ */
   const cropModal  = document.getElementById("cropModal");
@@ -818,6 +984,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (profileSelect && profileSelect.value) {
         f.append("profile", profileSelect.value);
+      }
+      // SBS "cut into pieces": send this page's drawn regions, if any.
+      const _pg = pages.find(p => p.file === file);
+      if (_pg && _pg.cutRegions && _pg.cutRegions.length) {
+        f.append("cut_regions", JSON.stringify(_pg.cutRegions));
       }
       return { url: "/api/translate", form: f };
     }

@@ -419,6 +419,7 @@
           <div class="preview-btns">
             <button class="btn btn-primary" id="goBtn">Translate</button>
             <button class="btn btn-ghost" id="cropBtn" title="Crop image before translating">Crop</button>
+            <button class="btn btn-ghost" id="cutBtn" title="Cut a dense SBS page into pieces — each part is translated on its own, then merged back" style="display:none">✂ Cut pieces</button>
             <button class="btn btn-ghost" id="clearBtn">Clear</button>
           </div>
         </div>
@@ -600,6 +601,33 @@
     <div class="crop-stage" id="cropStage">
       <img id="cropImg" alt="Crop">
       <div class="crop-sel" id="cropSel" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ── CUT INTO PIECES (SBS) ─────────────────────────────────────── -->
+  <div class="crop-modal" id="cutModal" style="display:none">
+    <div class="crop-toolbar" style="flex-wrap:wrap;gap:8px">
+      <span class="crop-hint" id="cutHint">Draw regions — each is translated on its own, then merged back. Up to 6.</span>
+      <span id="cutTools" style="display:flex;gap:4px">
+        <button class="btn btn-ghost btn-sm cut-tool active" data-tool="box" title="Drag a rectangle">▭ Box</button>
+        <button class="btn btn-ghost btn-sm cut-tool" data-tool="hslice" title="Drag to set a full-width horizontal strip">═ H-slice</button>
+        <button class="btn btn-ghost btn-sm cut-tool" data-tool="vslice" title="Drag to set a full-height vertical strip">║ V-slice</button>
+        <button class="btn btn-ghost btn-sm cut-tool" data-tool="lasso" title="Click points; click near the first to close">✎ Lasso</button>
+      </span>
+      <span id="cutCount" style="opacity:.75;font-size:.85em">0 / 6</span>
+      <span id="cutNav" style="display:none;align-items:center;gap:6px">
+        <button class="btn btn-ghost btn-sm" id="cutPrev">‹</button>
+        <span id="cutPageLabel" style="font-size:.85em">1 / 1</span>
+        <button class="btn btn-ghost btn-sm" id="cutNext">›</button>
+        <label style="display:flex;align-items:center;gap:4px;font-size:.82em"><input type="checkbox" id="cutAll"> apply to all pages</label>
+      </span>
+      <button class="btn btn-ghost btn-sm" id="cutUndo" title="Remove the last region">Undo</button>
+      <button class="btn btn-ghost btn-sm" id="cutClear" title="Remove all regions on this page">Clear</button>
+      <button class="btn btn-primary btn-sm" id="cutDone">Done</button>
+    </div>
+    <div class="crop-stage" id="cutStage" style="cursor:crosshair">
+      <img id="cutImg" alt="Cut">
+      <canvas id="cutCanvas" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>
     </div>
   </div>
 
