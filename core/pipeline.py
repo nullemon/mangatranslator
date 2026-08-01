@@ -1263,15 +1263,9 @@ class TranslationPipeline:
                     mx, my = int(bw2 * 0.6) + 40, int(bh2 * 0.6) + 40
                     crop = image[max(0, by - my):min(h_img, by + bh2 + my),
                                  max(0, bx - mx):min(w_img, bx + bw2 + mx)]
-                    try:
-                        r1 = self.translator.translate_texts(
-                            {rid: jp}, self.target_lang, image=crop)
-                        ent = r1.get(rid) or {}
-                        if (ent.get("translation") or "").strip():
-                            out[rid] = ent
-                    except Exception as e:
-                        print(f"[pipeline] one-by-one bubble {rid} failed "
-                              f"({e}) — skipped, others unaffected")
+                    ent = self._translate_single(rid, jp, crop, "bubble")
+                    if ent is not None:
+                        out[rid] = ent
                 for rid, jp in id_to_text.items():
                     out.setdefault(rid, {})
                     out[rid]["original"] = out[rid].get("original") or jp
@@ -1297,6 +1291,27 @@ class TranslationPipeline:
         update(2, f"Translated {len(out)} bubble regions", 50)
         return out
 
+    def _translate_single(self, rid, jp, crop, tag="bubble"):
+        """One translate call with ONE retry (2s backoff) — a transient
+        timeout / rate-limit blip must not leave a bubble untranslated."""
+        import time
+        last = None
+        for attempt in (1, 2):
+            try:
+                r1 = self.translator.translate_texts(
+                    {rid: jp}, self.target_lang, image=crop)
+                ent = r1.get(rid) or {}
+                if (ent.get("translation") or "").strip():
+                    return ent
+                last = "empty response"
+            except Exception as e:
+                last = e
+            if attempt == 1:
+                time.sleep(2.0)
+        print(f"[pipeline] one-by-one {tag} {rid} failed after retry "
+              f"({last}) — skipped, others unaffected")
+        return None
+
     def _translate_map(self, image, id_to_text, box_map, tag="block"):
         """Batch translate — or, in one-by-one mode, one call per item with a
         crop of its surroundings, so a bad response can only lose ONE item."""
@@ -1311,14 +1326,9 @@ class TranslationPipeline:
             mx, my = int(bw * 0.6) + 40, int(bh * 0.6) + 40
             crop = image[max(0, by - my):min(h_img, by + bh + my),
                          max(0, bx - mx):min(w_img, bx + bw + mx)]
-            try:
-                r1 = self.translator.translate_texts(
-                    {fid: jp}, self.target_lang, image=crop)
-                if r1.get(fid):
-                    out[fid] = r1[fid]
-            except Exception as e:
-                print(f"[pipeline] one-by-one {tag} {fid} failed ({e}) — "
-                      f"skipped, others unaffected")
+            ent = self._translate_single(fid, jp, crop, tag)
+            if ent is not None:
+                out[fid] = ent
         return out
 
     def _detect_free_text(self, image, bubble_regions, update) -> List[dict]:
@@ -1585,6 +1595,12 @@ class TranslationPipeline:
             if seen and _has_source_text(seen, self.source_lang):
                 if claimed and _text_sim(seen, claimed) < 0.3:
                     return False, f"box reads different text ({seen[:14]!r})"
+                # Correlated-hallucination guard: Gemini's det and manga-ocr
+                # can both "read" the same short word into hair highlights.
+                # Real snapped text carries solid stroke coverage; a few edge
+                # pixels do not count as confirmation.
+                if px is not None and cov < 0.008:
+                    return False, "ocr matched but strokes too sparse"
                 return True, "ocr confirmed"
             # Medium strokes + unreadable = screentone/hatching noise.
             return False, "no readable text"
