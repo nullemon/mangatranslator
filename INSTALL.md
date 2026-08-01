@@ -37,6 +37,7 @@ the built-in CV fallbacks.
    source venv/bin/activate
 
    pip install -r requirements.txt
+   python setup_models.py            # recommended: the accuracy models (works without GPU)
    python app.py
    ```
 
@@ -78,9 +79,7 @@ This is what makes the output good: exact balloon masks, per-bubble OCR
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements-gpu.txt
-pip install craft-text-detector --no-deps
+python setup_models.py --gpu
 python app.py
 ```
 
@@ -113,12 +112,7 @@ same; heavy steps (erasure, OCR, upscale) are slower than on an NVIDIA PC.
 # Terminal, in the extracted folder:
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt          # the app itself
-
-# Optional — the full AI stack, CPU/MPS build:
-pip install torch torchvision            # Apple builds, includes MPS
-pip install ultralytics huggingface_hub manga-ocr simple-lama-inpainting             scipy gdown spandrel
-pip install onnxruntime                  # NOTE: plain onnxruntime, NOT -gpu
-pip install craft-text-detector --no-deps
+python setup_models.py                   # the full AI stack, Mac (CPU/MPS) builds
 python app.py
 ```
 
