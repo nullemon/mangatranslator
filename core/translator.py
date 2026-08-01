@@ -163,6 +163,12 @@ class GeminiTranslator:
     def _ask(self, parts: list) -> str:
         def _body(disable_thinking: bool) -> dict:
             gc = {"temperature": 0.2, "maxOutputTokens": 16384}
+            if not disable_thinking:
+                # Thinking-only models spend reasoning tokens from the SAME
+                # output budget. 16k gets eaten by the thinking and the JSON
+                # comes back TRUNCATED — garbage half-translations like
+                # "THE PSYCHIC CLU..." — so give these models real headroom.
+                gc["maxOutputTokens"] = 65536
             if disable_thinking:
                 # Gemini 2.5 flash/flash-lite spend "thinking" tokens from the
                 # SAME output budget — a busy page can burn it all and return no

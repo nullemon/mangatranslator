@@ -1296,12 +1296,13 @@ class TranslationPipeline:
         # runs (Smart Detection off) skipped them entirely, which is why title
         # fragments and art stamps kept appearing there.
         try:
-            items = self._free_text_gauntlet(image, items)
+            items = self._free_text_gauntlet(
+                image, items, [list(r.bbox) for r in bubble_regions])
         except Exception as e:
             print(f"[pipeline] free-text gauntlet failed (keeping raw): {e}")
         return items
 
-    def _free_text_gauntlet(self, image, items):
+    def _free_text_gauntlet(self, image, items, bubble_boxes=()):
         """Final gate for free-text items from ANY pass/mode: drop SFX unless
         the toggle is on, merge giant-title lettering into ONE modest caption,
         snap remaining boxes to their text strokes and verify them there.
@@ -1314,7 +1315,7 @@ class TranslationPipeline:
           text is NOT swallowed into the title — it is re-verified on its own
           and typically rejected ("box reads different text")."""
         from .ocr import _has_source_text
-        title_regions = self._find_title_regions(image)
+        title_regions = self._find_title_regions(image, bubble_boxes)
         frags = {ti: [] for ti in range(len(title_regions))}
         degen = []
 
@@ -1560,7 +1561,7 @@ class TranslationPipeline:
         nh = min(mh - ny, rh + 2 * pad)
         return [int(nx), int(ny), int(nw), int(nh)]
 
-    def _find_title_regions(self, image):
+    def _find_title_regions(self, image, exclude_boxes=()):
         """Locate GIANT display/title lettering (chapter-title banners): a
         dense text-stroke cluster whose glyphs are far larger than dialogue.
         The LLM tends to fragment these into one det per word and stamp tiny
@@ -1576,6 +1577,16 @@ class TranslationPipeline:
         if m is None:
             return []
         h, w = m.shape[:2]
+        m = m.copy()
+        # Balloon interiors are NEVER title banners — a horizontal closure can
+        # bridge several bubbles' dialogue into one big cluster that then gets
+        # "erased and captioned" as if it were a title (which wiped real
+        # bubbles on a dialogue page). Cut them out before clustering.
+        for eb in exclude_boxes or ():
+            ex, ey, ew, eh = [int(v) for v in eb]
+            pad = 6
+            m[max(0, ey - pad):min(h, ey + eh + pad),
+              max(0, ex - pad):min(w, ex + ew + pad)] = 0
         # Elongated horizontal closure: giant glyphs carry proportionally giant
         # gaps between characters, so a round kernel leaves each kanji as its
         # own island and the banner is never seen as one run.
@@ -1589,11 +1600,23 @@ class TranslationPipeline:
             cx, cy, cw, ch, _a = stats[i]
             roi = m[cy:cy + ch, cx:cx + cw]
             px = int(cv2.countNonZero(roi))
-            # Title banner: tall glyphs (>=5% of page height), wide run
-            # (>=30% of page width), genuinely dense lettering.
-            if (ch >= 0.05 * h and cw >= 0.30 * w
+            # Cluster shape: tall (>=5% page height), wide (>=30% width), dense.
+            if not (ch >= 0.05 * h and cw >= 0.30 * w
                     and px / max(cw * ch, 1) >= 0.10):
-                out.append((int(cx), int(cy), int(cw), int(ch)))
+                continue
+            # THE title discriminator: the GLYPHS themselves must be giant.
+            # Dialogue/narration glyphs run ~1.5-2% of page height; chapter
+            # titles 4%+. Median raw-stroke component height decides.
+            cn, _cl, cstats, _cc = cv2.connectedComponentsWithStats(
+                (roi > 0).astype(np.uint8), 8)
+            heights = sorted(int(cstats[j, 3]) for j in range(1, cn)
+                             if cstats[j, 4] >= 12)
+            if not heights:
+                continue
+            med_h = heights[len(heights) // 2]
+            if med_h < 0.03 * h:
+                continue
+            out.append((int(cx), int(cy), int(cw), int(ch)))
         return out
 
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
@@ -2088,7 +2111,8 @@ class TranslationPipeline:
         #    One implementation for both modes, so a fix can never again land
         #    in one path and be missing from the other.
         free_cands = [it for it in llm_items if id(it) not in matched]
-        processed = self._free_text_gauntlet(image, free_cands)
+        processed = self._free_text_gauntlet(
+            image, free_cands, [rb for _reg, rb in text_regions])
         next_id = max([r.id for r in seg_regions] + [0]) + 1
         for it in processed:
             it["id"] = next_id
