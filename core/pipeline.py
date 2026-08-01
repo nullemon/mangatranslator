@@ -60,6 +60,21 @@ def _texts_match(a: str, b: str) -> bool:
     return inter / max(min(len(aa), len(bb)), 1) >= 0.5
 
 
+def _text_sim(a: str, b: str) -> float:
+    """Graded version of _texts_match: 0..1 overlap of the two readings'
+    Japanese characters (intersection / smaller set). Used to bind a
+    translation to the bubble whose OWN OCR reads the same text, so a
+    geometrically-misplaced LLM box can't put bubble 1's line in bubble 4."""
+    def chars(s):
+        return {c for c in (s or "")
+                if "ぁ" <= c <= "ん" or "ァ" <= c <= "ヶ"
+                or "一" <= c <= "鿿" or c == "ー"}
+    aa, bb = chars(a), chars(b)
+    if not aa or not bb:
+        return 0.0
+    return len(aa & bb) / max(min(len(aa), len(bb)), 1)
+
+
 def _merge_column_boxes(boxes):
     """The block detector splits giant vertical lettering (one huge glyph per
     box) — merge boxes that line up into a single column/run so OCR reads the
@@ -1302,6 +1317,59 @@ class TranslationPipeline:
         px = int(cv2.countNonZero(roi))
         return px >= max(40, int(0.004 * roi.size))
 
+    def _verify_text_region(self, image, box, claimed=""):
+        """Full validity check for a claimed text region BEFORE anything is
+        erased or typeset there. Two independent signals, in order of trust:
+
+          1. local OCR — the box must actually read source-language text, and
+             when the LLM claimed specific text it must be the SAME text
+             (char-overlap similarity), otherwise the box is somewhere else's;
+          2. text-pixel coverage — the manga-trained stroke model must light up
+             STRONGLY (>=3% of the box), which keeps stylised display lettering
+             that OCR fumbles.
+
+        Faces, shirts, hair and background art have neither readable source
+        text nor dense text strokes, so they fail both signals — that is what
+        stops translations from being stamped onto artwork. Returns
+        (ok, reason)."""
+        from .ocr import _has_source_text
+        x, y, bw, bh = [int(v) for v in box]
+
+        ocr_state = None    # None = OCR unavailable, True/False = verdict
+        if self.ocr is not None and self.ocr.ok:
+            seen = (self.ocr.read_region(image, box, None) or "").strip()
+            if seen and _has_source_text(seen, self.source_lang):
+                if claimed and _text_sim(seen, claimed) < 0.3:
+                    return False, f"box reads different text ({seen[:14]!r})"
+                return True, "ocr confirmed"
+            ocr_state = False
+
+        if self.text_seg is not None and self.text_seg.ok:
+            try:
+                m = self.text_seg.mask(image)
+            except Exception:
+                m = None
+            if m is not None:
+                mh, mw = m.shape[:2]
+                x0, y0 = max(0, x), max(0, y)
+                x1, y1 = min(mw, x + bw), min(mh, y + bh)
+                if x1 <= x0 or y1 <= y0:
+                    return False, "degenerate box"
+                roi = m[y0:y1, x0:x1]
+                px = int(cv2.countNonZero(roi))
+                if px >= 300 and px / max(roi.size, 1) >= 0.03:
+                    return True, "strong text pixels"
+                # Pixel model is present and says this box holds no real
+                # lettering — that alone is disqualifying, with or without OCR.
+                return False, "weak text pixels"
+
+        # OCR said no and no strong-pixel rescue was possible.
+        if ocr_state is False:
+            return False, "no readable text"
+        # Neither verifier available (bare CPU install) — stay permissive so
+        # the app still works; the coarser _box_text_evidence gate remains.
+        return True, "unverified (no local models)"
+
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
         """Vision-LLM free-text detection: returns box + original + translation
         in a single call. Reads the vertical / dramatic text the CV pass misses."""
@@ -1387,15 +1455,10 @@ class TranslationPipeline:
             # spot entirely. When local OCR reads something substantial in the
             # claimed box that shares nothing with the det's text, drop it:
             # the GPU catch-all pass finds the real block at real coordinates.
-            if self.ocr is not None and self.ocr.ok:
-                seen = (self.ocr.read_region(image, box, None) or "").strip()
-                if len(seen) >= 2 and not _texts_match(seen, jp):
-                    print(f"[pipeline] LLM box mismatch (claims {jp[:12]!r}, "
-                          f"box reads {seen[:12]!r}) — dropped")
-                    continue
-            if not self._box_text_evidence(image, box):
-                print(f"[pipeline] LLM box on bare art (claims {jp[:12]!r}) "
-                      f"— dropped")
+            ok, why = self._verify_text_region(image, box, jp)
+            if not ok:
+                print(f"[pipeline] free det {jp[:12]!r} at {box} "
+                      f"rejected: {why}")
                 continue
             used.append(box)
 
@@ -1689,19 +1752,64 @@ class TranslationPipeline:
                 continue
             text_regions.append((reg, rb))
 
-        # Rank every eligible (bubble, det) pair, best first, then assign 1-to-1.
+        # CONTENT-TRUE binding: read each balloon's OWN text with local OCR
+        # once, so a translation can only land in the bubble that actually
+        # contains its source text. Geometry (the LLM's box) is demoted to a
+        # fallback for pairs OCR can't confirm — a sloppy/shifted LLM box can
+        # no longer put bubble 1's line into bubble 4.
+        region_jp = {}
+        if self.ocr is not None and self.ocr.ok:
+            for ri, (reg, rb) in enumerate(text_regions):
+                try:
+                    region_jp[ri] = (self.ocr.read_region(
+                        image, rb, getattr(reg, "mask", None)) or "").strip()
+                except Exception:
+                    region_jp[ri] = ""
+
+        assigned = {}                    # region-index -> llm item
+        used_reg, used_det = set(), set()
+
+        # Phase 1 — bind by TEXT: strongest character-overlap first.
+        if region_jp:
+            content_pairs = []
+            for ri in region_jp:
+                if not region_jp[ri]:
+                    continue
+                for di, it in enumerate(llm_items):
+                    if it.get("in_bubble") is False:
+                        continue
+                    sim = _text_sim(region_jp[ri], it.get("original", ""))
+                    if sim >= 0.5:
+                        geo = _pair_score(text_regions[ri][1], it["bbox"]) or 0.0
+                        content_pairs.append((sim, geo, ri, di))
+            content_pairs.sort(key=lambda p: (p[0], p[1]), reverse=True)
+            for sim, geo, ri, di in content_pairs:
+                if ri in used_reg or di in used_det:
+                    continue
+                used_reg.add(ri)
+                used_det.add(di)
+                assigned[ri] = llm_items[di]
+                matched.add(id(llm_items[di]))
+
+        # Phase 2 — geometry for whatever text couldn't decide, with a content
+        # veto: a det whose claimed text clearly does NOT match this bubble's
+        # own reading is never snapped onto it, no matter how well the boxes
+        # overlap.
         pairs = []
         for ri, (reg, rb) in enumerate(text_regions):
+            if ri in used_reg:
+                continue
             for di, it in enumerate(llm_items):
-                if it.get("in_bubble") is False:
+                if di in used_det or it.get("in_bubble") is False:
                     continue
+                jp_here = region_jp.get(ri, "")
+                claimed = it.get("original", "")
+                if jp_here and claimed and _text_sim(jp_here, claimed) < 0.2:
+                    continue                     # content veto
                 s = _pair_score(rb, it["bbox"])
                 if s is not None and s >= MATCH_MIN:
                     pairs.append((s, ri, di))
         pairs.sort(key=lambda p: p[0], reverse=True)
-
-        assigned = {}                    # region-index -> llm item
-        used_reg, used_det = set(), set()
         for s, ri, di in pairs:
             if ri in used_reg or di in used_det:
                 continue
@@ -1727,8 +1835,9 @@ class TranslationPipeline:
                 masks[reg.id] = reg.mask
                 continue
             # Bubble the LLM missed entirely → read it locally and translate.
-            jp = ""
-            if self.ocr is not None and self.ocr.ok:
+            # (Reuse the reading from the content-binding pass when we have it.)
+            jp = region_jp.get(ri, "")
+            if not jp and ri not in region_jp and self.ocr is not None and self.ocr.ok:
                 jp = (self.ocr.read_region(image, rb, getattr(reg, "mask", None)) or "").strip()
             if not jp or not _has_source_text(jp, self.source_lang):
                 continue
@@ -1747,13 +1856,30 @@ class TranslationPipeline:
             })
             masks[reg.id] = reg.mask
 
-        # 2) LLM detections with no matching balloon = free text over artwork.
-        #    Keep them, but as free text so the compositor contains them to the
-        #    actual lettering strokes instead of a loose rectangle.
+        # 2) LLM detections with no matching balloon = free text over artwork —
+        #    but ONLY after the full verification logic passes. An unmatched det
+        #    is the LLM's word alone; before anything is erased or typeset
+        #    there, the region must prove it holds real source text (local OCR
+        #    reads it, or dense text strokes for stylised lettering). This is
+        #    what stops translations landing on faces, shirts and background
+        #    art. Watermark/erase dets skip OCR (they're latin) but still need
+        #    text-pixel evidence.
         next_id = max([r.id for r in seg_regions] + [0]) + 1
         for it in llm_items:
             if id(it) in matched:
                 continue
+            if it.get("erase") or it.get("type") == "watermark":
+                if not self._box_text_evidence(image, it["bbox"]):
+                    print(f"[pipeline] watermark det at {it['bbox']} has no "
+                          f"text pixels — dropped")
+                    continue
+            else:
+                ok, why = self._verify_text_region(
+                    image, it["bbox"], it.get("original", ""))
+                if not ok:
+                    print(f"[pipeline] free det {it.get('original', '')[:12]!r} "
+                          f"at {it['bbox']} rejected: {why}")
+                    continue
             it["id"] = next_id
             next_id += 1
             it["in_bubble"] = False
