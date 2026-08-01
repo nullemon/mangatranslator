@@ -1290,7 +1290,90 @@ class TranslationPipeline:
             items += self._free_text_seg(image, bubble_regions, items, update)
         except Exception as e:
             print(f"[pipeline] text-block free-text pass failed: {e}")
+        # ONE shared gauntlet for every free-text item, no matter which pass or
+        # detection MODE produced it. The title merge / stroke-snap / SFX
+        # enforcement originally lived only in the smart path — standard-mode
+        # runs (Smart Detection off) skipped them entirely, which is why title
+        # fragments and art stamps kept appearing there.
+        try:
+            items = self._free_text_gauntlet(image, items)
+        except Exception as e:
+            print(f"[pipeline] free-text gauntlet failed (keeping raw): {e}")
         return items
+
+    def _free_text_gauntlet(self, image, items):
+        """Final gate for free-text items from ANY pass/mode: drop SFX unless
+        the toggle is on, merge fragments of giant title lettering into one
+        modest caption, snap remaining boxes to their text strokes and verify
+        them there. Watermark/erase items pass through (already gated)."""
+        from .ocr import _has_source_text
+        title_regions = self._find_title_regions(image)
+        frags = {ti: [] for ti in range(len(title_regions))}
+
+        def _in_title(bb):
+            cx, cy = bb[0] + bb[2] / 2.0, bb[1] + bb[3] / 2.0
+            for ti, (tx, ty, tw, th) in enumerate(title_regions):
+                if tx <= cx <= tx + tw and ty <= cy <= ty + th:
+                    return ti
+            return None
+
+        out = []
+        for it in items:
+            if it.get("title_caption"):
+                out.append(it)
+                continue
+            if it.get("erase") or it.get("type") == "watermark":
+                out.append(it)
+                continue
+            if not self.translate_sfx and (
+                    _is_sfx(it.get("original", ""))
+                    or it.get("type") in ("sfx", "sound", "onomatopoeia")):
+                continue
+            ti = _in_title(it["bbox"])
+            if ti is not None:
+                frags[ti].append(it)
+                continue
+            snapped = self._snap_to_text_pixels(image, it["bbox"])
+            ok, why = self._verify_text_region(image, snapped,
+                                               it.get("original", ""))
+            if not ok:
+                print(f"[pipeline] free det {it.get('original', '')[:12]!r} "
+                      f"at {it['bbox']} rejected: {why}")
+                continue
+            it["bbox"] = [int(v) for v in snapped]
+            out.append(it)
+
+        next_id = max([it.get("id", 0) for it in out] + [0]) + 1
+        for ti, (tx, ty, tw, th) in enumerate(title_regions):
+            fl = sorted(frags[ti], key=lambda f: f["bbox"][0])
+            jp = ""
+            if self.ocr is not None and self.ocr.ok:
+                jp = (self.ocr.read_region(image, (tx, ty, tw, th), None)
+                      or "").strip()
+            if not jp:
+                jp = "".join(f.get("original", "") for f in fl)
+            tr = ""
+            if jp and _has_source_text(jp, self.source_lang):
+                try:
+                    res = self.translator.translate_texts(
+                        {next_id: jp}, self.target_lang, image=image)
+                    tr = ((res.get(next_id) or {}).get("translation") or "").strip()
+                except Exception as e:
+                    print(f"[pipeline] title translate failed: {e}")
+            if not tr:
+                tr = " ".join((f.get("translation") or "").strip()
+                              for f in fl).strip()
+            if not tr:
+                continue
+            print(f"[pipeline] title banner at ({tx},{ty},{tw},{th}) -> one "
+                  f"caption ({len(fl)} fragments merged)")
+            out.append({
+                "id": next_id, "bbox": [tx, ty, tw, th], "original": jp,
+                "translation": tr, "type": "title", "in_bubble": False,
+                "dark": False, "rotation": 0.0, "title_caption": True,
+            })
+            next_id += 1
+        return out
 
     def _box_text_evidence(self, image, box) -> bool:
         """Positive evidence that a claimed region contains LETTERING: the

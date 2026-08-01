@@ -237,7 +237,8 @@ async def _start_housekeeper():
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse(
-        request=request, name="index.html", context={"version": _asset_version()})
+        request=request, name="index.html",
+        context={"version": _asset_version(), "build": _SERVER_COMMIT})
 
 
 def _asset_version() -> str:

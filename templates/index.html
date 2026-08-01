@@ -631,6 +631,11 @@
     </div>
   </div>
 
+  <!-- Build badge: rendered by the SERVER on every page load, so it always
+       shows the code that is actually running — if this number didn't change
+       after an update, the backend wasn't restarted or the pull didn't land. -->
+  <div id="buildBadge" style="position:fixed;right:10px;bottom:8px;z-index:9999;font-size:11px;opacity:.6;font-family:monospace;pointer-events:none;color:#888">build {{ build }}</div>
+
   <script src="/static/js/app.js?v={{ version }}"></script>
 </body>
 </html>
