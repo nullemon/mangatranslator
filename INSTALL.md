@@ -103,6 +103,33 @@ pip install -r requirements.txt
 python app.py
 ```
 
+### 3d. macOS (Intel & Apple Silicon)
+
+Everything runs, but there's no NVIDIA/CUDA on a Mac — the AI models run on
+the CPU (Apple-GPU/MPS acceleration is partial). Translation quality is the
+same; heavy steps (erasure, OCR, upscale) are slower than on an NVIDIA PC.
+
+```bash
+# Terminal, in the extracted folder:
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt          # the app itself
+
+# Optional — the full AI stack, CPU/MPS build:
+pip install torch torchvision            # Apple builds, includes MPS
+pip install ultralytics huggingface_hub manga-ocr simple-lama-inpainting             scipy gdown spandrel
+pip install onnxruntime                  # NOTE: plain onnxruntime, NOT -gpu
+pip install craft-text-detector --no-deps
+python app.py
+```
+
+Do **not** run `setup_gpu.sh` on a Mac — it targets Linux/NVIDIA (it would try
+to install `onnxruntime-gpu`, which doesn't exist for macOS). Use the pip
+lines above instead. Models auto-download on first run exactly as on PC.
+
+Rough expectations: a typical page that takes ~15–30 s on an RTX GPU takes a
+few minutes on an M-series Mac in Maximum Quality; turn Maximum Quality off
+for day-to-day speed.
+
 ### Verify the GPU stack
 
 ```bash
