@@ -1303,12 +1303,20 @@ class TranslationPipeline:
 
     def _free_text_gauntlet(self, image, items):
         """Final gate for free-text items from ANY pass/mode: drop SFX unless
-        the toggle is on, merge fragments of giant title lettering into one
-        modest caption, snap remaining boxes to their text strokes and verify
-        them there. Watermark/erase items pass through (already gated)."""
+        the toggle is on, merge giant-title lettering into ONE modest caption,
+        snap remaining boxes to their text strokes and verify them there.
+
+        Two LLM failure modes are handled by CONTENT, not geometry:
+        - garbage coordinates (a det clamped to a page-edge sliver) still
+          carry a good reading+translation — if its text matches a title
+          banner, the translation is rescued for that banner;
+        - a stray det whose box merely SITS on the banner but reads different
+          text is NOT swallowed into the title — it is re-verified on its own
+          and typically rejected ("box reads different text")."""
         from .ocr import _has_source_text
         title_regions = self._find_title_regions(image)
         frags = {ti: [] for ti in range(len(title_regions))}
+        degen = []
 
         def _in_title(bb):
             cx, cy = bb[0] + bb[2] / 2.0, bb[1] + bb[3] / 2.0
@@ -1323,37 +1331,87 @@ class TranslationPipeline:
                 out.append(it)
                 continue
             if it.get("erase") or it.get("type") == "watermark":
-                out.append(it)
+                if self._box_text_evidence(image, it["bbox"]):
+                    out.append(it)
+                else:
+                    print(f"[pipeline] watermark det at {it['bbox']} has no "
+                          f"text pixels — dropped")
                 continue
             if not self.translate_sfx and (
                     _is_sfx(it.get("original", ""))
                     or it.get("type") in ("sfx", "sound", "onomatopoeia")):
                 continue
-            ti = _in_title(it["bbox"])
+            bb = it["bbox"]
+            if bb[2] <= 14 or bb[3] <= 14:
+                degen.append(it)      # garbage coords; maybe rescuable by content
+                continue
+            ti = _in_title(bb)
             if ti is not None:
                 frags[ti].append(it)
                 continue
-            snapped = self._snap_to_text_pixels(image, it["bbox"])
+            snapped = self._snap_to_text_pixels(image, bb)
             ok, why = self._verify_text_region(image, snapped,
                                                it.get("original", ""))
             if not ok:
                 print(f"[pipeline] free det {it.get('original', '')[:12]!r} "
-                      f"at {it['bbox']} rejected: {why}")
+                      f"at {bb} rejected: {why}")
                 continue
             it["bbox"] = [int(v) for v in snapped]
             out.append(it)
 
         next_id = max([it.get("id", 0) for it in out] + [0]) + 1
         for ti, (tx, ty, tw, th) in enumerate(title_regions):
-            fl = sorted(frags[ti], key=lambda f: f["bbox"][0])
-            jp = ""
+            banner_jp = ""
             if self.ocr is not None and self.ocr.ok:
-                jp = (self.ocr.read_region(image, (tx, ty, tw, th), None)
-                      or "").strip()
-            if not jp:
-                jp = "".join(f.get("original", "") for f in fl)
+                banner_jp = (self.ocr.read_region(image, (tx, ty, tw, th), None)
+                             or "").strip()
+            genuine, strays = [], []
+            for f in sorted(frags[ti], key=lambda f: f["bbox"][0]):
+                if not banner_jp or _texts_match(f.get("original", ""), banner_jp):
+                    genuine.append(f)
+                else:
+                    strays.append(f)
+            # Strays only SAT on the banner — re-verify them on their own.
+            for f in strays:
+                snapped = self._snap_to_text_pixels(image, f["bbox"])
+                ok, why = self._verify_text_region(image, snapped,
+                                                   f.get("original", ""))
+                if ok:
+                    f["bbox"] = [int(v) for v in snapped]
+                    out.append(f)
+                else:
+                    print(f"[pipeline] stray det {f.get('original', '')[:12]!r} "
+                          f"on title banner rejected: {why}")
+            jp = banner_jp or "".join(f.get("original", "") for f in genuine)
+            # Translation priority: a det that actually READ the banner (the
+            # LLM's own translation is best) — including a garbage-coordinate
+            # det rescued by content — then a fresh translate of the OCR text,
+            # then joining the fragments' translations.
             tr = ""
-            if jp and _has_source_text(jp, self.source_lang):
+
+            def _jchars(t):
+                return {c for c in (t or "")
+                        if "ぁ" <= c <= "ん" or "ァ" <= c <= "ヶ"
+                        or "一" <= c <= "鿿" or c == "ー"}
+            target = _jchars(jp)
+            best_f, best_cov = None, 0.0
+            for f in genuine + degen:
+                if not (f.get("translation") or "").strip():
+                    continue
+                cov = (len(_jchars(f.get("original", "")) & target)
+                       / max(len(target), 1))
+                if cov > best_cov:
+                    best_f, best_cov = f, cov
+            # Only take a det's translation when its reading covers MOST of
+            # the banner — a two-kanji fragment must not supply the whole
+            # title's translation.
+            if best_f is not None and best_cov >= 0.6:
+                tr = best_f["translation"].strip()
+                if best_f in degen:
+                    degen.remove(best_f)
+                    print(f"[pipeline] rescued title translation from a "
+                          f"garbage-coordinate det: {tr[:40]!r}")
+            if not tr and jp and _has_source_text(jp, self.source_lang):
                 try:
                     res = self.translator.translate_texts(
                         {next_id: jp}, self.target_lang, image=image)
@@ -1362,17 +1420,20 @@ class TranslationPipeline:
                     print(f"[pipeline] title translate failed: {e}")
             if not tr:
                 tr = " ".join((f.get("translation") or "").strip()
-                              for f in fl).strip()
+                              for f in genuine).strip()
             if not tr:
                 continue
             print(f"[pipeline] title banner at ({tx},{ty},{tw},{th}) -> one "
-                  f"caption ({len(fl)} fragments merged)")
+                  f"caption ({len(genuine)} fragments merged)")
             out.append({
                 "id": next_id, "bbox": [tx, ty, tw, th], "original": jp,
                 "translation": tr, "type": "title", "in_bubble": False,
                 "dark": False, "rotation": 0.0, "title_caption": True,
             })
             next_id += 1
+        for f in degen:
+            print(f"[pipeline] free det {f.get('original', '')[:12]!r} dropped: "
+                  f"degenerate box {f['bbox']}")
         return out
 
     def _box_text_evidence(self, image, box) -> bool:
@@ -2021,94 +2082,20 @@ class TranslationPipeline:
             })
             masks[reg.id] = reg.mask
 
-        # 2) LLM detections with no matching balloon = free text over artwork —
-        #    but ONLY after the full verification logic passes. An unmatched det
-        #    is the LLM's word alone; before anything is erased or typeset
-        #    there, the region must prove it holds real source text (local OCR
-        #    reads it, or dense text strokes for stylised lettering). This is
-        #    what stops translations landing on faces, shirts and background
-        #    art. Watermark/erase dets skip OCR (they're latin) but still need
-        #    text-pixel evidence.
-        title_regions = self._find_title_regions(image)
-        title_frags = {ti: [] for ti in range(len(title_regions))}
-
-        def _in_title(bb):
-            cx = bb[0] + bb[2] / 2.0
-            cy = bb[1] + bb[3] / 2.0
-            for ti, (tx, ty, tw2, th2) in enumerate(title_regions):
-                if tx <= cx <= tx + tw2 and ty <= cy <= ty + th2:
-                    return ti
-            return None
-
+        # 2) LLM detections with no matching balloon = free text — processed by
+        #    the SAME shared gauntlet as standard mode (SFX filter, title-
+        #    banner merge with content-rescue, stroke-snap, verification).
+        #    One implementation for both modes, so a fix can never again land
+        #    in one path and be missing from the other.
+        free_cands = [it for it in llm_items if id(it) not in matched]
+        processed = self._free_text_gauntlet(image, free_cands)
         next_id = max([r.id for r in seg_regions] + [0]) + 1
-        for it in llm_items:
-            if id(it) in matched:
-                continue
-            # SFX stay untouched unless the user's "Translate Background SFX"
-            # toggle is on — enforced on EVERY path, including this one.
-            if not self.translate_sfx and (_is_sfx(it.get("original", ""))
-                                           or it.get("type") in ("sfx", "sound",
-                                                                 "onomatopoeia")):
-                continue
-            if it.get("erase") or it.get("type") == "watermark":
-                if not self._box_text_evidence(image, it["bbox"]):
-                    print(f"[pipeline] watermark det at {it['bbox']} has no "
-                          f"text pixels — dropped")
-                    continue
-            else:
-                # Fragment of a giant title? Collect it — the whole banner is
-                # handled as ONE caption below, never stamped word-by-word.
-                ti = _in_title(it["bbox"])
-                if ti is not None:
-                    title_frags[ti].append(it)
-                    continue
-                # Snap the box to the text strokes it contains, then verify AT
-                # the snapped spot — a drifted box can't erase/typeset on art.
-                snapped = self._snap_to_text_pixels(image, it["bbox"])
-                ok, why = self._verify_text_region(
-                    image, snapped, it.get("original", ""))
-                if not ok:
-                    print(f"[pipeline] free det {it.get('original', '')[:12]!r} "
-                          f"at {it['bbox']} rejected: {why}")
-                    continue
-                it["bbox"] = [int(v) for v in snapped]
+        for it in processed:
             it["id"] = next_id
             next_id += 1
-            it["in_bubble"] = False
+            if not it.get("erase"):
+                it["in_bubble"] = False
             items.append(it)
-
-        # Giant title banners: one clean caption per banner, pro style. Read
-        # the whole banner with OCR and translate it as a unit; fall back to
-        # joining the LLM's fragments left-to-right if OCR/translate fail.
-        for ti, (tx, ty, tw2, th2) in enumerate(title_regions):
-            frags = sorted(title_frags[ti], key=lambda f: f["bbox"][0])
-            jp, tr = "", ""
-            if self.ocr is not None and self.ocr.ok:
-                jp = (self.ocr.read_region(image, (tx, ty, tw2, th2), None)
-                      or "").strip()
-            if not jp:
-                jp = "".join(f.get("original", "") for f in frags)
-            if jp and _has_source_text(jp, self.source_lang):
-                try:
-                    out = self.translator.translate_texts(
-                        {next_id: jp}, self.target_lang, image=image)
-                    tr = ((out.get(next_id) or {}).get("translation") or "").strip()
-                except Exception as e:
-                    print(f"[pipeline] title translate failed: {e}")
-            if not tr:
-                tr = " ".join((f.get("translation") or "").strip()
-                              for f in frags).strip()
-            if not tr:
-                continue
-            print(f"[pipeline] title banner at ({tx},{ty},{tw2},{th2}) -> "
-                  f"one caption ({len(frags)} fragments merged)")
-            items.append({
-                "id": next_id, "bbox": [tx, ty, tw2, th2],
-                "original": jp, "translation": tr, "type": "title",
-                "in_bubble": False, "dark": False, "rotation": 0.0,
-                "title_caption": True,
-            })
-            next_id += 1
 
         # Also run the dedicated free-text / text-block detectors (the
         # manga-trained block model is far better at giant vertical title & SFX

@@ -326,7 +326,7 @@ class Compositor:
                     _r, dark, touched = self._apply_free_region(result, gray,
                                                                 cap, bb)
                     edited_rects.append(tuple(int(v) for v in touched))
-                    ch = min(bh, max(int(0.055 * h), 24))
+                    ch = min(bh, max(int(0.034 * h), 22))
                     rect = (bx + bw // 14, by + max(0, (bh - ch) // 2),
                             bw - bw // 7, ch)
                     it["bbox"] = [int(v) for v in rect]
