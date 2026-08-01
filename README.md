@@ -32,6 +32,9 @@ using an OpenAI or Gemini image model.
 
 ## Run it
 
+Fresh machine? **See [INSTALL.md](INSTALL.md)** for the full step-by-step
+(Windows / Linux, CPU-only or NVIDIA GPU).
+
 ```bash
 pip install -r requirements.txt        # core app (CPU; CV detector)
 ./setup_gpu.sh                         # optional: GPU balloon model (recommended)

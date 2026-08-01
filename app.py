@@ -262,11 +262,23 @@ def _git_commit() -> str:
     'the fix didn't work' — the browser updated but app.py wasn't restarted)."""
     try:
         import subprocess
-        return subprocess.check_output(
+        c = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], text=True,
-            stderr=subprocess.DEVNULL).strip() or "unknown"
+            stderr=subprocess.DEVNULL).strip()
+        if c:
+            return c
     except Exception:
-        return "unknown"
+        pass
+    # Standalone install (no repo): report the shipped release version instead.
+    try:
+        vp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+        with open(vp, encoding="utf-8") as f:
+            v = f.read().strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return "standalone"
 
 
 _SERVER_COMMIT = _git_commit()
