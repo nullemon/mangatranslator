@@ -90,10 +90,18 @@ def main():
     else:
         print("[1/4] PyTorch already installed.")
 
-    # 2) the model packages.
-    print("[2/4] Model packages...")
-    steps_ok &= pip(["ultralytics", "huggingface_hub", "manga-ocr",
-                     "simple-lama-inpainting", "scipy", "gdown", "spandrel"])
+    # 2) the model packages — only the ones actually missing, so a complete
+    #    install is a clean no-op (and PEP-668 distros aren't poked at all).
+    pkg_map = {"ultralytics": "ultralytics", "huggingface_hub": "huggingface_hub",
+               "manga_ocr": "manga-ocr",
+               "simple_lama_inpainting": "simple-lama-inpainting",
+               "scipy": "scipy", "gdown": "gdown", "spandrel": "spandrel"}
+    need = [p for m, p in pkg_map.items() if not have(m)]
+    if need:
+        print("[2/4] Model packages...")
+        steps_ok &= pip(need)
+    else:
+        print("[2/4] Model packages already installed.")
 
     # 3) ONNX runtime for the text-stroke model. Never clobber an existing
     #    -gpu install; macOS has no -gpu build at all.
