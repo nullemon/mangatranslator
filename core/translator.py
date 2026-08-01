@@ -263,7 +263,18 @@ class GeminiTranslator:
         return f"Gemini error {resp.status_code}: {resp.text[:300]}"
 
 
-DEFAULT_MODELS = {"claude": "claude-sonnet-4-6", "gemini": "gemini-2.5-flash-lite"}
+# Gemini default is a rolling "latest" alias so a fresh install never lands on
+# a model Google has retired ("no longer available"). Retired ids that a saved
+# setting might still send are remapped below.
+DEFAULT_MODELS = {"claude": "claude-sonnet-4-6", "gemini": "gemini-flash-latest"}
+
+# Gemini ids Google has retired for new accounts → the current equivalent, so an
+# old saved/hardcoded choice keeps working instead of 404-ing.
+_GEMINI_RETIRED = {
+    "gemini-2.0-flash": "gemini-flash-latest",
+    "gemini-1.5-flash": "gemini-flash-latest",
+    "gemini-1.5-pro": "gemini-pro-latest",
+}
 
 
 def make_translator(provider: str, api_key: str, model: str = "", style: str = "",
@@ -281,6 +292,14 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
     if provider in ("gemini", "google"):
         if not model or model.startswith("claude"):
             model = DEFAULT_MODELS["gemini"]
+        # A saved setting may still point at a fully-retired model — remap it to
+        # the current equivalent so it works instead of 404-ing. (Models that
+        # are only "restricted to existing accounts", like gemini-2.5-pro, are
+        # left as-is: they still work for the accounts that have them.)
+        if model in _GEMINI_RETIRED:
+            new = _GEMINI_RETIRED[model]
+            print(f"[translator] '{model}' is retired — using '{new}' instead")
+            model = new
         return GeminiTranslator(api_key, model, style=style,
                                 source_lang=source_lang, translate_sfx=translate_sfx)
 

@@ -272,10 +272,20 @@ document.addEventListener("DOMContentLoaded", () => {
     gemini: {
       label: "Gemini API Key", placeholder: "AIza...", storageKey: "manga_key_gemini",
       models: [
-        { value: "gemini-2.5-flash-lite", text: "Gemini 2.5 Flash-Lite (Cheapest)" },
+        // Rolling "latest" aliases — Google keeps these pointed at the current
+        // models, so they never hit the "no longer available" error. Best
+        // default for a fresh install.
+        { value: "gemini-flash-latest", text: "Gemini Flash (Latest — recommended)" },
+        { value: "gemini-pro-latest", text: "Gemini Pro (Latest — best)" },
+        { value: "gemini-flash-lite-latest", text: "Gemini Flash-Lite (Latest — cheapest)" },
+        // Newest named models (may depend on account access).
+        { value: "gemini-3-pro-preview", text: "Gemini 3 Pro (Newest)" },
+        // Current stable 2.5 line.
         { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast)" },
-        { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (Best)" },
-        { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (Lite)" },
+        { value: "gemini-2.5-flash-lite", text: "Gemini 2.5 Flash-Lite" },
+        // Kept for existing accounts — newer Google accounts may 404 on these.
+        { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (older accounts)" },
+        { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (older accounts)" },
       ],
     },
   };
