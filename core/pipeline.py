@@ -1335,15 +1335,13 @@ class TranslationPipeline:
         from .ocr import _has_source_text
         x, y, bw, bh = [int(v) for v in box]
 
-        ocr_state = None    # None = OCR unavailable, True/False = verdict
-        if self.ocr is not None and self.ocr.ok:
-            seen = (self.ocr.read_region(image, box, None) or "").strip()
-            if seen and _has_source_text(seen, self.source_lang):
-                if claimed and _text_sim(seen, claimed) < 0.3:
-                    return False, f"box reads different text ({seen[:14]!r})"
-                return True, "ocr confirmed"
-            ocr_state = False
-
+        # Signal order matters. The STROKE MODEL goes first and holds veto
+        # power: if it sees (almost) no text pixels, the region is artwork no
+        # matter what OCR thinks it read — manga-ocr hallucinates short
+        # readings on clothing details and art (that is exactly how 'EH?' got
+        # typeset onto a shirt). Real lettering always lights the stroke
+        # model up.
+        px = None
         if self.text_seg is not None and self.text_seg.ok:
             try:
                 m = self.text_seg.mask(image)
@@ -1357,18 +1355,102 @@ class TranslationPipeline:
                     return False, "degenerate box"
                 roi = m[y0:y1, x0:x1]
                 px = int(cv2.countNonZero(roi))
-                if px >= 300 and px / max(roi.size, 1) >= 0.03:
+                cov = px / max(roi.size, 1)
+                if px < 40 or cov < 0.004:
+                    return False, "no text strokes"
+                if px >= 300 and cov >= 0.03:
+                    # Dense lettering. Still cross-check the CONTENT when we
+                    # can read it, so a det claiming other text can't hijack
+                    # a real title/SFX region.
+                    if self.ocr is not None and self.ocr.ok and claimed:
+                        seen = (self.ocr.read_region(image, box, None) or "").strip()
+                        if (seen and _has_source_text(seen, self.source_lang)
+                                and _text_sim(seen, claimed) < 0.3):
+                            return False, f"box reads different text ({seen[:14]!r})"
                     return True, "strong text pixels"
-                # Pixel model is present and says this box holds no real
-                # lettering — that alone is disqualifying, with or without OCR.
-                return False, "weak text pixels"
 
-        # OCR said no and no strong-pixel rescue was possible.
-        if ocr_state is False:
+        if self.ocr is not None and self.ocr.ok:
+            seen = (self.ocr.read_region(image, box, None) or "").strip()
+            if seen and _has_source_text(seen, self.source_lang):
+                if claimed and _text_sim(seen, claimed) < 0.3:
+                    return False, f"box reads different text ({seen[:14]!r})"
+                return True, "ocr confirmed"
+            # Medium strokes + unreadable = screentone/hatching noise.
             return False, "no readable text"
-        # Neither verifier available (bare CPU install) — stay permissive so
-        # the app still works; the coarser _box_text_evidence gate remains.
-        return True, "unverified (no local models)"
+
+        # OCR unavailable: medium stroke evidence (past the floor above) is
+        # accepted; with neither model we stay permissive (bare installs).
+        return True, ("medium text pixels" if px is not None
+                      else "unverified (no local models)")
+
+    def _snap_to_text_pixels(self, image, box, pad_frac=0.14):
+        """Tighten a claimed text box to the lettering the stroke model
+        actually sees inside it. The LLM's free-text boxes drift onto nearby
+        art (that's how 'THIS IS' ended up on a flying carpet); the strokes
+        say where the text REALLY is, so the erase and the typeset land on
+        the lettering instead of the artwork. Returns the box unchanged when
+        the model is unavailable or sees nothing."""
+        if self.text_seg is None or not self.text_seg.ok:
+            return box
+        try:
+            m = self.text_seg.mask(image)
+        except Exception:
+            return box
+        if m is None:
+            return box
+        x, y, bw, bh = [int(v) for v in box]
+        mh, mw = m.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(mw, x + bw), min(mh, y + bh)
+        if x1 <= x0 or y1 <= y0:
+            return box
+        roi = m[y0:y1, x0:x1]
+        pts = cv2.findNonZero((roi > 0).astype(np.uint8))
+        if pts is None or len(pts) < 40:
+            return box
+        rx, ry, rw, rh = cv2.boundingRect(pts)
+        pad = max(4, int(pad_frac * max(rw, rh)))
+        nx = max(0, x0 + rx - pad)
+        ny = max(0, y0 + ry - pad)
+        nw = min(mw - nx, rw + 2 * pad)
+        nh = min(mh - ny, rh + 2 * pad)
+        return [int(nx), int(ny), int(nw), int(nh)]
+
+    def _find_title_regions(self, image):
+        """Locate GIANT display/title lettering (chapter-title banners): a
+        dense text-stroke cluster whose glyphs are far larger than dialogue.
+        The LLM tends to fragment these into one det per word and stamp tiny
+        English onto individual kanji; instead we treat the whole cluster as
+        ONE region, erase it cleanly and set a modest centred caption — the
+        way official releases handle title art."""
+        if self.text_seg is None or not self.text_seg.ok:
+            return []
+        try:
+            m = self.text_seg.mask(image)
+        except Exception:
+            return []
+        if m is None:
+            return []
+        h, w = m.shape[:2]
+        # Elongated horizontal closure: giant glyphs carry proportionally giant
+        # gaps between characters, so a round kernel leaves each kanji as its
+        # own island and the banner is never seen as one run.
+        kx = max(12, int(0.05 * w))
+        ky = max(8, int(0.012 * h))
+        dil = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky)))
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(
+            (dil > 0).astype(np.uint8), 8)
+        out = []
+        for i in range(1, n):
+            cx, cy, cw, ch, _a = stats[i]
+            roi = m[cy:cy + ch, cx:cx + cw]
+            px = int(cv2.countNonZero(roi))
+            # Title banner: tall glyphs (>=5% of page height), wide run
+            # (>=30% of page width), genuinely dense lettering.
+            if (ch >= 0.05 * h and cw >= 0.30 * w
+                    and px / max(cw * ch, 1) >= 0.10):
+                out.append((int(cx), int(cy), int(cw), int(ch)))
+        return out
 
     def _free_text_llm(self, image, bubble_regions, update) -> List[dict]:
         """Vision-LLM free-text detection: returns box + original + translation
@@ -1681,13 +1763,13 @@ class TranslationPipeline:
         except Exception as e:
             print(f"[pipeline] seg detect in smart mode failed: {e}")
 
-        # No precise masks available (CPU-only / model absent): fall back to the
-        # LLM boxes alone, but route bubble text through the free-text path so
-        # it's contained to its strokes rather than a loose oversized box.
-        if not seg_regions:
-            for it in llm_items:
-                it["in_bubble"] = False
-            return llm_items, "", {}
+        # No balloon masks (bubble-less page, or seg model absent): do NOT
+        # shortcut past the gates below. Every det still goes through step 2 —
+        # SFX filtering, title-banner merging, stroke-snap and the full
+        # text-verification logic — as unmatched free text. The old early
+        # return here skipped ALL of that, which is exactly how fragments got
+        # stamped on a chapter title and text landed on shirts on pages that
+        # happen to contain no bubbles.
 
         masks: Dict[int, Any] = {}
         items: List[dict] = []
@@ -1864,9 +1946,26 @@ class TranslationPipeline:
         #    what stops translations landing on faces, shirts and background
         #    art. Watermark/erase dets skip OCR (they're latin) but still need
         #    text-pixel evidence.
+        title_regions = self._find_title_regions(image)
+        title_frags = {ti: [] for ti in range(len(title_regions))}
+
+        def _in_title(bb):
+            cx = bb[0] + bb[2] / 2.0
+            cy = bb[1] + bb[3] / 2.0
+            for ti, (tx, ty, tw2, th2) in enumerate(title_regions):
+                if tx <= cx <= tx + tw2 and ty <= cy <= ty + th2:
+                    return ti
+            return None
+
         next_id = max([r.id for r in seg_regions] + [0]) + 1
         for it in llm_items:
             if id(it) in matched:
+                continue
+            # SFX stay untouched unless the user's "Translate Background SFX"
+            # toggle is on — enforced on EVERY path, including this one.
+            if not self.translate_sfx and (_is_sfx(it.get("original", ""))
+                                           or it.get("type") in ("sfx", "sound",
+                                                                 "onomatopoeia")):
                 continue
             if it.get("erase") or it.get("type") == "watermark":
                 if not self._box_text_evidence(image, it["bbox"]):
@@ -1874,16 +1973,59 @@ class TranslationPipeline:
                           f"text pixels — dropped")
                     continue
             else:
+                # Fragment of a giant title? Collect it — the whole banner is
+                # handled as ONE caption below, never stamped word-by-word.
+                ti = _in_title(it["bbox"])
+                if ti is not None:
+                    title_frags[ti].append(it)
+                    continue
+                # Snap the box to the text strokes it contains, then verify AT
+                # the snapped spot — a drifted box can't erase/typeset on art.
+                snapped = self._snap_to_text_pixels(image, it["bbox"])
                 ok, why = self._verify_text_region(
-                    image, it["bbox"], it.get("original", ""))
+                    image, snapped, it.get("original", ""))
                 if not ok:
                     print(f"[pipeline] free det {it.get('original', '')[:12]!r} "
                           f"at {it['bbox']} rejected: {why}")
                     continue
+                it["bbox"] = [int(v) for v in snapped]
             it["id"] = next_id
             next_id += 1
             it["in_bubble"] = False
             items.append(it)
+
+        # Giant title banners: one clean caption per banner, pro style. Read
+        # the whole banner with OCR and translate it as a unit; fall back to
+        # joining the LLM's fragments left-to-right if OCR/translate fail.
+        for ti, (tx, ty, tw2, th2) in enumerate(title_regions):
+            frags = sorted(title_frags[ti], key=lambda f: f["bbox"][0])
+            jp, tr = "", ""
+            if self.ocr is not None and self.ocr.ok:
+                jp = (self.ocr.read_region(image, (tx, ty, tw2, th2), None)
+                      or "").strip()
+            if not jp:
+                jp = "".join(f.get("original", "") for f in frags)
+            if jp and _has_source_text(jp, self.source_lang):
+                try:
+                    out = self.translator.translate_texts(
+                        {next_id: jp}, self.target_lang, image=image)
+                    tr = ((out.get(next_id) or {}).get("translation") or "").strip()
+                except Exception as e:
+                    print(f"[pipeline] title translate failed: {e}")
+            if not tr:
+                tr = " ".join((f.get("translation") or "").strip()
+                              for f in frags).strip()
+            if not tr:
+                continue
+            print(f"[pipeline] title banner at ({tx},{ty},{tw2},{th2}) -> "
+                  f"one caption ({len(frags)} fragments merged)")
+            items.append({
+                "id": next_id, "bbox": [tx, ty, tw2, th2],
+                "original": jp, "translation": tr, "type": "title",
+                "in_bubble": False, "dark": False, "rotation": 0.0,
+                "title_caption": True,
+            })
+            next_id += 1
 
         # Also run the dedicated free-text / text-block detectors (the
         # manga-trained block model is far better at giant vertical title & SFX

@@ -311,6 +311,33 @@ class Compositor:
                 bh = min(bh, h - by)
                 if bw < 10 or bh < 10:
                     continue
+
+                # Giant title banner → ONE modest centred caption, pro style.
+                # The banner is erased cleanly (a light caption band flat-fills;
+                # anything else gets the stroke-tight inpaint) and the English
+                # is set SMALL and centred — never auto-fitted up to the size
+                # of the artwork lettering, never stamped word-by-word.
+                if it.get("title_caption"):
+                    cap, bb = self._plan_free_region(gray, bx, by, bw, bh,
+                                                     refine=False)
+                    if any(self._overlaps(bb, ub) for ub in used_boxes):
+                        continue
+                    used_boxes.append(bb)
+                    _r, dark, touched = self._apply_free_region(result, gray,
+                                                                cap, bb)
+                    edited_rects.append(tuple(int(v) for v in touched))
+                    ch = min(bh, max(int(0.055 * h), 24))
+                    rect = (bx + bw // 14, by + max(0, (bh - ch) // 2),
+                            bw - bw // 7, ch)
+                    it["bbox"] = [int(v) for v in rect]
+                    color = self._pick_color(dark, it)
+                    tglow = (self._item_glow(it) or cap is None
+                             or (cap is not None and cap[4]))
+                    placements.append((offset_rect(it, rect),
+                                       " ".join(text.split()), color, ital, 0,
+                                       self._item_scale(it), tglow))
+                    it["placed"] = True
+                    continue
                 # Better tilt logic: when the detector called this horizontal
                 # but the ORIGINAL ink is a confidently tilted elongated block
                 # (a diagonal banner / slanted title bar), typeset the

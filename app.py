@@ -1301,6 +1301,7 @@ async def rerender(task_id: str, request: Request):
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
             "src_rect": it.get("src_rect"),
+            "title_caption": it.get("title_caption", False),
             "color": colors.get(nid, "auto"),
             "rotation": rotations.get(nid, it.get("rotation", 0)),
             "manual_rot": nid in rotations,
@@ -1415,6 +1416,7 @@ async def rerender(task_id: str, request: Request):
             "placed": it.get("placed", False),
             "rotation": it.get("rotation", 0),
             "src_rect": it.get("src_rect"),
+            "title_caption": it.get("title_caption", False),
         }
         for it in items
     ]
