@@ -370,4 +370,41 @@ def extract_json_array(text: str) -> list:
         except json.JSONDecodeError:
             pass
 
+    # TRUNCATION SALVAGE: long pages can overrun the model's output budget and
+    # the array arrives cut off mid-object. Losing the whole page over the last
+    # broken element is far worse than dropping that element — walk the text
+    # and recover every COMPLETE top-level {...} object.
+    objs = []
+    depth = 0
+    start = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if esc:
+            esc = False
+            continue
+        if ch == "\\" and in_str:
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    objs.append(json.loads(text[start:i + 1]))
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    if objs:
+        print(f"[prompts] response was truncated — salvaged "
+              f"{len(objs)} complete objects")
+        return objs
     raise ValueError(f"Could not parse JSON from model response: {text[:300]}")

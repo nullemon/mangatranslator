@@ -369,6 +369,7 @@ async def translate(
     profile: str = Form(""),
     gpu_cap: str = Form("100"),
     cut_regions: str = Form(""),
+    one_by_one: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -434,7 +435,7 @@ async def translate(
     asyncio.create_task(
         _run(
             task_id, upload_path, output_path, api_key, target_lang, provider, model,
-            smart_mode == "true", font_path,
+            (smart_mode == "true") and one_by_one != "true", font_path,
             enhance == "true", enhance_provider, enhance_key, enhance_prompt, enhance_model,
             watermark=watermark.strip(),
             wm_place=wm_place.strip() or "br",
@@ -454,6 +455,7 @@ async def translate(
             compress=(compress == "true"),
             credit=credit.strip(),
             cut_regions=cut_regions,
+            one_by_one=(one_by_one == "true"),
         )
     )
 
@@ -493,6 +495,7 @@ async def _run(
     compress: bool = False,
     credit: str = "",
     cut_regions: str = "",
+    one_by_one: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -611,6 +614,7 @@ async def _run(
             clean_only=clean_only,
             isolate_page=isolate_page,
             credit=credit,
+            one_by_one=one_by_one,
         )
 
         def on_progress(update):

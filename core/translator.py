@@ -162,20 +162,35 @@ class GeminiTranslator:
 
     def _ask(self, parts: list) -> str:
         def _body(disable_thinking: bool) -> dict:
-            gc = {"temperature": 0.2, "maxOutputTokens": 16384}
-            if not disable_thinking:
-                # Thinking-only models spend reasoning tokens from the SAME
-                # output budget. 16k gets eaten by the thinking and the JSON
-                # comes back TRUNCATED — garbage half-translations like
-                # "THE PSYCHIC CLU..." — so give these models real headroom.
-                gc["maxOutputTokens"] = 65536
+            # Full output headroom on EVERY attempt: a busy page's detection
+            # JSON alone can overrun 16k and arrive truncated mid-array (and
+            # thinking models additionally spend reasoning tokens from this
+            # same budget). Tokens are billed as used, so the high cap only
+            # costs anything when a page genuinely needs it.
+            gc = {"temperature": 0.2, "maxOutputTokens": 65536}
             if disable_thinking:
                 # Gemini 2.5 flash/flash-lite spend "thinking" tokens from the
                 # SAME output budget — a busy page can burn it all and return no
                 # text (finishReason=MAX_TOKENS). Turning thinking off (cheapest)
                 # gives the whole budget to the translation JSON.
                 gc["thinkingConfig"] = {"thinkingBudget": 0}
-            return {"contents": [{"parts": parts}], "generationConfig": gc}
+            return {
+                "contents": [{"parts": parts}],
+                "generationConfig": gc,
+                # Manga action pages trip Gemini's default safety filters
+                # (finishReason=PROHIBITED_CONTENT on a fight scene, which
+                # silently killed the free-text pass). This is published
+                # commercial fiction being translated — turn the filters off.
+                "safetySettings": [
+                    {"category": c, "threshold": "BLOCK_NONE"}
+                    for c in (
+                        "HARM_CATEGORY_HARASSMENT",
+                        "HARM_CATEGORY_HATE_SPEECH",
+                        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    )
+                ],
+            }
 
         url = self.URL.format(model=self.model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}

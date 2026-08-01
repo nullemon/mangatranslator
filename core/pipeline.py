@@ -754,6 +754,7 @@ class TranslationPipeline:
         replace_watermark: bool = False,
         watermark_text: str = "",
         clean_only: bool = False,
+        one_by_one: bool = False,
         isolate_page: bool = False,
         credit: str = "",
     ):
@@ -762,6 +763,7 @@ class TranslationPipeline:
         self.translate_sfx = bool(translate_sfx)
         # Clean-only: just erase ALL text (no translation), for a usable raw.
         self.clean_only = bool(clean_only)
+        self.one_by_one = bool(one_by_one)
         # Isolate page (beta): white-out + crop the background around a photo.
         self.isolate_page = bool(isolate_page)
         # Credit / TL name dropped in the margin (movable per page in the editor).
@@ -1242,6 +1244,39 @@ class TranslationPipeline:
                 if jp and _has_japanese(jp):
                     id_to_text[r.id] = jp
             update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
+            if id_to_text and self.one_by_one:
+                # BETA one-by-one: each bubble is its own translate call with
+                # a crop of its surrounding panel as context. Nothing is
+                # batched, so one truncated/blocked/echoed response can only
+                # ever affect ONE bubble — cross-bubble mixups are impossible
+                # by construction. Slower (one API call per bubble), rock
+                # solid.
+                h_img, w_img = image.shape[:2]
+                out = {}
+                boxes = {r.id: r.bbox for r in regions}
+                for n, (rid, jp) in enumerate(id_to_text.items()):
+                    update(2, f"Translating bubble {n + 1} / "
+                              f"{len(id_to_text)} (one-by-one)...",
+                           42 + int(8 * n / max(1, len(id_to_text))))
+                    bx, by, bw2, bh2 = [int(v) for v in boxes.get(
+                        rid, (0, 0, w_img, h_img))]
+                    mx, my = int(bw2 * 0.6) + 40, int(bh2 * 0.6) + 40
+                    crop = image[max(0, by - my):min(h_img, by + bh2 + my),
+                                 max(0, bx - mx):min(w_img, bx + bw2 + mx)]
+                    try:
+                        r1 = self.translator.translate_texts(
+                            {rid: jp}, self.target_lang, image=crop)
+                        ent = r1.get(rid) or {}
+                        if (ent.get("translation") or "").strip():
+                            out[rid] = ent
+                    except Exception as e:
+                        print(f"[pipeline] one-by-one bubble {rid} failed "
+                              f"({e}) — skipped, others unaffected")
+                for rid, jp in id_to_text.items():
+                    out.setdefault(rid, {})
+                    out[rid]["original"] = out[rid].get("original") or jp
+                update(2, f"Translated {len(out)} bubbles (one-by-one)", 50)
+                return out
             if id_to_text:
                 try:
                     out = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
@@ -1260,6 +1295,30 @@ class TranslationPipeline:
             image, annotated, len(regions), self.target_lang
         )
         update(2, f"Translated {len(out)} bubble regions", 50)
+        return out
+
+    def _translate_map(self, image, id_to_text, box_map, tag="block"):
+        """Batch translate — or, in one-by-one mode, one call per item with a
+        crop of its surroundings, so a bad response can only lose ONE item."""
+        if not self.one_by_one:
+            return self.translator.translate_texts(
+                id_to_text, self.target_lang, image=image)
+        h_img, w_img = image.shape[:2]
+        out = {}
+        for fid, jp in id_to_text.items():
+            bx, by, bw, bh = [int(v) for v in box_map.get(
+                fid, (0, 0, w_img, h_img))]
+            mx, my = int(bw * 0.6) + 40, int(bh * 0.6) + 40
+            crop = image[max(0, by - my):min(h_img, by + bh + my),
+                         max(0, bx - mx):min(w_img, bx + bw + mx)]
+            try:
+                r1 = self.translator.translate_texts(
+                    {fid: jp}, self.target_lang, image=crop)
+                if r1.get(fid):
+                    out[fid] = r1[fid]
+            except Exception as e:
+                print(f"[pipeline] one-by-one {tag} {fid} failed ({e}) — "
+                      f"skipped, others unaffected")
         return out
 
     def _detect_free_text(self, image, bubble_regions, update) -> List[dict]:
@@ -1384,6 +1443,13 @@ class TranslationPipeline:
                     print(f"[pipeline] stray det {f.get('original', '')[:12]!r} "
                           f"on title banner rejected: {why}")
             jp = banner_jp or "".join(f.get("original", "") for f in genuine)
+            # Giant SFX lettering is NOT a title — with SFX translation off,
+            # leave the art completely alone. And with no fragments AND a
+            # tiny/garbage read, there is nothing trustworthy to caption.
+            if jp and _is_sfx(jp) and not self.translate_sfx:
+                continue
+            if not genuine and len(jp.strip()) < 4:
+                continue
             # Translation priority: a det that actually READ the banner (the
             # LLM's own translation is best) — including a garbage-coordinate
             # det rescued by content — then a fresh translate of the OCR text,
@@ -1790,7 +1856,7 @@ class TranslationPipeline:
 
         update(2, f"Translating {len(id_to_text)} extra text blocks...", 56)
         try:
-            translations = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
+            translations = self._translate_map(image, id_to_text, box_map)
         except Exception as e:
             print(f"[pipeline] extra block translation failed: {e}")
             return []
@@ -1849,7 +1915,7 @@ class TranslationPipeline:
 
         update(2, f"Translating {len(id_to_text)} free text regions...", 55)
         try:
-            translations = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
+            translations = self._translate_map(image, id_to_text, box_map)
         except Exception as e:
             print(f"[pipeline] free-text translation failed: {e}")
             return []

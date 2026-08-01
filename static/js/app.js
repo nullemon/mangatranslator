@@ -123,6 +123,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // SBS / text-heavy mode: forces AI-vision detection (best for dense paragraph
   // pages) and surfaces the transcript.
+  const oneByOne = document.getElementById("oneByOne");
+  if (oneByOne) {
+    oneByOne.checked = localStorage.getItem("manga_one_by_one") === "1";
+    oneByOne.addEventListener("change", () =>
+      localStorage.setItem("manga_one_by_one", oneByOne.checked ? "1" : "0"));
+  }
   const sbsMode = document.getElementById("sbsMode");
   if (sbsMode) {
     sbsMode.checked = localStorage.getItem("manga_sbs") === "1";
@@ -965,6 +971,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // SBS / text-heavy pages need the AI-vision detector to catch paragraph text.
       f.append("smart_mode", (smartMode.checked || (sbsMode && sbsMode.checked)) ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
+      f.append("one_by_one", oneByOne && oneByOne.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       f.append("remove_watermark", removeWatermark && removeWatermark.checked ? "true" : "false");
