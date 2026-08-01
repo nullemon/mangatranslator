@@ -176,10 +176,12 @@ class GeminiTranslator:
 
         with httpx.Client(timeout=self.timeout) as client:
             resp = client.post(url, headers=headers, json=_body(True))
-            # Some models (e.g. gemini-2.5-pro) are thinking-only and reject
-            # thinkingBudget:0 — retry with thinking left on.
-            if resp.status_code == 400 and ("thinking" in resp.text.lower()
-                                            or "budget" in resp.text.lower()):
+            # Thinking-only models (gemini-2.5-pro, Gemini 3, and the -latest
+            # aliases that point at them) reject thinkingBudget:0. The rejection
+            # is sometimes a specific "thinking budget" message, but on newer
+            # models it's just a generic 400 "invalid argument" — so retry once
+            # with thinking left on for ANY 400, not only ones that name it.
+            if resp.status_code == 400:
                 resp = client.post(url, headers=headers, json=_body(False))
 
         if resp.status_code != 200:
