@@ -145,29 +145,37 @@
           </select>
         </div>
         <div class="setting-group">
-          <label for="watermark">Watermark <span class="muted">(corner stamp — pick spot &amp; opacity)</span></label>
+          <label for="watermark">Watermark <span class="muted">(pick a style — live preview below)</span></label>
           <input type="text" id="watermark" placeholder="e.g. @yourname" maxlength="60">
           <div class="inline-row" style="margin-top:6px">
-            <select id="wmPlace" style="flex:1">
-              <option value="br">Corner — bottom right</option>
-              <option value="bl">Corner — bottom left</option>
-              <option value="tr">Corner — top right</option>
-              <option value="tl">Corner — top left</option>
-              <option value="tile">Tiled across whole page</option>
-              <option value="random">Random spot (re-rolls each render)</option>
+            <select id="wmStyle" style="flex:1" title="Watermark style">
+              <option value="clean">Clean — outlined text</option>
+              <option value="bold">Bold — heavy display text</option>
+              <option value="pill">Pill — badge with dark background</option>
+              <option value="ribbon">Ribbon — edge banner strip</option>
+              <option value="ghost">Ghost — big diagonal, subtle</option>
+              <option value="tile">Tiled — repeated everywhere</option>
             </select>
+            <select id="wmPlace" style="width:150px" title="Position (corner styles; ribbon uses top/bottom)">
+              <option value="br">Bottom right</option>
+              <option value="bl">Bottom left</option>
+              <option value="tr">Top right</option>
+              <option value="tl">Top left</option>
+              <option value="random">Random quiet spot</option>
+            </select>
+          </div>
+          <div class="inline-row" style="margin-top:6px;align-items:center">
             <select id="wmSize" style="width:96px" title="Watermark size">
               <option value="s">Small</option>
               <option value="m" selected>Medium</option>
               <option value="l">Large</option>
             </select>
-            <input type="number" id="wmOpacity" min="10" max="100" step="5" value="50"
+            <input type="number" id="wmOpacity" min="10" max="100" step="5" value="70"
                    style="width:76px" title="Opacity %">
+            <label class="toggle" style="margin:0" title="Also stamp on Upscale HD, Scan → Raw and AI-scan outputs (not just translations)."><input type="checkbox" id="wmAllOut"><span class="toggle-slider"></span></label>
+            <span class="toggle-hint" style="margin:0">every output</span>
           </div>
-          <label class="toggle" style="margin-top:6px;display:inline-flex;align-items:center;gap:6px" title="Also stamp the watermark + credit on Upscale HD, Scan → Raw and the AI-scan workflows (they were translate-only before).">
-            <input type="checkbox" id="wmAllOut"><span class="toggle-slider"></span>
-            <span class="toggle-hint" style="margin:0">Stamp on every output</span>
-          </label>
+          <img id="wmPreview" alt="Watermark preview" style="margin-top:8px;width:100%;max-width:340px;border-radius:8px;border:1px solid rgba(128,128,128,.25);display:none">
         </div>
         <div class="setting-group">
           <label for="mangaTitle">Manga title <span class="muted">(context — correct names, no random stuff)</span></label>

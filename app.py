@@ -87,98 +87,147 @@ _WM_FONT_CANDIDATES = [
 
 
 def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
-               wm_size="m", credit=""):
+               wm_size="m", credit="", wm_style="clean"):
     """Stamp the user's watermark and/or credit line on ANY finished output
     (translate, upscale, raw, enhance — same look everywhere). The credit
     goes small in the opposite corner so the two never collide."""
     if watermark:
-        _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size)
+        _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size,
+                         wm_style)
     if credit:
         cplace = "bl" if wm_place != "bl" else "br"
-        _stamp_watermark(output_path, credit, cplace, 85, "s")
+        _stamp_watermark(output_path, credit, cplace, 85, "s", "clean")
 
 
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
-                     opacity: int = 50, size: str = "m"):
-    """Watermark the finished page. `place` puts the text ONCE in a corner
-    ('br','bl','tr','tl' — the default, discreet look) or tiles it diagonally
-    across the whole page ('tile'). `opacity` is 0–100%; `size` is
-    's' / 'm' / 'l'."""
+                     opacity: int = 50, size: str = "m", style: str = "clean"):
+    """Watermark the finished page. Six styles, all sized off the PAGE WIDTH
+    so they stay readable at any resolution (the old min-side divisors made
+    marks near-invisible on tall scans):
+
+      clean  — text with a thin contrasting outline (auto light/dark)
+      bold   — heavy display text with a thick contrast stroke
+      pill   — white text on a rounded dark badge
+      ribbon — full-width translucent band along the top or bottom edge
+      ghost  — big translucent diagonal text across the page
+      tile   — small text repeated diagonally over everything
+
+    `place` = tl/tr/bl/br/random for point styles; for ribbon it picks the
+    top or bottom edge. `opacity` 0-100."""
     img = cv2.imread(image_path)
     if img is None:
         return
     h, w = img.shape[:2]
+    style = (style or "clean").lower()
+    if place == "tile":                       # legacy value from old configs
+        style, place = "tile", "br"
     alpha = int(np.clip(int(opacity or 50), 5, 100) * 255 / 100)
-    # Corner divisors: l = the old size, m/s progressively smaller.
-    corner_div = {"l": 42, "m": 58, "s": 78}.get(size, 58)
-    tile_div = {"l": 28, "m": 38, "s": 50}.get(size, 38)
+    sf = {"s": 0.024, "m": 0.034, "l": 0.048}.get(size, 0.034)
+    fs = max(16, int(w * sf))
     pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).convert("RGBA")
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    def _font(size):
-        # Prefer a BUNDLED font (always ships with the app) so the watermark
-        # renders at the right size everywhere. The old hardcoded system path
-        # was absent on many setups (Windows, minimal Linux, some servers), and
-        # PIL's load_default() fallback ignores `size` — so the stamp was drawn
-        # but microscopic, i.e. effectively invisible. Bundle first, then common
-        # system fonts, then the tiny default only as a last resort.
+    def _font(size_px):
         for p in _WM_FONT_CANDIDATES:
             try:
                 if os.path.exists(p):
-                    return ImageFont.truetype(p, size)
+                    return ImageFont.truetype(p, size_px)
             except Exception:
                 continue
         try:
-            return ImageFont.truetype("DejaVuSans-Bold.ttf", size)
+            return ImageFont.truetype("DejaVuSans-Bold.ttf", size_px)
         except Exception:
             return ImageFont.load_default()
 
-    if place == "tile":
-        font = _font(max(16, min(w, h) // tile_div))
+    def _measure(font):
         bb = draw.textbbox((0, 0), text, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        step_x = tw + max(80, tw)
-        step_y = th + max(120, th * 3)
-        for y in range(-h, h * 2, step_y):
-            for x in range(-w, w * 2, step_x):
-                draw.text((x, y), text, fill=(128, 128, 128, alpha), font=font)
-        overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
-    else:
-        font = _font(max(10, min(w, h) // corner_div))
-        bb = draw.textbbox((0, 0), text, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        m = max(10, min(w, h) // 60)
+        return bb, bb[2] - bb[0], bb[3] - bb[1]
+
+    def _corner_xy(tw, th, pad):
+        m = max(12, int(w * 0.015))
         if place == "random":
-            # Fresh roll on every render — hit Apply again to move it, or
-            # switch to a fixed corner. Samples a dozen spots and takes the
-            # QUIETEST one, so the stamp lands on flat art or paper instead
-            # of across a face or lettering.
             gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            x_lo, x_hi = int(0.06 * w), max(int(0.94 * w) - tw, int(0.06 * w) + 1)
-            y_lo, y_hi = int(0.06 * h), max(int(0.94 * h) - th, int(0.06 * h) + 1)
-            best_xy, best_score = (m, m), 1e18
+            x_lo = int(0.06 * w)
+            x_hi = max(int(0.94 * w) - tw, x_lo + 1)
+            y_lo = int(0.06 * h)
+            y_hi = max(int(0.94 * h) - th, y_lo + 1)
+            best, score = (m, m), 1e18
             for _ in range(12):
                 cx = random.randint(x_lo, x_hi)
                 cy = random.randint(y_lo, y_hi)
                 reg = gray_full[cy:cy + th, cx:cx + tw]
-                if reg.size == 0:
-                    continue
-                score = float(reg.std())
-                if score < best_score:
-                    best_score, best_xy = score, (cx, cy)
-            x, y = best_xy
-        else:
-            x = (w - tw - m) if place in ("br", "tr") else m
-            y = (h - th - m) if place in ("br", "bl") else m
-        # Readable on whatever the corner holds: white text on dark art,
-        # dark text on paper — with a thin contrasting outline either way.
-        region = img[max(0, y - 4):min(h, y + th + 4), max(0, x - 4):min(w, x + tw + 4)]
+                if reg.size and float(reg.std()) < score:
+                    score, best = float(reg.std()), (cx, cy)
+            return best
+        x = (w - tw - m - pad) if place in ("br", "tr") else m
+        y = (h - th - m - pad) if place in ("br", "bl") else m
+        return x, y
+
+    def _auto_colors(x, y, tw, th):
+        region = img[max(0, y - 4):min(h, y + th + 4),
+                     max(0, x - 4):min(w, x + tw + 4)]
         lum = float(cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).mean()) if region.size else 255.0
-        fill = (255, 255, 255, alpha) if lum < 128 else (25, 25, 25, alpha)
-        stroke = (25, 25, 25, alpha) if lum < 128 else (255, 255, 255, alpha)
+        if lum < 128:
+            return (255, 255, 255, alpha), (15, 15, 15, alpha)
+        return (25, 25, 25, alpha), (255, 255, 255, alpha)
+
+    if style == "tile":
+        font = _font(max(14, int(w * 0.022)))
+        bb, tw, th = _measure(font)
+        for yy in range(-h, h * 2, th * 4 + 40):
+            for xx in range(-w, w * 2, tw + max(80, tw)):
+                draw.text((xx, yy), text, fill=(128, 128, 128, alpha), font=font)
+        overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
+
+    elif style == "ghost":
+        font = _font(max(40, int(w * 0.10)))
+        bb, tw, th = _measure(font)
+        ga = max(18, int(alpha * 0.30))
+        gl = Image.new("RGBA", (tw + 40, th + 40), (0, 0, 0, 0))
+        ImageDraw.Draw(gl).text((20 - bb[0], 20 - bb[1]), text,
+                                fill=(90, 90, 90, ga), font=font)
+        gl = gl.rotate(-24, expand=True, resample=Image.BICUBIC)
+        overlay.alpha_composite(gl, (max(0, (w - gl.width) // 2),
+                                     max(0, (h - gl.height) // 2)))
+
+    elif style == "ribbon":
+        font = _font(fs)
+        bb, tw, th = _measure(font)
+        band_h = int(th * 1.9)
+        y0 = 0 if place in ("tl", "tr") else h - band_h
+        draw.rectangle([0, y0, w, y0 + band_h],
+                       fill=(12, 12, 12, min(235, int(alpha * 1.1))))
+        draw.text(((w - tw) // 2 - bb[0],
+                   y0 + (band_h - th) // 2 - bb[1]), text,
+                  fill=(255, 255, 255, 255), font=font)
+
+    elif style == "pill":
+        font = _font(fs)
+        bb, tw, th = _measure(font)
+        px_, py_ = int(fs * 0.75), int(fs * 0.42)
+        pw, ph = tw + 2 * px_, th + 2 * py_
+        x, y = _corner_xy(pw, ph, 0)
+        draw.rounded_rectangle([x, y, x + pw, y + ph], radius=ph // 2,
+                               fill=(14, 14, 14, min(235, int(alpha * 1.15))))
+        draw.text((x + px_ - bb[0], y + py_ - bb[1]), text,
+                  fill=(255, 255, 255, 255), font=font)
+
+    elif style == "bold":
+        font = _font(int(fs * 1.25))
+        bb, tw, th = _measure(font)
+        x, y = _corner_xy(tw, th, 0)
+        fill, stroke = _auto_colors(x, y, tw, th)
         draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
-                  stroke_width=max(1, font.size // 14), stroke_fill=stroke)
+                  stroke_width=max(2, font.size // 9), stroke_fill=stroke)
+
+    else:  # clean
+        font = _font(fs)
+        bb, tw, th = _measure(font)
+        x, y = _corner_xy(tw, th, 0)
+        fill, stroke = _auto_colors(x, y, tw, th)
+        draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
+                  stroke_width=max(1, font.size // 16), stroke_fill=stroke)
 
     pil = Image.alpha_composite(pil, overlay)
     result = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
@@ -366,6 +415,7 @@ async def translate(
     wm_place: str = Form("br"),
     wm_opacity: str = Form("50"),
     wm_size: str = Form("m"),
+    wm_style: str = Form("clean"),
     style_prompt: str = Form(""),
     text_case: str = Form("upper"),
     finish: str = Form("clean"),
@@ -426,6 +476,7 @@ async def translate(
         "font_path": font_path,
         "watermark": watermark.strip(),
         "wm_place": wm_place.strip() or "br",
+        "wm_style": wm_style.strip() or "clean",
         "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
         "wm_size": wm_size.strip() or "m",
         "text_case": text_case,
@@ -454,6 +505,7 @@ async def translate(
             wm_place=wm_place.strip() or "br",
             wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
             wm_size=wm_size.strip() or "m",
+            wm_style=wm_style.strip() or "clean",
             style_prompt=style_prompt.strip(),
             text_case=text_case,
             finish=finish,
@@ -494,6 +546,7 @@ async def _run(
     wm_place: str = "br",
     wm_opacity: int = 50,
     wm_size: str = "m",
+    wm_style: str = "clean",
     style_prompt: str = "",
     text_case: str = "upper",
     finish: str = "clean",
@@ -667,7 +720,8 @@ async def _run(
         # "replace watermark" is on — there the user's mark is dropped in place
         # of the erased site watermark instead.
         if watermark and not replace_watermark:
-            _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size)
+            _stamp_watermark(output_path, watermark, wm_place, wm_opacity,
+                             wm_size, wm_style)
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
         if compress:
@@ -712,6 +766,7 @@ async def enhance_only(
     gpu_cap: str = Form("100"),
     watermark: str = Form(""), wm_place: str = Form("br"),
     wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+    wm_style: str = Form("clean"),
     credit: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -755,6 +810,7 @@ async def enhance_only(
                              wm_place=wm_place.strip() or "br",
                              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
                              wm_size=wm_size.strip() or "m",
+                             wm_style=wm_style.strip() or "clean",
                              credit=credit.strip()))
     )
     return {"task_id": task_id}
@@ -861,7 +917,8 @@ async def _run_enhance(
         await loop.run_in_executor(None, do_work)
         if wm and (wm.get("watermark") or wm.get("credit")):
             _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                       wm.get("wm_style", "clean"))
 
         tasks[task_id].update(
             {
@@ -888,6 +945,7 @@ async def upscale_only(file: UploadFile = File(...),
                        gpu_cap: str = Form("100"),
                        watermark: str = Form(""), wm_place: str = Form("br"),
                        wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                       wm_style: str = Form("clean"),
                        credit: str = Form("")):
     """Faithful HD upscale only — no translation, no generative redraw. Runs
     the MangaJaNai (or Real-ESRGAN fallback) model and returns the bigger,
@@ -918,7 +976,8 @@ async def upscale_only(file: UploadFile = File(...),
 
     wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
               wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
-              wm_size=wm_size.strip() or "m", credit=credit.strip())
+              wm_size=wm_size.strip() or "m", credit=credit.strip(),
+              wm_style=wm_style.strip() or "clean")
     asyncio.create_task(_run_upscale(task_id, upload_path, output_path, wm))
     return {"task_id": task_id}
 
@@ -929,6 +988,7 @@ async def rawify_only(file: UploadFile = File(...),
                       style: str = Form("photo"),
                       watermark: str = Form(""), wm_place: str = Form("br"),
                       wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                      wm_style: str = Form("clean"),
                       credit: str = Form("")):
     """Scan → Raw: make a clean page look like a rough magazine raw (tan
     paper, grain, vignette, dust). Pure deterministic CV — no models, no
@@ -954,7 +1014,8 @@ async def rawify_only(file: UploadFile = File(...),
     wstyle = style if style in ("photo", "scan") else "photo"
     wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
               wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
-              wm_size=wm_size.strip() or "m", credit=credit.strip())
+              wm_size=wm_size.strip() or "m", credit=credit.strip(),
+              wm_style=wm_style.strip() or "clean")
     asyncio.create_task(_run_rawify(task_id, upload_path, output_path,
                                     stren, wstyle, wm))
     return {"task_id": task_id}
@@ -978,7 +1039,8 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
         shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
         if wm and (wm.get("watermark") or wm.get("credit")):
             _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                       wm.get("wm_style", "clean"))
         tasks[task_id].update({
             "status": "done", "step": 2, "progress": 100,
             "message": f"Raw look ready! ({shape[1]}×{shape[0]})",
@@ -1019,7 +1081,8 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str,
         shape = await loop.run_in_executor(None, do_work)
         if wm and (wm.get("watermark") or wm.get("credit")):
             _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                       wm.get("wm_style", "clean"))
         tasks[task_id].update({
             "status": "done",
             "step": 2,
@@ -1453,7 +1516,7 @@ async def rerender(task_id: str, request: Request):
         if wm:
             _stamp_watermark(r["output_path"], wm,
                              t.get("wm_place", "br"), t.get("wm_opacity", 50),
-                             t.get("wm_size", "m"))
+                             t.get("wm_size", "m"), t.get("wm_style", "clean"))
 
     await asyncio.get_event_loop().run_in_executor(None, work)
 
@@ -1678,6 +1741,47 @@ async def ocr_translate(task_id: str, request: Request):
     return result
 
 
+@app.get("/api/wm-preview")
+async def wm_preview(text: str = "@YourName", style: str = "clean",
+                     place: str = "br", opacity: int = 70, size: str = "m",
+                     credit: str = ""):
+    """Live preview: renders the CURRENT watermark settings with the exact
+    same code that stamps real pages, onto a sample manga-ish page."""
+    w, h = 620, 420
+    img = np.full((h, w, 3), 246, np.uint8)
+    rng = np.random.default_rng(7)
+    g = cv2.GaussianBlur((rng.random((h, w)).astype(np.float32) - .5) * 26, (0, 0), 3)
+    img = np.clip(img.astype(np.float32) + g[..., None], 0, 255).astype(np.uint8)
+    cv2.rectangle(img, (12, 12), (w - 12, h // 2 - 6), (0, 0, 0), 2)
+    cv2.rectangle(img, (12, h // 2 + 6), (w // 2 - 6, h - 12), (0, 0, 0), 2)
+    cv2.rectangle(img, (w // 2 + 6, h // 2 + 6), (w - 12, h - 12), (0, 0, 0), 2)
+    for i in range(30, w - 30, 14):
+        cv2.line(img, (i, 30), (i - 60, h // 2 - 20), (150, 150, 150), 1)
+    cv2.ellipse(img, (150, h - 110), (85, 60), 0, 0, 360, (0, 0, 0), 2)
+    cv2.putText(img, "SAMPLE", (95, h - 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2)
+    cv2.ellipse(img, (470, 300), (60, 45), 0, 0, 360, (30, 30, 30), -1)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".png", dir="output")
+    os.close(fd)
+    try:
+        cv2.imwrite(tmp, img)
+        _stamp_all(tmp, (text or "").strip()[:60],
+                   (place or "br").strip() or "br",
+                   int(np.clip(opacity, 5, 100)),
+                   (size or "m").strip() or "m",
+                   (credit or "").strip()[:60],
+                   (style or "clean").strip() or "clean")
+        out = cv2.imread(tmp)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    ok, png = cv2.imencode(".png", out if out is not None else img)
+    return Response(content=png.tobytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/stamp/{task_id}")
 async def stamp_page(task_id: str, request: Request):
     """Stamp the watermark / credit onto ONE finished page, on demand — for
@@ -1703,7 +1807,8 @@ async def stamp_page(task_id: str, request: Request):
         op = int(payload.get("wm_opacity") or 50)
     except (TypeError, ValueError):
         op = 50
-    _stamp_all(p, wmk, place, op, size, cr)
+    _stamp_all(p, wmk, place, op, size, cr,
+               str(payload.get("wm_style") or "clean").strip() or "clean")
     return {"ok": True}
 
 
