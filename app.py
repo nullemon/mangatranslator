@@ -1429,13 +1429,27 @@ async def rerender(task_id: str, request: Request):
     added = []
     for a in (payload.get("added") or []):
         bbox = a.get("bbox")
-        text = (a.get("translation") or "").strip()
-        if not bbox or not text:
+        if not bbox:
             continue
+        text = (a.get("translation") or "").strip()
         aid = str(a.get("id", f"m{len(added) + 1}"))
         poly = a.get("poly")
         if not (isinstance(poly, list) and len(poly) >= 3):
             poly = None
+        # ⌫ on a DRAWN box: pure erase region. This never worked before —
+        # added items skipped the `erased` check entirely, and a drawn box
+        # without a translation was silently dropped, so "erase" on a manual
+        # box did nothing at all.
+        if aid in erased:
+            added.append({
+                "id": aid, "bbox": _bbox(aid, [int(v) for v in bbox]),
+                "original": a.get("original", ""), "translation": "",
+                "type": "watermark", "erase": True, "in_bubble": False,
+                "poly": poly, "dark": False, "rotation": 0,
+            })
+            continue
+        if not text:
+            continue
         added.append({
             "id": aid,
             "bbox": _bbox(aid, [int(v) for v in bbox]),
