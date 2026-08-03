@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import time
+import re
 import uuid
 import random
 import zipfile
@@ -1640,6 +1641,11 @@ async def make_zip(request: Request):
     except Exception:
         raise HTTPException(400, "Invalid JSON body")
     ids = payload.get("task_ids", [])
+    # Optional chapter name: becomes the zip filename AND the page filenames
+    # inside ("Name - 001.png"), so the download drops straight into a reader
+    # or site upload without renaming.
+    name = re.sub(r'[\\/:*?"<>|]+', "", str(payload.get("name") or "")).strip()
+    name = name[:80]
 
     buf = io.BytesIO()
     count = 0
@@ -1652,6 +1658,8 @@ async def make_zip(request: Request):
             if not path or not os.path.exists(path):
                 continue
             stem = os.path.splitext(os.path.basename(t.get("name", f"page_{i}")))[0]
+            arcname = (f"{name} - {i:03d}.png" if name
+                       else f"{i:03d}_{stem}.png")
             # Re-encode to a REAL PNG so the .png name always matches the bytes —
             # output files may actually be JPEG/WebP (they keep the upload's
             # extension, and Compress re-encodes to .jpg), which broke opening the
@@ -1662,7 +1670,7 @@ async def make_zip(request: Request):
             ok, png = cv2.imencode(".png", img)
             if not ok:
                 continue
-            zf.writestr(f"{i:03d}_{stem}.png", png.tobytes())
+            zf.writestr(arcname, png.tobytes())
             count += 1
 
     if count == 0:
@@ -1672,7 +1680,8 @@ async def make_zip(request: Request):
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="translated_pages.zip"'},
+        headers={"Content-Disposition":
+                 f'attachment; filename="{(name or "translated_pages")}.zip"'},
     )
 
 

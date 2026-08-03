@@ -2327,24 +2327,33 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!p || p.status !== "done") return;
     const a = document.createElement("a");
     a.href = `/api/result/${p.taskId}?t=${p.rev}`;
-    a.download = "translated_" + (p.name || "page.png").replace(/\.[^.]+$/, "") + ".png";
+    const chN = (chapterName && chapterName.value.trim()) || "";
+    const stem = (p.name || "page.png").replace(/\.[^.]+$/, "");
+    a.download = (chN ? chN + " - " + stem : "translated_" + stem) + ".png";
     a.click();
   });
 
+  const chapterName = document.getElementById("chapterName");
+  if (chapterName) {
+    chapterName.value = localStorage.getItem("manga_chapter_name") || "";
+    chapterName.addEventListener("input", () =>
+      localStorage.setItem("manga_chapter_name", chapterName.value));
+  }
   zipBtn.addEventListener("click", async () => {
     const ids = pages.filter(p => p.status === "done").map(p => p.taskId);
     if (!ids.length) return;
+    const chName = (chapterName && chapterName.value.trim()) || "";
     zipBtn.disabled = true; zipBtn.textContent = "Zipping...";
     try {
       const res = await fetch("/api/zip", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task_ids: ids }),
+        body: JSON.stringify({ task_ids: ids, name: chName }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "translated_pages.zip";
+      a.download = (chName ? chName : "translated_pages") + ".zip";
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
