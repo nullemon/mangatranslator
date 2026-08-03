@@ -908,13 +908,15 @@ class Compositor:
         gray_roi = cv2.cvtColor(result[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
         seg_roi = self._seg_mask[y0:y1, x0:x1] if self._seg_mask is not None else None
         tight = self._stroke_halo_mask(gray_roi, seg_roi)
-        # HARD constraint, not a hint: with the text-pixel model present, only
-        # pixels IT calls lettering may be erased. The local deviation mask
-        # alone happily eats hair and face lines when a det box sits on a
-        # character (the melted-head bug) — intersecting with the model's
-        # strokes makes the erase surgical. A region the model finds empty is
-        # left completely untouched (text is still placed, nothing destroyed).
-        if seg_roi is not None:
+        # HARD constraint for AUTOMATIC erasure only: with the text-pixel
+        # model present, only pixels IT calls lettering may be erased — the
+        # local deviation mask alone happily eats hair and face lines when a
+        # det box sits on a character (the melted-head bug). But a USER-DRAWN
+        # region (contain=True — the eraser/cover tools) is an explicit
+        # command: the model gets no veto there, or dragging over a leftover
+        # the model doesn't recognise would silently do nothing ("erase
+        # doesn't work").
+        if seg_roi is not None and not contain:
             if cv2.countNonZero(seg_roi) >= 40:
                 allow = cv2.dilate(seg_roi, np.ones((9, 9), np.uint8))
                 tight = cv2.bitwise_and(tight, allow)
