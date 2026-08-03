@@ -390,17 +390,6 @@ class Compositor:
                     it["src_rect"] = list(src_rect)
                 own_boxes = [tuple(int(v) for v in bb),
                              tuple(int(v) for v in rect)]
-                # TALL SINGLE-COLUMN source (one vertical JP run, like a
-                # monologue down the page edge): set the English VERTICALLY,
-                # reading bottom-to-top — far better than a skinny horizontal
-                # stack squeezed into the column. Wide sources (multiple JP
-                # columns side by side) keep normal horizontal wrapping.
-                if (abs(rotation) < 3 and not it.get("manual_rot")
-                        and src_rect[3] >= 3.2 * src_rect[2]
-                        and src_rect[2] <= 0.14 * w
-                        and len(" ".join(text.split())) >= 12):
-                    rotation = -90
-                    it["rotation"] = -90
                 if abs(rotation) < 3 and not it.get("manual_rot"):
                     wided = self._widen_vertical_rect(rect, result, used_boxes,
                                                       own_boxes)

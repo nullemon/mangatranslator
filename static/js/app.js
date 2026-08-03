@@ -1274,6 +1274,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
+          <button class="tl-vert${(page.rotations || {})[it.id] === -90 ? " on" : ""}" title="VERTICAL: set this text sideways, reading bottom-to-top (for tall single-column text). Click again for normal horizontal." data-id="${it.id}">↕</button>
           <button class="tl-glow${page.glows && page.glows.has(String(it.id)) ? " on" : ""}" title="Add a soft outer glow (match stylized/glowing original text)" data-id="${it.id}">✨</button>
           <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
@@ -1328,6 +1329,17 @@ document.addEventListener("DOMContentLoaded", () => {
         collectEdits(page);
         const id = btn.dataset.id;
         if (page.excluded.has(id)) page.excluded.delete(id); else page.excluded.add(id);
+        buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-vert").forEach(btn => {
+      btn.addEventListener("click", () => {
+        pushUndo(page);
+        collectEdits(page);
+        const id = btn.dataset.id;
+        page.rotations = page.rotations || {};
+        if (page.rotations[id] === -90) delete page.rotations[id];
+        else page.rotations[id] = -90;
         buildTranslationsList(page);
       });
     });
