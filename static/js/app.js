@@ -2123,7 +2123,24 @@ document.addEventListener("DOMContentLoaded", () => {
       try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
       if (svg) { svg.remove(); svg = null; }
       const page = getActive(), dims = curDims();
-      if (!page || !dims || pts.length < 3) { pts = []; return; }
+      if (!page || !dims) { pts = []; return; }
+      // Restore tool: a simple CLICK (no drag) un-deletes the damaged area
+      // under the cursor — the server finds the changed blob automatically.
+      if (tool === "restore" && pts.length >= 1) {
+        const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+        if (Math.max(...xs) - Math.min(...xs) < 1.2 &&
+            Math.max(...ys) - Math.min(...ys) < 1.2) {
+          pushUndo(page);
+          const [W0, H0] = dims;
+          page.covers = page.covers || [];
+          page.covers.push({ restore_click: [Math.round(pts[0][0] / 100 * W0),
+                                             Math.round(pts[0][1] / 100 * H0)] });
+          pts = [];
+          buildOverlay();
+          return;
+        }
+      }
+      if (pts.length < 3) { pts = []; return; }
       pushUndo(page);
       const [W, H] = dims;
       const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);

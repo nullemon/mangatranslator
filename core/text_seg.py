@@ -162,6 +162,32 @@ class TextSegmenter:
         small = cv2.resize(image, (32, 32), interpolation=cv2.INTER_AREA)
         return (image.shape, hashlib.blake2b(small.tobytes(), digest_size=16).digest())
 
+    @staticmethod
+    def _strip_nontext_blobs(m):
+        """Text strokes are THIN — even bold title kanji fill well under half
+        of their bounding box. An eye (dark ellipse with a glint), a solid
+        ornament or a screentone patch comes back as one FAT blob, and every
+        consumer of this mask (erasure, verification, cleaning) then treats it
+        as text — which is how eyes got erased. Drop large components whose
+        fill ratio says 'solid shape', keep everything stroke-like."""
+        if m is None:
+            return m
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(
+            (m > 0).astype(np.uint8), 8)
+        out = m.copy()
+        removed = 0
+        for i in range(1, n):
+            x, y, w, h, area = stats[i]
+            if area < 400:
+                continue
+            if area / max(w * h, 1) > 0.62:
+                out[labels == i] = 0
+                removed += 1
+        if removed:
+            print(f"[text_seg] stripped {removed} solid non-text blob(s) "
+                  f"(eyes/ornaments) from the stroke mask")
+        return out
+
     def mask(self, image: np.ndarray) -> np.ndarray:
         """Binary mask (uint8 0/255, same HxW as `image`) of text strokes.
         Cached per page so an editor re-render doesn't re-run the model."""
@@ -197,6 +223,7 @@ class TextSegmenter:
         m = m[:nh, :nw]
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
         _, binary = cv2.threshold(m, 60, 255, cv2.THRESH_BINARY)
+        binary = self._strip_nontext_blobs(binary)
         _MASK_CACHE[key] = binary
         if len(_MASK_CACHE) > 8:
             _MASK_CACHE.pop(next(iter(_MASK_CACHE)))

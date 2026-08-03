@@ -1464,6 +1464,8 @@ async def rerender(task_id: str, request: Request):
                       if isinstance(c, dict) and c.get("keep_poly")]
         restore_polys = [c["restore_poly"] for c in covers
                          if isinstance(c, dict) and c.get("restore_poly")]
+        restore_clicks = [c["restore_click"] for c in covers
+                          if isinstance(c, dict) and c.get("restore_click")]
         erase_covers = [c for c in covers
                         if not (isinstance(c, dict)
                                 and (c.get("keep_poly") or c.get("restore_poly")))]
@@ -1487,17 +1489,45 @@ async def rerender(task_id: str, request: Request):
                     cv2.fillPoly(mask, [pts], 255)
             if cv2.countNonZero(mask):
                 out[mask == 0] = (255, 255, 255)   # background → white (no crop, keeps coords aligned)
-        if restore_polys:
-            # Restore eraser: put the ORIGINAL pixels back wherever the user
-            # outlined — undoes content-aware fills that chewed the art. The
-            # source is the pre-clean base (original art, original text); it
-            # gets the same page finish as the rest so tones match seamlessly.
+        if restore_polys or restore_clicks:
+            # Restore eraser: put the ORIGINAL pixels back. Two gestures:
+            # - a drawn outline restores exactly that shape;
+            # - a single CLICK finds the damaged blob under it automatically
+            #   (diff vs the original page, take the connected changed region
+            #   around the click) — one click un-deletes an eaten eye/detail.
             h, w = out.shape[:2]
             rmask = np.zeros((h, w), np.uint8)
             for poly in restore_polys:
                 pts = np.array(poly, np.int32).reshape(-1, 2)
                 if len(pts) >= 3:
                     cv2.fillPoly(rmask, [pts], 255)
+            if restore_clicks:
+                orig_p0 = r.get("base_path", "")
+                src0 = cv2.imread(orig_p0) if orig_p0 and os.path.exists(orig_p0) else base_img
+                if src0.shape[:2] != (h, w):
+                    src0 = cv2.resize(src0, (w, h), interpolation=cv2.INTER_AREA)
+                cmp_src = scan_finish(src0) if t.get("finish", "clean") in ("clean", "api") else src0
+                diff = (np.abs(out.astype(np.int16) - cmp_src.astype(np.int16))
+                        .max(axis=2) > 14).astype(np.uint8)
+                diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE,
+                                        np.ones((7, 7), np.uint8))
+                nl, labels = cv2.connectedComponents(diff, 8)
+                for cx, cy in restore_clicks:
+                    cx = int(np.clip(int(cx), 0, w - 1))
+                    cy = int(np.clip(int(cy), 0, h - 1))
+                    lab = int(labels[cy, cx])
+                    if lab == 0:
+                        # click landed just off the blob — search nearby
+                        y0, y1 = max(0, cy - 40), min(h, cy + 40)
+                        x0, x1 = max(0, cx - 40), min(w, cx + 40)
+                        win = labels[y0:y1, x0:x1]
+                        vals = win[win > 0]
+                        lab = int(np.bincount(vals).argmax()) if vals.size else 0
+                    if lab > 0:
+                        rmask |= cv2.dilate((labels == lab).astype(np.uint8) * 255,
+                                            np.ones((9, 9), np.uint8))
+                    else:
+                        cv2.circle(rmask, (cx, cy), 30, 255, -1)
             if cv2.countNonZero(rmask):
                 orig_p = r.get("base_path", "")
                 src = cv2.imread(orig_p) if orig_p and os.path.exists(orig_p) else None
