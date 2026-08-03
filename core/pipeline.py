@@ -1411,10 +1411,16 @@ class TranslationPipeline:
                     print(f"[pipeline] watermark det at {it['bbox']} has no "
                           f"text pixels — dropped")
                 continue
-            if not self.translate_sfx and (
-                    _is_sfx(it.get("original", ""))
-                    or it.get("type") in ("sfx", "sound", "onomatopoeia")):
-                continue
+            if not self.translate_sfx:
+                if _is_sfx(it.get("original", "")):
+                    continue
+                if it.get("type") in ("sfx", "sound", "onomatopoeia"):
+                    # The label alone isn't trusted: detectors tag big dramatic
+                    # display lines (未知の新種!!!, 強敵現るッ!!) as "sfx", but
+                    # those carry meaning and official releases translate
+                    # them. Only text that READS as onomatopoeia is skipped;
+                    # the rest is kept and typeset as narration.
+                    it["type"] = "narration"
             bb = it["bbox"]
             if bb[2] <= 14 or bb[3] <= 14:
                 degen.append(it)      # garbage coords; maybe rescuable by content
@@ -1771,10 +1777,14 @@ class TranslationPipeline:
             # opted to translate SFX, in which case keep it as a placed sfx item.
             if not jp or not _has_source_text(jp, self.source_lang):
                 continue
-            is_sfx = _is_sfx(jp) or typ in ("sfx", "sound", "onomatopoeia")
+            # Judge SFX by the TEXT ONLY (the comment above): a "sfx"-labeled
+            # det whose text is a real sentence is retyped narration and kept —
+            # the old `or label` here dropped every such line outright, which
+            # left big vertical display columns untranslated on the page.
+            is_sfx = _is_sfx(jp)
             if is_sfx and not self.translate_sfx:
                 continue
-            if typ in ("sfx", "sound", "onomatopoeia") and not self.translate_sfx:
+            if typ in ("sfx", "sound", "onomatopoeia") and not is_sfx:
                 typ = "narration"
             if not tr:
                 continue

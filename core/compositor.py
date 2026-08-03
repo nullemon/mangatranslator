@@ -463,8 +463,21 @@ class Compositor:
                 if resolved is not None:
                     rmask, rbb, rdark = resolved
                     box_area = max(bw * bh, 1)
-                    if rbb[2] * rbb[3] <= box_area * 2.6:
+                    ratio = rbb[2] * rbb[3] / box_area
+                    if ratio <= 2.6:
                         mask, dark = rmask, rdark
+                    elif ratio <= 9.0 and self._seg_mask is not None:
+                        # The recovered balloon is far larger than the AI box.
+                        # Accept it anyway when the EXTRA interior carries
+                        # source-text strokes: the box covered only part of a
+                        # tall balloon's text (a vertical JP column), and
+                        # wiping just the box leaves the rest of the column
+                        # behind (the half-cleaned tall-hexagon bug).
+                        extra = rmask.copy()
+                        extra[by:by + bh, bx:bx + bw] = 0
+                        strokes = cv2.bitwise_and(self._seg_mask, extra)
+                        if cv2.countNonZero(strokes) >= 60:
+                            mask, dark = rmask, rdark
 
             if mask is not None:
                 rr = cv2.boundingRect(mask)
@@ -1274,29 +1287,44 @@ class Compositor:
             return None
         cx, cy = x + bw // 2, y + bh // 2
 
-        mx = int(max(bw * 0.8, 60))
-        my = int(max(bh * 0.8, 60))
-        x0, y0 = max(0, x - mx), max(0, y - my)
-        x1, y1 = min(W, x + bw + mx), min(H, y + bh + my)
-        roi = gray[y0:y1, x0:x1]
-        if roi.size == 0:
-            return None
+        # If the balloon extends past the first search window (an AI box that
+        # covered only part of a tall balloon — its white interior then touches
+        # the window edge and looks like background), retry once with a much
+        # wider window before giving up. The retry margin must not scale off
+        # the (possibly tiny) box alone: a box on the top pocket of a tall
+        # balloon needs a window several times its own size.
+        for mscale, mfloor in ((0.8, 60), (4.5, 600)):
+            mx = int(max(bw * mscale, mfloor))
+            my = int(max(bh * mscale, mfloor))
+            x0, y0 = max(0, x - mx), max(0, y - my)
+            x1, y1 = min(W, x + bw + mx), min(H, y + bh + my)
+            roi = gray[y0:y1, x0:x1]
+            if roi.size == 0:
+                return None
 
-        _, white = cv2.threshold(roi, 188, 255, cv2.THRESH_BINARY)
-        ink = cv2.morphologyEx(
-            cv2.bitwise_not(white), cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-        )
-        white = cv2.bitwise_not(ink)
+            _, white = cv2.threshold(roi, 188, 255, cv2.THRESH_BINARY)
+            ink = cv2.morphologyEx(
+                cv2.bitwise_not(white), cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            )
+            white = cv2.bitwise_not(ink)
 
-        num, labels, stats, _ = cv2.connectedComponentsWithStats(white, 8)
-        rh, rw = roi.shape[:2]
-        border = set(labels[0, :]) | set(labels[rh - 1, :]) | set(labels[:, 0]) | set(labels[:, rw - 1])
+            num, labels, stats, _ = cv2.connectedComponentsWithStats(white, 8)
+            rh, rw = roi.shape[:2]
+            border = set(labels[0, :]) | set(labels[rh - 1, :]) | set(labels[:, 0]) | set(labels[:, rw - 1])
 
-        lcx, lcy = cx - x0, cy - y0
-        lbl = 0
-        if 0 <= lcy < rh and 0 <= lcx < rw:
-            lbl = int(labels[lcy, lcx])
+            lcx, lcy = cx - x0, cy - y0
+            lbl = 0
+            if 0 <= lcy < rh and 0 <= lcx < rw:
+                lbl = int(labels[lcy, lcx])
+            window_clipped = x0 > 0 or y0 > 0 or x1 < W or y1 < H
+            # Retry wider when the center gave no clean enclosed component:
+            # either its white region runs past the window (partial box on a
+            # tall balloon) or the center sits on a glyph stroke (lbl 0) and
+            # the largest-component fallback below would only see a fragment.
+            if mscale == 0.8 and window_clipped and (lbl == 0 or lbl in border):
+                continue
+            break
         if lbl in border:
             lbl = 0
         if lbl == 0:
