@@ -218,6 +218,15 @@ class Compositor:
             # Site watermark / URL: erase it from the art (no translation). If the
             # user opted to replace it, drop their own watermark in the same spot.
             if it.get("erase") or kind == "watermark":
+                # A pen/lasso-drawn shape marked ⌫: heal exactly the outlined
+                # shape — same operation as the lasso eraser.
+                pgon = it.get("poly")
+                if isinstance(pgon, list) and len(pgon) >= 3:
+                    ptouched = self._inpaint_poly(result, pgon)
+                    if ptouched:
+                        edited_rects.append(ptouched)
+                    it["placed"] = True
+                    continue
                 wbox = it.get("bbox")
                 if wbox:
                     wx, wy, ww, wh = self._clamp_rect([int(v) for v in wbox], w, h)
@@ -907,21 +916,29 @@ class Compositor:
         touched = (x0, y0, x1 - x0, y1 - y0)
         gray_roi = cv2.cvtColor(result[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
         seg_roi = self._seg_mask[y0:y1, x0:x1] if self._seg_mask is not None else None
-        tight = self._stroke_halo_mask(gray_roi, seg_roi)
-        # HARD constraint for AUTOMATIC erasure only: with the text-pixel
-        # model present, only pixels IT calls lettering may be erased — the
-        # local deviation mask alone happily eats hair and face lines when a
-        # det box sits on a character (the melted-head bug). But a USER-DRAWN
-        # region (contain=True — the eraser/cover tools) is an explicit
-        # command: the model gets no veto there, or dragging over a leftover
-        # the model doesn't recognise would silently do nothing ("erase
-        # doesn't work").
-        if seg_roi is not None and not contain:
-            if cv2.countNonZero(seg_roi) >= 40:
-                allow = cv2.dilate(seg_roi, np.ones((9, 9), np.uint8))
-                tight = cv2.bitwise_and(tight, allow)
-            else:
-                tight[:] = 0
+        if contain:
+            # USER-DRAWN region (cover box / item ⌫ / resized box): the box is
+            # a command — content-aware heal the WHOLE region, exactly like the
+            # lasso eraser (the one erase tool that always worked). The
+            # protective stroke heuristics below repeatedly made these erases
+            # silently do nothing: a tight user box wrecks the local background
+            # estimate (everything "deviates"), the anchor filter then keeps
+            # only deviation near the seg strokes / paper glow — and bold solid
+            # glyphs aren't in the seg mask at all (_strip_nontext_blobs drops
+            # them as non-text), so the exact fragment the user boxed survived.
+            tight = np.full(gray_roi.shape, 255, np.uint8)
+        else:
+            tight = self._stroke_halo_mask(gray_roi, seg_roi)
+            # HARD constraint for AUTOMATIC erasure: with the text-pixel
+            # model present, only pixels IT calls lettering may be erased —
+            # the local deviation mask alone happily eats hair and face lines
+            # when a det box sits on a character (the melted-head bug).
+            if seg_roi is not None:
+                if cv2.countNonZero(seg_roi) >= 40:
+                    allow = cv2.dilate(seg_roi, np.ones((9, 9), np.uint8))
+                    tight = cv2.bitwise_and(tight, allow)
+                else:
+                    tight[:] = 0
         if cv2.countNonZero(tight) == 0:
             return touched
 
