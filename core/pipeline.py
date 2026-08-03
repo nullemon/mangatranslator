@@ -894,6 +894,9 @@ class TranslationPipeline:
         progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         def update(step: int, msg: str, pct: int):
+            # Mirror progress to the console: API calls can take minutes and
+            # the server log otherwise goes silent — which reads as a hang.
+            print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
 
@@ -1037,6 +1040,7 @@ class TranslationPipeline:
         region covers is translated as a final 'rest of page' piece when
         translate_all is on, so nothing is missed."""
         def update(step, msg, pct):
+            print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
 

@@ -2,6 +2,7 @@ import anthropic
 import base64
 import cv2
 import json
+import time
 import numpy as np
 import httpx
 from typing import Dict, List
@@ -161,19 +162,22 @@ class GeminiTranslator:
         return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
 
     def _ask(self, parts: list) -> str:
-        def _body(disable_thinking: bool) -> dict:
+        def _body(budget) -> dict:
             # Full output headroom on EVERY attempt: a busy page's detection
             # JSON alone can overrun 16k and arrive truncated mid-array (and
             # thinking models additionally spend reasoning tokens from this
             # same budget). Tokens are billed as used, so the high cap only
             # costs anything when a page genuinely needs it.
             gc = {"temperature": 0.2, "maxOutputTokens": 65536}
-            if disable_thinking:
+            if budget is not None:
                 # Gemini 2.5 flash/flash-lite spend "thinking" tokens from the
                 # SAME output budget — a busy page can burn it all and return no
-                # text (finishReason=MAX_TOKENS). Turning thinking off (cheapest)
-                # gives the whole budget to the translation JSON.
-                gc["thinkingConfig"] = {"thinkingBudget": 0}
+                # text (finishReason=MAX_TOKENS). Budget 0 turns thinking off
+                # (cheapest); a small positive budget caps it on thinking-only
+                # models that reject 0 — WITHOUT a cap they can grind for
+                # minutes on a full-page smart-detect call, which reads as the
+                # whole app being frozen.
+                gc["thinkingConfig"] = {"thinkingBudget": int(budget)}
             return {
                 "contents": [{"parts": parts}],
                 "generationConfig": gc,
@@ -195,15 +199,31 @@ class GeminiTranslator:
         url = self.URL.format(model=self.model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
 
-        with httpx.Client(timeout=self.timeout) as client:
-            resp = client.post(url, headers=headers, json=_body(True))
-            # Thinking-only models (gemini-2.5-pro, Gemini 3, and the -latest
-            # aliases that point at them) reject thinkingBudget:0. The rejection
-            # is sometimes a specific "thinking budget" message, but on newer
-            # models it's just a generic 400 "invalid argument" — so retry once
-            # with thinking left on for ANY 400, not only ones that name it.
-            if resp.status_code == 400:
-                resp = client.post(url, headers=headers, json=_body(False))
+        t0 = time.time()
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.post(url, headers=headers, json=_body(0))
+                # Thinking-only models (gemini-2.5-pro, Gemini 3, and the
+                # -latest aliases that point at them) reject thinkingBudget:0
+                # — sometimes with a specific "thinking budget" message, on
+                # newer models just a generic 400 "invalid argument". Retry
+                # with a SMALL budget first (keeps the answer fast); only if
+                # that is also rejected fall back to no thinkingConfig at all
+                # (model default — unbounded thinking, the slowest path).
+                if resp.status_code == 400:
+                    resp = client.post(url, headers=headers, json=_body(1024))
+                if resp.status_code == 400:
+                    resp = client.post(url, headers=headers, json=_body(None))
+        except httpx.TimeoutException:
+            print(f"[gemini] {self.model}: TIMED OUT after "
+                  f"{time.time() - t0:.0f}s", flush=True)
+            raise RuntimeError(
+                f"Gemini ({self.model}) timed out after {int(self.timeout)}s — "
+                "the model may be overloaded; try again or pick a faster model")
+        el = time.time() - t0
+        if el >= 5 or resp.status_code != 200:
+            print(f"[gemini] {self.model}: {el:.1f}s "
+                  f"(HTTP {resp.status_code})", flush=True)
 
         if resp.status_code != 200:
             raise RuntimeError(self._err(resp))

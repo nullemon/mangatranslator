@@ -2012,4 +2012,16 @@ if __name__ == "__main__":
             print(f"  Or use another port:    PORT={port + 1} python3 app.py\n")
             raise SystemExit(1)
 
+    # The frontend polls /api/status every second — hundreds of identical
+    # access-log lines drown the real progress messages and make a working
+    # server look stuck. Keep every other request in the log.
+    import logging
+
+    class _QuietPolls(logging.Filter):
+        def filter(self, record):
+            m = record.getMessage()
+            return "/api/status/" not in m and "/api/wm-preview" not in m
+
+    logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
+
     uvicorn.run(app, host="0.0.0.0", port=port)
