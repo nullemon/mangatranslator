@@ -164,6 +164,10 @@
             <input type="number" id="wmOpacity" min="10" max="100" step="5" value="50"
                    style="width:76px" title="Opacity %">
           </div>
+          <label class="toggle" style="margin-top:6px;display:inline-flex;align-items:center;gap:6px" title="Also stamp the watermark + credit on Upscale HD, Scan → Raw and the AI-scan workflows (they were translate-only before).">
+            <input type="checkbox" id="wmAllOut"><span class="toggle-slider"></span>
+            <span class="toggle-hint" style="margin:0">Stamp on every output</span>
+          </label>
         </div>
         <div class="setting-group">
           <label for="mangaTitle">Manga title <span class="muted">(context — correct names, no random stuff)</span></label>
@@ -540,6 +544,7 @@
 
       <div class="result-actions">
         <button class="btn btn-primary" id="downloadBtn">Download This Page</button>
+        <button class="btn btn-ghost" id="stampBtn" title="Stamp your watermark + credit onto THIS page only, using the Watermark settings above">🖋 Stamp This Page</button>
         <button class="btn btn-primary" id="translateScanBtn" style="display:none">Translate This Scan</button>
         <button class="btn btn-ghost" id="reuseBtn" title="Feed this result back in so you can run another step on it (scan, upscale, clean…)">↺ Use Result as Input</button>
         <button class="btn btn-ghost" id="newBtn">Start Over</button>

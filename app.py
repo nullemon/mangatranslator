@@ -86,6 +86,18 @@ _WM_FONT_CANDIDATES = [
 ]
 
 
+def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
+               wm_size="m", credit=""):
+    """Stamp the user's watermark and/or credit line on ANY finished output
+    (translate, upscale, raw, enhance — same look everywhere). The credit
+    goes small in the opposite corner so the two never collide."""
+    if watermark:
+        _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size)
+    if credit:
+        cplace = "bl" if wm_place != "bl" else "br"
+        _stamp_watermark(output_path, credit, cplace, 85, "s")
+
+
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
                      opacity: int = 50, size: str = "m"):
     """Watermark the finished page. `place` puts the text ONCE in a corner
@@ -698,6 +710,9 @@ async def enhance_only(
     tiles: str = Form("1"),
     protect_dark: str = Form("false"),
     gpu_cap: str = Form("100"),
+    watermark: str = Form(""), wm_place: str = Form("br"),
+    wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+    credit: str = Form(""),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -735,7 +750,12 @@ async def enhance_only(
     asyncio.create_task(
         _run_enhance(task_id, upload_path, output_path, provider, api_key, prompt,
                      model, upscale=(upscale == "true"), tiles=n_tiles,
-                     protect_dark=(protect_dark == "true"))
+                     protect_dark=(protect_dark == "true"),
+                     wm=dict(watermark=watermark.strip(),
+                             wm_place=wm_place.strip() or "br",
+                             wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+                             wm_size=wm_size.strip() or "m",
+                             credit=credit.strip()))
     )
     return {"task_id": task_id}
 
@@ -751,6 +771,7 @@ async def _run_enhance(
     upscale: bool = False,
     tiles: int = 1,
     protect_dark: bool = False,
+    wm: dict = None,
 ):
     try:
         tasks[task_id].update(
@@ -838,6 +859,9 @@ async def _run_enhance(
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, do_work)
+        if wm and (wm.get("watermark") or wm.get("credit")):
+            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
 
         tasks[task_id].update(
             {
@@ -861,7 +885,10 @@ async def _run_enhance(
 
 @app.post("/api/upscale")
 async def upscale_only(file: UploadFile = File(...),
-                       gpu_cap: str = Form("100")):
+                       gpu_cap: str = Form("100"),
+                       watermark: str = Form(""), wm_place: str = Form("br"),
+                       wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                       credit: str = Form("")):
     """Faithful HD upscale only — no translation, no generative redraw. Runs
     the MangaJaNai (or Real-ESRGAN fallback) model and returns the bigger,
     sharper page with the art preserved exactly."""
@@ -889,14 +916,20 @@ async def upscale_only(file: UploadFile = File(...),
         "mode": "upscale",
     }
 
-    asyncio.create_task(_run_upscale(task_id, upload_path, output_path))
+    wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
+              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+              wm_size=wm_size.strip() or "m", credit=credit.strip())
+    asyncio.create_task(_run_upscale(task_id, upload_path, output_path, wm))
     return {"task_id": task_id}
 
 
 @app.post("/api/rawify")
 async def rawify_only(file: UploadFile = File(...),
                       strength: str = Form("1.0"),
-                      style: str = Form("photo")):
+                      style: str = Form("photo"),
+                      watermark: str = Form(""), wm_place: str = Form("br"),
+                      wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                      credit: str = Form("")):
     """Scan → Raw: make a clean page look like a rough magazine raw (tan
     paper, grain, vignette, dust). Pure deterministic CV — no models, no
     translation, art and lettering untouched."""
@@ -919,13 +952,17 @@ async def rawify_only(file: UploadFile = File(...),
     except (TypeError, ValueError):
         stren = 1.0
     wstyle = style if style in ("photo", "scan") else "photo"
+    wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
+              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+              wm_size=wm_size.strip() or "m", credit=credit.strip())
     asyncio.create_task(_run_rawify(task_id, upload_path, output_path,
-                                    stren, wstyle))
+                                    stren, wstyle, wm))
     return {"task_id": task_id}
 
 
 async def _run_rawify(task_id: str, image_path: str, output_path: str,
-                      strength: float = 1.0, style: str = "photo"):
+                      strength: float = 1.0, style: str = "photo",
+                      wm: dict = None):
     try:
         tasks[task_id].update({"step": 1, "progress": 30,
                                "message": "Roughing the paper..."})
@@ -939,6 +976,9 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
             return out.shape
 
         shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        if wm and (wm.get("watermark") or wm.get("credit")):
+            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
         tasks[task_id].update({
             "status": "done", "step": 2, "progress": 100,
             "message": f"Raw look ready! ({shape[1]}×{shape[0]})",
@@ -954,7 +994,8 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
         _note_job_done()
 
 
-async def _run_upscale(task_id: str, image_path: str, output_path: str):
+async def _run_upscale(task_id: str, image_path: str, output_path: str,
+                       wm: dict = None):
     try:
         from core.upscale import Upscaler
         tasks[task_id].update({"step": 1, "progress": 10,
@@ -976,6 +1017,9 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str):
 
         loop = asyncio.get_event_loop()
         shape = await loop.run_in_executor(None, do_work)
+        if wm and (wm.get("watermark") or wm.get("credit")):
+            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
+                       wm["wm_opacity"], wm["wm_size"], wm["credit"])
         tasks[task_id].update({
             "status": "done",
             "step": 2,
@@ -1632,6 +1676,35 @@ async def ocr_translate(task_id: str, request: Request):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, work)
     return result
+
+
+@app.post("/api/stamp/{task_id}")
+async def stamp_page(task_id: str, request: Request):
+    """Stamp the watermark / credit onto ONE finished page, on demand — for
+    outputs produced before the toggle was on, or when you only want a single
+    page marked. Writes onto the current output in place."""
+    t = tasks.get(task_id)
+    if not t or t.get("status") != "done":
+        raise HTTPException(404, "Page not ready")
+    p = (t.get("result") or {}).get("output_path", "")
+    if not p or not os.path.exists(p):
+        raise HTTPException(404, "Output missing")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    wmk = str(payload.get("watermark") or "").strip()
+    cr = str(payload.get("credit") or "").strip()
+    if not wmk and not cr:
+        raise HTTPException(400, "Set a watermark or credit text first")
+    place = str(payload.get("wm_place") or "br").strip() or "br"
+    size = str(payload.get("wm_size") or "m").strip() or "m"
+    try:
+        op = int(payload.get("wm_opacity") or 50)
+    except (TypeError, ValueError):
+        op = 50
+    _stamp_all(p, wmk, place, op, size, cr)
+    return {"ok": True}
 
 
 @app.post("/api/zip")

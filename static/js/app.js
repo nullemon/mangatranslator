@@ -1010,12 +1010,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (isUpscaleOnly(workflow)) {
       // Faithful HD upscale, no translation and no API keys needed.
+      appendWm(f);
       return { url: "/api/upscale", form: f };
     }
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
       f.append("strength", rawStrength ? rawStrength.value : "1");
       f.append("style", rawStyle ? rawStyle.value : "photo");
+      appendWm(f);
       return { url: "/api/rawify", form: f };
     }
     f.append("provider", enhanceProvider.value);
@@ -1029,6 +1031,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (workflow === "scan-upscale" || (hdUpscale && hdUpscale.checked)) {
       f.append("upscale", "true");
     }
+    appendWm(f);
     return { url: "/api/enhance", form: f };
   }
 
@@ -2333,12 +2336,54 @@ document.addEventListener("DOMContentLoaded", () => {
     a.click();
   });
 
+  const wmAllOut = document.getElementById("wmAllOut");
+  if (wmAllOut) {
+    wmAllOut.checked = localStorage.getItem("manga_wm_all") === "1";
+    wmAllOut.addEventListener("change", () =>
+      localStorage.setItem("manga_wm_all", wmAllOut.checked ? "1" : "0"));
+  }
+  function appendWm(f) {
+    // watermark + credit for non-translate outputs, when the master toggle is on
+    if (!(wmAllOut && wmAllOut.checked)) return;
+    if (watermarkInput && watermarkInput.value.trim()) {
+      f.append("watermark", watermarkInput.value.trim());
+      if (wmPlace) f.append("wm_place", wmPlace.value);
+      if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
+      if (wmSize) f.append("wm_size", wmSize.value);
+    }
+    if (creditInput && creditInput.value.trim()) f.append("credit", creditInput.value.trim());
+  }
   const chapterName = document.getElementById("chapterName");
   if (chapterName) {
     chapterName.value = localStorage.getItem("manga_chapter_name") || "";
     chapterName.addEventListener("input", () =>
       localStorage.setItem("manga_chapter_name", chapterName.value));
   }
+  const stampBtn = document.getElementById("stampBtn");
+  if (stampBtn) stampBtn.addEventListener("click", async () => {
+    const p = getActive();
+    if (!p || p.status !== "done") return;
+    const wmk = (watermarkInput && watermarkInput.value.trim()) || "";
+    const cr = (creditInput && creditInput.value.trim()) || "";
+    if (!wmk && !cr) { showError("Type a watermark (or credit) in Settings first."); return; }
+    stampBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/stamp/${p.taskId}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          watermark: wmk, credit: cr,
+          wm_place: wmPlace ? wmPlace.value : "br",
+          wm_opacity: wmOpacity ? wmOpacity.value : 50,
+          wm_size: wmSize ? wmSize.value : "m",
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      p.rev = (p.rev || 0) + 1;
+      renderActivePage();
+    } catch (e) { showError(e.message); }
+    finally { stampBtn.disabled = false; }
+  });
+
   zipBtn.addEventListener("click", async () => {
     const ids = pages.filter(p => p.status === "done").map(p => p.taskId);
     if (!ids.length) return;
