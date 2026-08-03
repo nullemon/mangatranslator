@@ -1368,7 +1368,9 @@ async def rerender(task_id: str, request: Request):
     rotations = {}
     for k, v in (payload.get("rotations") or {}).items():
         try:
-            rotations[str(k)] = max(-80.0, min(80.0, float(v)))
+            # ±90 so the VERTICAL button/tool (-90, sideways bottom-to-top)
+            # arrives intact — the old ±80 cap silently tilted it.
+            rotations[str(k)] = max(-90.0, min(90.0, float(v)))
         except (TypeError, ValueError):
             pass
 

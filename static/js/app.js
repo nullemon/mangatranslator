@@ -1512,6 +1512,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lasso: "Draw a free-form outline around anything (weird shapes) — it's content-aware erased. Then Apply & Re-render.",
     "lasso-add": "Draw a free-form shape over weird-shaped or missed text — it's read & translated. Edit, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
+    "vert-add": "Drag a box over a TALL vertical text run — it's read & translated, and the English is set VERTICALLY (bottom-to-top). Edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
     restore: "Draw around a damaged spot — the ORIGINAL art comes back exactly as drawn (undoes content-aware cleaning there; original text returns too). Then Apply & Re-render.",
@@ -2048,7 +2049,7 @@ document.addEventListener("DOMContentLoaded", () => {
   (function initDraw() {
     let drawing = false, sx, sy, rectEl = null;
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "cover" && tool !== "add") return;
+      if (tool !== "cover" && tool !== "add" && tool !== "vert-add") return;
       if (e.target !== moveLayer) return;   // don't start when clicking a box
       const page = getActive(); if (!page || !curDims()) return;
       drawing = true;
@@ -2091,7 +2092,7 @@ document.addEventListener("DOMContentLoaded", () => {
         page.covers.push([x, y, w, h]);
         buildOverlay();
       } else {
-        autoTranslate(page, [x, y, w, h]);
+        autoTranslate(page, [x, y, w, h], null, tool === "vert-add");
       }
     };
     moveLayer.addEventListener("pointerup", finish);
@@ -2266,7 +2267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   })();
 
-  async function autoTranslate(page, bbox, poly) {
+  async function autoTranslate(page, bbox, poly, vertical) {
     editHint.textContent = "Reading & translating…";
     let data = { original: "", translation: "" };
     try {
@@ -2296,18 +2297,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (txt && txt.trim()) {
       page.added = page.added || [];
       page.addSeq = (page.addSeq || 0) + 1;
+      const nid = "m" + page.addSeq;
       page.added.push({
-        id: "m" + page.addSeq,
+        id: nid,
         bbox,
         poly: poly || null,
         original: data.original || "",
         translation: txt.trim(),
         placed: true,
       });
+      if (vertical) {
+        // Vertical-translate tool: typeset this one sideways, bottom-to-top.
+        page.rotations = page.rotations || {};
+        page.rotations[nid] = -90;
+      }
       buildOverlay();
       editHint.textContent = "Added! Hit Apply & Re-render when ready.";
     } else {
-      editHint.textContent = HINTS.add;
+      editHint.textContent = HINTS[tool] || HINTS.add;
     }
   }
 
