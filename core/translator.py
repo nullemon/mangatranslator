@@ -1,13 +1,44 @@
 import anthropic
 import base64
+import contextlib
 import cv2
 import json
+import threading
 import time
 import numpy as np
 import httpx
 from typing import Dict, List
 
 from . import prompts
+
+
+@contextlib.contextmanager
+def _heartbeat(label: str, on_wait=None, every: float = 10.0):
+    """Report progress WHILE a long API call is in flight.
+
+    A vision call on a dense page can take a minute or more; without this the
+    server log and the UI both sit silent and the app looks frozen. A daemon
+    thread ticks every `every` seconds with the elapsed time — printed to the
+    console and, when `on_wait` is set, pushed to the UI progress message."""
+    stop = threading.Event()
+    t0 = time.time()
+
+    def tick():
+        while not stop.wait(every):
+            secs = int(time.time() - t0)
+            print(f"[api] {label}: still waiting… {secs}s", flush=True)
+            if on_wait:
+                try:
+                    on_wait(secs)
+                except Exception:
+                    pass
+
+    th = threading.Thread(target=tick, daemon=True)
+    th.start()
+    try:
+        yield
+    finally:
+        stop.set()
 
 
 # Vision APIs cap an inline image at ~10 MB of base64 and downsample anything
@@ -68,6 +99,9 @@ class ClaudeTranslator:
         self.style = (style or "").strip()
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Optional callback(seconds) fired while a call is in flight,
+        # so the UI can show live elapsed time instead of freezing.
+        self.on_wait = None
 
     def _image_block(self, image: np.ndarray) -> dict:
         return {
@@ -80,11 +114,16 @@ class ClaudeTranslator:
         }
 
     def _ask(self, content: list) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=8192,   # a full page of dialogue can overrun 4096 and truncate the JSON
-            messages=[{"role": "user", "content": content}],
-        )
+        t0 = time.time()
+        with _heartbeat(self.model, getattr(self, "on_wait", None)):
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=8192,   # a full page of dialogue can overrun 4096 and truncate the JSON
+                messages=[{"role": "user", "content": content}],
+            )
+        el = time.time() - t0
+        if el >= 5:
+            print(f"[claude] {self.model}: {el:.1f}s", flush=True)
         return response.content[0].text
 
     def translate_regions(
@@ -157,6 +196,9 @@ class GeminiTranslator:
         self.style = (style or "").strip()
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Optional callback(seconds) fired while a call is in flight,
+        # so the UI can show live elapsed time instead of freezing.
+        self.on_wait = None
 
     def _image_part(self, image: np.ndarray) -> dict:
         return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
@@ -201,7 +243,8 @@ class GeminiTranslator:
 
         t0 = time.time()
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with _heartbeat(self.model, getattr(self, "on_wait", None)), \
+                    httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(url, headers=headers, json=_body(0))
                 # Thinking-only models (gemini-2.5-pro, Gemini 3, and the
                 # -latest aliases that point at them) reject thinkingBudget:0

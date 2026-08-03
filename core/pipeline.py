@@ -899,6 +899,24 @@ class TranslationPipeline:
             print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
+            self._last_msg, self._last_step, self._last_pct = msg, step, pct
+
+        # Live "still working" ticks straight from the API layer: a dense /
+        # text-heavy spread can hold one vision call for a minute or more, and
+        # without this both the log and the UI sit on the same line and look
+        # frozen.
+        def _waiting(secs):
+            base = getattr(self, "_last_msg", "Working") .split("  (")[0]
+            if progress_cb:
+                progress_cb({"step": getattr(self, "_last_step", 1),
+                             "message": f"{base}  ({secs}s — dense pages take longer)",
+                             "progress": getattr(self, "_last_pct", 10)})
+
+        if self.translator is not None:
+            try:
+                self.translator.on_wait = _waiting
+            except Exception:
+                pass
 
         image = cv2.imread(image_path)
         if image is None:
