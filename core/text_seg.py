@@ -109,10 +109,8 @@ def _load():
         if not os.path.exists(path) and not _download_weights(path):
             print("[text_seg] weights unavailable; using ink-deviation fallback")
             return None
-        providers = [
-            p for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
-            if p in ort.get_available_providers()
-        ] or ["CPUExecutionProvider"]
+        from .device import onnx_providers
+        providers = onnx_providers(ort.get_available_providers())
         if providers[0] == "CUDAExecutionProvider":
             _preload_cuda12_libs()
         _SESSION = ort.InferenceSession(path, providers=providers)

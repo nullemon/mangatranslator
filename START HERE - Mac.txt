@@ -1,0 +1,64 @@
+KAISUKI — MAC QUICK START
+=========================
+
+1. Move this whole folder somewhere permanent
+   (your Applications folder or Documents is fine — not the Downloads
+   folder, and not the Trash).
+
+2. Double-click:   setup_mac.command
+
+   It installs everything by itself: the app, the AI models, and all the
+   model files. The first run downloads a few GB, so give it time — it
+   prints what it's doing the whole way.
+
+   If macOS blocks it ("unidentified developer"), right-click the file,
+   choose Open, then click Open in the dialog. You only do this once.
+
+   If it asks for Command Line Tools, click Install in Apple's dialog,
+   wait for that to finish, then double-click setup_mac.command again.
+
+3. Double-click:   start_mac.command
+
+   Your browser opens at http://localhost:8000 automatically.
+   Leave the small Terminal window open while you work.
+   To stop, close that window or press Control-C in it.
+
+4. In the app, open Settings and paste your translation API key
+   (a Gemini key from Google AI Studio, or a Claude key).
+
+That's it. From then on you only ever need step 3.
+
+
+WHAT YOU NEED
+-------------
+- macOS on Apple Silicon (M1/M2/M3/M4) or Intel
+- Python 3.10, 3.11 or 3.12
+  The version macOS includes is too old, and 3.13 is too new for the AI
+  libraries. Get 3.12 from python.org/downloads/macos and run the
+  installer, then start at step 2 above.
+- About 8 GB of free disk space
+- An internet connection for the first run
+
+
+GOOD TO KNOW
+------------
+- On Apple Silicon the AI models run on your Mac's own GPU. You'll see
+  "compute : Apple Silicon GPU (Metal)" in the Terminal window when the
+  app starts.
+- Pages take roughly 1-2 minutes each on a Mac. Turning off "Maximum
+  Quality" in the app makes everyday work noticeably faster.
+- Nothing leaves your Mac except the translation request itself.
+- The version number in the bottom-right corner of the app tells you
+  which build you're running.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- Run setup_mac.command again — it's safe to repeat and only fixes what's
+  missing.
+- For a full report of what's installed, open Terminal in this folder and
+  run:   source venv/bin/activate && python check_setup.py
+- If a page fails with a Metal or MPS error, run the app on the CPU once:
+  source venv/bin/activate && MANGA_DEVICE=cpu python app.py
+- INSTALL.md in this folder has the complete guide, including doing the
+  install by hand.

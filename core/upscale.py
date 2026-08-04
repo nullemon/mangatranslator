@@ -39,11 +39,8 @@ MANGAJANAI_DIR = "models/mangajanai"
 
 
 def _device() -> str:
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
+    from .device import torch_device
+    return torch_device()
 
 
 def _download_realesrgan(dest: str) -> bool:

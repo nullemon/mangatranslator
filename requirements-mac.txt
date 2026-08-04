@@ -1,0 +1,35 @@
+# ── Mac accelerator stack (Apple Silicon M1/M2/M3/M4, and Intel Macs) ──
+#
+#   Install with:   ./setup_mac.command      (or: pip install -r requirements-mac.txt)
+#
+# There is no CUDA on a Mac, so nothing here is an "-gpu" build:
+#   * torch's normal macOS wheels already include Metal (MPS) support, which
+#     is what accelerates the balloon model, manga-ocr, LaMa and the upscaler
+#     on Apple Silicon. The app switches to it automatically.
+#   * onnxruntime (plain) is the right one — on macOS it ships the CoreML
+#     execution provider, which runs the text-stroke model on the Apple
+#     Neural Engine / GPU. onnxruntime-gpu does not exist for macOS.
+#
+# On an Intel Mac everything below still installs and works, just on CPU.
+
+torch>=2.2.0
+torchvision>=0.17.0
+ultralytics>=8.2.0
+huggingface_hub[hf_xet]>=0.24.0
+
+# Local OCR + clean removal
+manga-ocr>=0.1.11
+simple-lama-inpainting>=0.1.0
+
+# Free-text detection (narration, labels, dramatic text).
+# craft-text-detector itself is installed with --no-deps by setup_mac.command:
+# its setup pins a 2021 opencv that no longer builds. These are the deps it
+# actually needs at runtime.
+scipy>=1.10.0
+gdown>=4.6.0
+
+# Text-pixel segmentation (comic-text-detector, ONNX + CoreML on macOS)
+onnxruntime>=1.17.0
+
+# Super-resolution (Real-ESRGAN / MangaJaNai, via spandrel)
+spandrel>=0.3.0

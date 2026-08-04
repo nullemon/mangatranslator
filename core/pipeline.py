@@ -682,21 +682,34 @@ def probe_components() -> Dict[str, Any]:
         except Exception:
             return False
 
-    # GPU / CUDA
+    # Accelerator: NVIDIA (CUDA), Apple Silicon (Metal/MPS) or CPU
+    from .device import torch_device
+    dev = torch_device()
+    out["device"] = dev
     try:
         import torch
         out["torch"] = torch.__version__
-        out["cuda"] = torch.cuda.is_available()
-        out["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        out["cuda"] = dev == "cuda"
+        if dev == "cuda":
+            out["gpu"] = torch.cuda.get_device_name(0)
+        elif dev == "mps":
+            out["gpu"] = "Apple Silicon GPU (Metal)"
+        else:
+            out["gpu"] = None
     except Exception:
         out["torch"] = None
         out["cuda"] = False
         out["gpu"] = None
+    # True when the heavy models get ANY hardware acceleration (not just CUDA)
+    out["accelerated"] = dev in ("cuda", "mps")
     try:
         import onnxruntime as ort
-        out["onnxruntime_cuda"] = "CUDAExecutionProvider" in ort.get_available_providers()
+        avail = ort.get_available_providers()
+        out["onnxruntime_cuda"] = "CUDAExecutionProvider" in avail
+        out["onnxruntime_coreml"] = "CoreMLExecutionProvider" in avail
     except Exception:
         out["onnxruntime_cuda"] = False
+        out["onnxruntime_coreml"] = False
 
     out["balloon_seg_yolo"] = _imp("ultralytics")
     out["manga_ocr"] = _imp("manga_ocr")
@@ -727,7 +740,7 @@ def probe_components() -> Dict[str, Any]:
         out["arabic_font"] = False
 
     out["ready_full_stack"] = all([
-        out["cuda"], out["balloon_seg_yolo"], out["manga_ocr"],
+        out["accelerated"], out["balloon_seg_yolo"], out["manga_ocr"],
         out["lama_inpaint"], out["free_text_craft"],
     ])
     return out
@@ -867,9 +880,16 @@ class TranslationPipeline:
 
     def _log_component_banner(self):
         c = self.components
+        from .device import torch_device
+        dev = torch_device()
+        tag = {"cuda": "GPU/ON ", "mps": "APPLE  "}.get(dev, "CPU    ")
+
         def mark(v):
-            return "GPU/ON " if v else "off    "
+            return tag if v else "off    "
         print("[pipeline] ===== component stack =====")
+        print(f"[pipeline]   compute        : "
+              + {"cuda": "NVIDIA GPU (CUDA)", "mps": "Apple Silicon GPU (Metal)"}
+              .get(dev, "CPU only — slower, everything still works"))
         print(f"[pipeline]   balloon detect : {c['detector']}")
         print(f"[pipeline]   manga-ocr      : {mark(c['manga_ocr'])}")
         print(f"[pipeline]   free-text CRAFT: {mark(c['free_text_detector_craft'])}")

@@ -33,13 +33,10 @@ def available() -> bool:
 
 
 def _device() -> str:
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "0"
-    except Exception:
-        pass
-    return "cpu"
+    """Ultralytics device string: '0' = first CUDA card, 'mps' = Apple GPU."""
+    from .device import torch_device
+    d = torch_device()
+    return "0" if d == "cuda" else d
 
 
 def _vram_imgsz_cap() -> int:
@@ -47,7 +44,9 @@ def _vram_imgsz_cap() -> int:
     us to crude CV detection). Scaled to total VRAM; CPU gets a modest size."""
     try:
         import torch
-        if torch.cuda.is_available():
+        from .device import torch_device
+        d = torch_device()
+        if d == "cuda":
             gb = torch.cuda.get_device_properties(0).total_memory / 1e9
             if gb >= 14:
                 return 2048
@@ -56,6 +55,11 @@ def _vram_imgsz_cap() -> int:
             if gb >= 7:          # 8GB laptop 4060 etc.
                 return 1536
             return 1280
+        if d == "mps":
+            # Apple Silicon shares system RAM with the GPU, so there's no
+            # small dedicated VRAM pool to run out of; the practical limit is
+            # speed, and 1536 detects reliably without dragging on an 8GB Air.
+            return 1536
     except Exception:
         pass
     return 1024
@@ -77,7 +81,8 @@ def _load():
             path = hf_hub_download(repo_id=repo, filename=fname)
         model = YOLO(path)
         try:
-            model.to(_device() if _device() == "cpu" else "cuda")
+            from .device import torch_device
+            model.to(torch_device())
         except Exception:
             pass
         _MODEL = model

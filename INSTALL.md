@@ -10,7 +10,7 @@ text/image calls to the AI translator you configure.
 
 | Thing | Notes |
 |---|---|
-| **Windows 10/11 or Linux** | Both covered below. On Windows, WSL2 is the smoothest route for GPU. |
+| **Windows 10/11, macOS or Linux** | All covered below. On Windows, WSL2 is the smoothest route for GPU. On a Mac, just double-click `setup_mac.command` (section 3d). |
 | **Python 3.10 – 3.12** | 3.11 or 3.12 recommended. 3.13 is not supported yet by some of the AI libraries. |
 | **Disk space** | ~1 GB for the CPU-only app. ~10 GB total with the full GPU stack + models. |
 | **Internet (first run)** | AI models auto-download on first use (~700 MB–1 GB total). After that it works offline except translation calls. |
@@ -102,27 +102,77 @@ pip install -r requirements.txt
 python app.py
 ```
 
-### 3d. macOS (Intel & Apple Silicon)
+### 3d. macOS (Apple Silicon & Intel) — the easy way
 
-Everything runs, but there's no NVIDIA/CUDA on a Mac — the AI models run on
-the CPU (Apple-GPU/MPS acceleration is partial). Translation quality is the
-same; heavy steps (erasure, OCR, upscale) are slower than on an NVIDIA PC.
+**Double-click `setup_mac.command`.** That's the whole install. It builds a
+private environment inside the folder, installs the app and the full AI stack
+(Metal builds on Apple Silicon), downloads every model, and prints a report.
+Re-running it is safe — it only installs what's missing.
+
+Then **double-click `start_mac.command`** to run the app; it opens your
+browser at `http://localhost:8000` on its own. Leave the Terminal window open
+while you work, and close it (or press Control-C) to stop.
+
+If Terminal won't run it, do this once:
 
 ```bash
-# Terminal, in the extracted folder:
+cd /path/to/the/folder
+chmod +x setup_mac.command start_mac.command
+./setup_mac.command
+```
+
+Two macOS prompts you may see the first time:
+
+- **"Command Line Tools are required"** — the script opens Apple's installer.
+  Click Install, let it finish, then run the script again.
+- **"cannot be opened because it is from an unidentified developer"** —
+  right-click the file → **Open** → **Open**. (Or:
+  `xattr -d com.apple.quarantine setup_mac.command start_mac.command`.)
+
+Options, if you want them:
+
+```bash
+./setup_mac.command --basic        # skip the AI stack (small, fast, CV fallbacks)
+./setup_mac.command --mangajanai   # also fetch the manga HD upscaler
+```
+
+**Prefer to do it by hand?**
+
+```bash
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt          # the app itself
-python setup_models.py                   # the full AI stack, Mac (CPU/MPS) builds
+pip install -r requirements.txt        # the app itself
+pip install -r requirements-mac.txt    # the AI stack, Mac builds
+pip install --no-deps craft-text-detector
+python setup_models.py                 # downloads the model weights
 python app.py
 ```
 
-Do **not** run `setup_gpu.sh` on a Mac — it targets Linux/NVIDIA (it would try
-to install `onnxruntime-gpu`, which doesn't exist for macOS). Use the pip
-lines above instead. Models auto-download on first run exactly as on PC.
+**Apple Silicon acceleration.** On an M1/M2/M3/M4 the models run on the Mac's
+GPU through Metal — the balloon detector, manga-OCR, LaMa erasure and the
+upscaler — and the text-stroke model runs through CoreML. You'll see it in the
+startup banner:
 
-Rough expectations: a typical page that takes ~15–30 s on an RTX GPU takes a
-few minutes on an M-series Mac in Maximum Quality; turn Maximum Quality off
-for day-to-day speed.
+```
+[pipeline]   compute        : Apple Silicon GPU (Metal)
+```
+
+If some page ever fails with a Metal error, force the CPU for one run:
+
+```bash
+MANGA_DEVICE=cpu python app.py
+```
+
+**What you need on a Mac:** Python **3.10–3.12** (macOS's built-in Python is
+too old and 3.13 isn't supported by the AI libraries yet — get 3.12 from
+`python.org/downloads/macos` or `brew install python@3.12`), about **8 GB** of
+free disk for the full stack, and 16 GB of RAM is comfortable.
+
+Do **not** run `setup_gpu.sh` on a Mac — it targets Linux/NVIDIA and would try
+to install `onnxruntime-gpu`, which doesn't exist for macOS.
+
+Rough expectations: a page that takes ~15–30 s on an RTX card takes roughly
+1–2 minutes on an M-series Mac (Intel Macs are slower still, CPU only). Turn
+**Maximum Quality** off for day-to-day speed.
 
 ### Verify the GPU stack
 

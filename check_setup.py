@@ -104,16 +104,27 @@ check("core", "HuggingFace token", _hf_token)
 # ── GPU stack ──
 def _torch():
     import torch
-    cuda = torch.cuda.is_available()
-    gpu = torch.cuda.get_device_name(0) if cuda else "CPU only"
-    return f"{torch.__version__} | CUDA: {gpu}"
+    from core.device import torch_device
+    d = torch_device()
+    if d == "cuda":
+        where = f"CUDA: {torch.cuda.get_device_name(0)}"
+    elif d == "mps":
+        where = "Apple Silicon GPU (Metal/MPS)"
+    else:
+        where = "CPU only"
+    return f"{torch.__version__} | {where}"
 check("gpu", "torch", _torch)
 
 def _onnx():
     import onnxruntime as ort
     provs = ort.get_available_providers()
-    has_cuda = "CUDAExecutionProvider" in provs
-    return f"{ort.__version__} | {'CUDA' if has_cuda else 'CPU only'} ({len(provs)} providers)"
+    if "CUDAExecutionProvider" in provs:
+        accel = "CUDA"
+    elif "CoreMLExecutionProvider" in provs:
+        accel = "CoreML (Apple)"
+    else:
+        accel = "CPU only"
+    return f"{ort.__version__} | {accel} ({len(provs)} providers)"
 check("gpu", "onnxruntime", _onnx)
 
 def _ultra():
@@ -300,7 +311,12 @@ ok = sum(1 for r in results if r[2] == "OK")
 miss = sum(1 for r in results if r[2] in ("MISSING", "FAIL"))
 skip = sum(1 for r in results if r[2] == "SKIP")
 print(f"\n  {ok} OK · {miss} missing/failed · {skip} skipped\n")
+import platform as _plat
+_IS_MAC = _plat.system() == "Darwin"
 if miss:
-    print("  Fix missing items with:  ./setup_gpu.sh   then re-run this check.")
+    fixer = "./setup_mac.command" if _IS_MAC else "./setup_gpu.sh"
+    print(f"  Fix missing items with:  {fixer}   then re-run this check.")
     sys.exit(1)
-print("  Everything ready. Start the app:  python3 app.py")
+print("  Everything ready. Start the app:  "
+      + ("double-click start_mac.command  (or: python3 app.py)"
+         if _IS_MAC else "python3 app.py"))
