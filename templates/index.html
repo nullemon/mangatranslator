@@ -69,7 +69,9 @@
         <div class="setting-group">
           <label for="sourceLang">Source Language</label>
           <select id="sourceLang">
-            <option value="Japanese">Japanese</option>
+            <option value="Japanese">Japanese (manga)</option>
+            <option value="Korean">Korean (manhwa / webtoon)</option>
+            <option value="Chinese">Chinese (manhua)</option>
             <option value="Arabic">Arabic</option>
             <option value="auto">Auto-detect</option>
           </select>
@@ -198,6 +200,10 @@
           <div class="opt" title="BETA: translate each bubble in its OWN api call (with its panel as context). Slower, but one bad response can only affect one bubble — no page-wide mixups. Uses the balloon model + local OCR, not AI-vision detection.">
             <span>One-by-one translate <em style="opacity:.6;font-style:normal">(beta)</em></span>
             <label class="toggle"><input type="checkbox" id="oneByOne"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="opt" title="Manhwa / webtoon: stack all the uploaded slices into ONE long vertical strip, translate it in sections (reading top-to-bottom, left-to-right — not manga order), and give you back a single long page.">
+            <span>Webtoon mode <em style="opacity:.6;font-style:normal">(one long page)</em></span>
+            <label class="toggle"><input type="checkbox" id="webtoonMode"><span class="toggle-slider"></span></label>
           </div>
           <div class="opt" title="Off = leave sound effects drawn in the art untouched (recommended). On = translate &amp; typeset background SFX too.">
             <span>Translate Background SFX</span>

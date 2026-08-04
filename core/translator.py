@@ -93,12 +93,16 @@ class ClaudeTranslator:
     """Translation backend powered by Anthropic Claude (vision)."""
 
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-6", style: str = "",
-                 source_lang: str = "Japanese", translate_sfx: bool = False):
+                 source_lang: str = "Japanese", translate_sfx: bool = False,
+                 webtoon: bool = False):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
         self.style = (style or "").strip()
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Vertical-scroll webtoon/manhwa: changes the reading-order guidance
+        # in every prompt (down the strip, left-to-right — not manga order).
+        self.webtoon = bool(webtoon)
         # Optional callback(seconds) fired while a call is in flight,
         # so the UI can show live elapsed time instead of freezing.
         self.on_wait = None
@@ -130,7 +134,8 @@ class ClaudeTranslator:
         self, original, annotated, num_regions, target_lang="English"
     ) -> Dict[int, dict]:
         prompt = prompts.region_translate_prompt(
-            target_lang, num_regions, self.style, self.source_lang, self.translate_sfx)
+            target_lang, num_regions, self.style, self.source_lang,
+            self.translate_sfx, self.webtoon)
         text = self._ask(
             [self._image_block(original), self._image_block(annotated), {"type": "text", "text": prompt}]
         )
@@ -138,7 +143,8 @@ class ClaudeTranslator:
 
     def smart_detect_and_translate(self, image, target_lang="English") -> List[dict]:
         prompt = prompts.smart_detect_prompt(
-            target_lang, self.style, self.source_lang, self.translate_sfx)
+            target_lang, self.style, self.source_lang, self.translate_sfx,
+            self.webtoon)
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         return prompts.extract_json_array(text)
 
@@ -146,7 +152,7 @@ class ClaudeTranslator:
                         image=None) -> Dict[int, dict]:
         prompt = prompts.text_translate_prompt(
             target_lang, self.style, self.source_lang, self.translate_sfx,
-            with_image=image is not None)
+            with_image=image is not None, webtoon=self.webtoon)
         payload = json.dumps(id_to_text, ensure_ascii=False)
         content = []
         if image is not None:
@@ -157,7 +163,8 @@ class ClaudeTranslator:
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
         prompt = prompts.free_text_detect_prompt(
-            target_lang, bubble_ids or [], self.style, self.source_lang, self.translate_sfx)
+            target_lang, bubble_ids or [], self.style, self.source_lang,
+            self.translate_sfx, self.webtoon)
         text = self._ask([self._image_block(image), {"type": "text", "text": prompt}])
         try:
             return prompts.extract_json_array(text)
@@ -189,13 +196,17 @@ class GeminiTranslator:
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash-lite",
                  timeout: float = 180.0, style: str = "",
-                 source_lang: str = "Japanese", translate_sfx: bool = False):
+                 source_lang: str = "Japanese", translate_sfx: bool = False,
+                 webtoon: bool = False):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
         self.style = (style or "").strip()
         self.source_lang = source_lang or "Japanese"
         self.translate_sfx = bool(translate_sfx)
+        # Vertical-scroll webtoon/manhwa: changes the reading-order guidance
+        # in every prompt (down the strip, left-to-right — not manga order).
+        self.webtoon = bool(webtoon)
         # Optional callback(seconds) fired while a call is in flight,
         # so the UI can show live elapsed time instead of freezing.
         self.on_wait = None
@@ -288,7 +299,8 @@ class GeminiTranslator:
         self, original, annotated, num_regions, target_lang="English"
     ) -> Dict[int, dict]:
         prompt = prompts.region_translate_prompt(
-            target_lang, num_regions, self.style, self.source_lang, self.translate_sfx)
+            target_lang, num_regions, self.style, self.source_lang,
+            self.translate_sfx, self.webtoon)
         text = self._ask(
             [{"text": prompt}, self._image_part(original), self._image_part(annotated)]
         )
@@ -296,7 +308,8 @@ class GeminiTranslator:
 
     def smart_detect_and_translate(self, image, target_lang="English") -> List[dict]:
         prompt = prompts.smart_detect_prompt(
-            target_lang, self.style, self.source_lang, self.translate_sfx)
+            target_lang, self.style, self.source_lang, self.translate_sfx,
+            self.webtoon)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         return prompts.extract_json_array(text)
 
@@ -304,7 +317,7 @@ class GeminiTranslator:
                         image=None) -> Dict[int, dict]:
         prompt = prompts.text_translate_prompt(
             target_lang, self.style, self.source_lang, self.translate_sfx,
-            with_image=image is not None)
+            with_image=image is not None, webtoon=self.webtoon)
         payload = json.dumps(id_to_text, ensure_ascii=False)
         parts = []
         if image is not None:
@@ -315,7 +328,8 @@ class GeminiTranslator:
 
     def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
         prompt = prompts.free_text_detect_prompt(
-            target_lang, bubble_ids or [], self.style, self.source_lang, self.translate_sfx)
+            target_lang, bubble_ids or [], self.style, self.source_lang,
+            self.translate_sfx, self.webtoon)
         text = self._ask([{"text": prompt}, self._image_part(image)])
         try:
             return prompts.extract_json_array(text)
@@ -364,7 +378,8 @@ _GEMINI_RETIRED = {
 
 
 def make_translator(provider: str, api_key: str, model: str = "", style: str = "",
-                    source_lang: str = "Japanese", translate_sfx: bool = False):
+                    source_lang: str = "Japanese", translate_sfx: bool = False,
+                    webtoon: bool = False):
     provider = (provider or "claude").lower().strip()
     model = (model or "").strip()
 
@@ -373,7 +388,8 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
         if not model or model.startswith("gemini"):
             model = DEFAULT_MODELS["claude"]
         return ClaudeTranslator(api_key, model, style=style,
-                                source_lang=source_lang, translate_sfx=translate_sfx)
+                                source_lang=source_lang, translate_sfx=translate_sfx,
+                                webtoon=webtoon)
 
     if provider in ("gemini", "google"):
         if not model or model.startswith("claude"):
@@ -387,6 +403,7 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
             print(f"[translator] '{model}' is retired — using '{new}' instead")
             model = new
         return GeminiTranslator(api_key, model, style=style,
-                                source_lang=source_lang, translate_sfx=translate_sfx)
+                                source_lang=source_lang, translate_sfx=translate_sfx,
+                                webtoon=webtoon)
 
     raise ValueError(f"Unknown translation provider: {provider!r}")

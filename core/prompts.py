@@ -26,10 +26,31 @@ def _source_label(source_lang: str, target_lang: str) -> str:
     return sl
 
 
-def _manga_context(target_lang: str) -> str:
-    """Shared 'treat the whole page as a manga, not isolated lines' guidance.
+def _manga_context(target_lang: str, webtoon: bool = False) -> str:
+    """Shared 'treat the whole page as one scene, not isolated lines' guidance.
     Reading the panels in order with cross-panel context makes the translation
-    flow as a real conversation and stay consistent."""
+    flow as a real conversation and stay consistent.
+
+    `webtoon` switches to vertical-scroll comics (Korean manhwa, Chinese
+    manhua): those are read straight DOWN the strip and left-to-right, never
+    in right-to-left manga order — telling the model otherwise scrambles who
+    answers whom."""
+    if webtoon:
+        return f"""
+Translate this as part of a VERTICAL-SCROLL WEBTOON (manhwa/manhua), not a
+list of disconnected lines:
+- Read strictly TOP TO BOTTOM down the strip, and left-to-right where two
+  bubbles sit side by side. This is NOT right-to-left manga order.
+- Follow the conversation DOWN the strip so each line answers the one above it.
+- Use the artwork as context: who is speaking, their mood (shouting,
+  whispering, thinking, crying), and what is happening in the scene.
+- Stay consistent down the whole strip — a character's voice, tone, pronouns,
+  name and honorifics must not change between panels.
+- Korean honorifics and titles (형, 누나, 선배, 씨, -님) carry real social
+  meaning: render them naturally in {target_lang} rather than dropping them or
+  transliterating mechanically.
+- Keep running jokes, callbacks and emphasis intact; render natural, idiomatic
+  {target_lang} a real reader would enjoy, never a literal word-for-word gloss."""
     return f"""
 Translate this as a MANGA page, not a list of disconnected lines:
 - Read the panels in manga order — right-to-left, top-to-bottom — and follow the
@@ -56,7 +77,8 @@ def _sfx_rule(translate_sfx: bool) -> str:
 
 def region_translate_prompt(target_lang: str, num_regions: int, style: str = "",
                             source_lang: str = "Japanese",
-                            translate_sfx: bool = False) -> str:
+                            translate_sfx: bool = False,
+                            webtoon: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
     return f"""You are an expert manga/comic translator. You are shown two images:
 1. An original manga page
@@ -64,7 +86,7 @@ def region_translate_prompt(target_lang: str, num_regions: int, style: str = "",
 
 There are {num_regions} numbered regions. For each one that contains {src}
 (or other non-{target_lang}) text, translate it into natural {target_lang}.
-{_manga_context(target_lang)}
+{_manga_context(target_lang, webtoon)}
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
@@ -89,13 +111,14 @@ Rules:
 
 def smart_detect_prompt(target_lang: str, style: str = "",
                         source_lang: str = "Japanese",
-                        translate_sfx: bool = False) -> str:
+                        translate_sfx: bool = False,
+                        webtoon: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
     return f"""You are an expert manga page analyzer and translator.
 
 Carefully examine this manga page. Find EVERY piece of {src} text — speech
 bubbles, narration boxes, titles, credits, captions, and annotations.
-{_manga_context(target_lang)}
+{_manga_context(target_lang, webtoon)}
 
 For each text region, return its bounding box as PERCENTAGE coordinates of the
 image (so they are resolution independent):
@@ -147,7 +170,8 @@ Rules:
 
 def free_text_detect_prompt(target_lang: str, bubble_ids: list, style: str = "",
                             source_lang: str = "Japanese",
-                            translate_sfx: bool = False) -> str:
+                            translate_sfx: bool = False,
+                            webtoon: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
     skip = f"Already-handled bubble IDs: {bubble_ids}. " if bubble_ids else ""
     # SFX go in the "find these" list (with type "sfx") only when the user opts
@@ -232,7 +256,8 @@ Return ONLY the JSON array.{_style_block(style)}"""
 def text_translate_prompt(target_lang: str, style: str = "",
                           source_lang: str = "Japanese",
                           translate_sfx: bool = False,
-                          with_image: bool = False) -> str:
+                          with_image: bool = False,
+                          webtoon: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
     img_line = (
         "\nYou are ALSO shown the manga page image. READ THE PANEL — the "
@@ -243,7 +268,7 @@ def text_translate_prompt(target_lang: str, style: str = "",
 {target_lang} release. Below is a JSON object mapping each speech-bubble id to
 the {src} text that was read from that bubble (by OCR). Translate every
 entry into natural, punchy {target_lang}.
-{img_line}{_manga_context(target_lang)}
+{img_line}{_manga_context(target_lang, webtoon)}
 The ids are in reading order; treat them as one flowing conversation.
 
 Return ONLY a JSON array — no markdown fences, no commentary:

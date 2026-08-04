@@ -37,14 +37,34 @@ def _has_arabic(text: str) -> bool:
     return False
 
 
+def _has_korean(text: str) -> bool:
+    """True if the string contains at least one Hangul character — syllable
+    blocks (가-힣), the individual jamo, and the half-width forms. Used for
+    Korean webtoons/manhwa exactly as _has_japanese is used for manga."""
+    for ch in text:
+        o = ord(ch)
+        if (0xAC00 <= o <= 0xD7A3        # Hangul syllables (가 … 힣)
+                or 0x1100 <= o <= 0x11FF  # Jamo
+                or 0x3130 <= o <= 0x318F  # Compatibility jamo
+                or 0xA960 <= o <= 0xA97F  # Jamo Extended-A
+                or 0xD7B0 <= o <= 0xD7FF  # Jamo Extended-B
+                or 0xFFA0 <= o <= 0xFFDC):  # half-width jamo
+            return True
+    return False
+
+
 def _has_source_text(text: str, source_lang: str = "Japanese") -> bool:
     """Whether `text` looks like real source-language text for the chosen
-    source. Japanese and Arabic get script-specific checks; 'auto' (or anything
-    else) just requires at least one letter so the vision-LLM's reading isn't
-    thrown away over a non-Japanese page."""
+    source. Japanese, Korean and Arabic get script-specific checks; 'auto' (or
+    anything else) just requires at least one letter so the vision-LLM's
+    reading isn't thrown away over a non-Japanese page."""
     sl = (source_lang or "Japanese").strip().lower()
     if sl in ("japanese", "ja", "jp"):
         return _has_japanese(text)
+    if sl in ("korean", "ko", "kr", "hangul"):
+        # Korean pages carry occasional Hanja and stylised Japanese-style
+        # SFX, so accept either script rather than rejecting a good read.
+        return _has_korean(text) or _has_japanese(text)
     if sl in ("arabic", "ar"):
         return _has_arabic(text)
     return any(ch.isalpha() for ch in text)

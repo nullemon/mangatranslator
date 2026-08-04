@@ -31,7 +31,9 @@ def _is_watermark(text: str) -> bool:
 
 def _is_sfx(text: str) -> bool:
     """True if text looks like a sound effect (SFX / onomatopoeia).
-    Manga SFX are short, mostly-katakana text: ドン, ガッ, ゴゴゴ, etc."""
+    Manga SFX are short, mostly-katakana text: ドン, ガッ, ゴゴゴ, etc.
+    Korean manhwa SFX are short Hangul runs with no particles or spaces:
+    쾅, 두근두근, 스윽 — the same shape, a different script."""
     t = text.strip().replace(" ", "").replace("\n", "")
     if not t:
         return False
@@ -40,6 +42,14 @@ def _is_sfx(text: str) -> bool:
     if n <= 5 and kata / max(n, 1) > 0.6:
         return True
     if n <= 3 and kata > 0:
+        return True
+    # Korean: only very short all-Hangul runs, and never something holding a
+    # sentence particle / ending — those are dialogue, not a sound.
+    han = sum(1 for c in t if '가' <= c <= '힣')
+    if han == n and n <= 4:
+        if any(p in t for p in ("은", "는", "이", "가", "을", "를", "의",
+                                "다", "요", "죠", "까", "네", "야")):
+            return False
         return True
     return False
 
@@ -52,7 +62,8 @@ def _texts_match(a: str, b: str) -> bool:
     def chars(s):
         return {c for c in s
                 if "ぁ" <= c <= "ん" or "ァ" <= c <= "ヶ"
-                or "一" <= c <= "鿿" or c == "ー"}
+                or "一" <= c <= "鿿" or c == "ー"
+                or "가" <= c <= "힣"}      # Hangul: Korean manhwa
     aa, bb = chars(a), chars(b)
     if not aa or not bb:
         return False
@@ -68,7 +79,8 @@ def _text_sim(a: str, b: str) -> float:
     def chars(s):
         return {c for c in (s or "")
                 if "ぁ" <= c <= "ん" or "ァ" <= c <= "ヶ"
-                or "一" <= c <= "鿿" or c == "ー"}
+                or "一" <= c <= "鿿" or c == "ー"
+                or "가" <= c <= "힣"}      # Hangul: Korean manhwa
     aa, bb = chars(a), chars(b)
     if not aa or not bb:
         return 0.0
@@ -488,6 +500,77 @@ def protect_dark_panels(ai_page: np.ndarray, original: np.ndarray) -> np.ndarray
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def stitch_vertical(paths: List[str], out_path: str,
+                    trim_seams: bool = False) -> tuple:
+    """Merge webtoon slices into ONE long strip, top to bottom.
+
+    An episode is normally delivered as many numbered images that are meant to
+    sit flush on top of each other. They can differ slightly in width (a
+    resized slice, a wider banner), so everything is scaled to the widest
+    common width — scaling DOWN a narrow slice would blur it, so we scale up
+    to the mode width instead and letterbox anything odd on white.
+
+    `trim_seams` is OFF by default and should usually stay off: webtoon slices
+    are normally exact cuts of one long image, so stacking them untouched
+    reproduces the episode pixel-for-pixel. Turning it on shaves a SMALL run of
+    blank rows off each slice's edges — useful for sites that pad every slice,
+    but capped tightly because solid-colour backgrounds between panels are real
+    artwork, not padding.
+
+    Returns (height, width, count) of the merged strip."""
+    imgs = []
+    for p in paths:
+        im = cv2.imread(p, cv2.IMREAD_COLOR)
+        if im is None:
+            print(f"[webtoon] skipping unreadable slice: {p}")
+            continue
+        if trim_seams:
+            im = _trim_uniform_edges(im)
+        if im.size:
+            imgs.append(im)
+    if not imgs:
+        raise ValueError("No readable images to merge")
+
+    widths = [im.shape[1] for im in imgs]
+    target_w = max(set(widths), key=lambda w: (widths.count(w), w))
+    scaled = []
+    for im in imgs:
+        h, w = im.shape[:2]
+        if w != target_w:
+            nh = max(1, int(round(h * target_w / float(w))))
+            interp = cv2.INTER_AREA if w > target_w else cv2.INTER_CUBIC
+            im = cv2.resize(im, (target_w, nh), interpolation=interp)
+        scaled.append(im)
+
+    merged = np.vstack(scaled)
+    cv2.imwrite(out_path, merged)
+    print(f"[webtoon] merged {len(scaled)} slice(s) -> "
+          f"{merged.shape[1]}x{merged.shape[0]}", flush=True)
+    return merged.shape[0], merged.shape[1], len(scaled)
+
+
+def _trim_uniform_edges(img: np.ndarray, max_trim_px: int = 48) -> np.ndarray:
+    """Drop a SMALL run of perfectly uniform rows at the very top/bottom of a
+    slice (the blank padding some sites add). Deliberately capped at a few
+    dozen pixels: a webtoon legitimately uses solid colour blocks between
+    panels, and an unbounded trim would eat those and shift the whole page."""
+    h = img.shape[0]
+    if h < 40:
+        return img
+    limit = min(max_trim_px, int(h * 0.1))
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    rowspread = gray.max(axis=1).astype(np.int16) - gray.min(axis=1).astype(np.int16)
+    top = 0
+    while top < limit and rowspread[top] <= 2:
+        top += 1
+    bot = h
+    while bot > h - limit and rowspread[bot - 1] <= 2:
+        bot -= 1
+    if bot - top < 20:
+        return img
+    return img[top:bot]
+
+
 def compress_upload(data: bytes, max_dim: int = 4000, target_kb: int = 6144,
                     full: bool = False) -> bytes:
     """Shrink an oversized upload so processing stays fast and AI calls don't
@@ -770,9 +853,13 @@ class TranslationPipeline:
         one_by_one: bool = False,
         isolate_page: bool = False,
         credit: str = "",
+        webtoon: bool = False,
     ):
         self.finish = finish
         self.source_lang = source_lang or "Japanese"
+        # Vertical-scroll webtoon / manhwa strip: changes reading order in the
+        # prompts and unlocks process_webtoon() (band-by-band on a long page).
+        self.webtoon = bool(webtoon)
         self.translate_sfx = bool(translate_sfx)
         # Clean-only: just erase ALL text (no translation), for a usable raw.
         self.clean_only = bool(clean_only)
@@ -796,7 +883,8 @@ class TranslationPipeline:
         self.detector, self.detector_name = make_detector(use_seg)
         self.translator = make_translator(
             provider, api_key, model, style_prompt,
-            source_lang=self.source_lang, translate_sfx=self.translate_sfx)
+            source_lang=self.source_lang, translate_sfx=self.translate_sfx,
+            webtoon=self.webtoon)
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
                                      translate_sfx=self.translate_sfx,
                                      replace_watermark=self.replace_watermark,
@@ -1064,6 +1152,142 @@ class TranslationPipeline:
         update(5, "Complete!", 100)
 
         return self._result(output_path, base_path, items, ann_path)
+
+    def process_webtoon(self, image_path, output_path, progress_cb=None,
+                        band_px: int = 2200, overlap_px: int = 320):
+        """Translate a LONG vertical webtoon strip and return it as ONE page.
+
+        A merged manhwa episode is often 800x20000+. Feeding that to the
+        detector or a vision model at once is hopeless: the whole-page resize
+        crushes the lettering to a few pixels and every model sees mush. So the
+        strip is walked in overlapping horizontal BANDS — each band is a
+        normal-looking "page" the existing detection path handles well — and
+        every result is mapped back onto the FULL-RESOLUTION strip, which is
+        composited in a single pass at the end. The output is one long image,
+        exactly as it reads.
+
+        The overlap guarantees no balloon is sliced in half at a band edge:
+        anything cut by a boundary is fully inside the neighbouring band. Items
+        found twice in the shared zone are deduped by position + text."""
+        def update(step, msg, pct):
+            print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
+            if progress_cb:
+                progress_cb({"step": step, "message": msg, "progress": pct})
+
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Cannot load image: {image_path}")
+        h, w = image.shape[:2]
+        # NOTE: deliberately NO max-dim downscale here. Capping a 20000px strip
+        # to 4000 would destroy exactly the text we need to read; bands keep
+        # the working size small without touching the source resolution.
+        if w > 2600:
+            s = 2600.0 / w
+            image = cv2.resize(image, (2600, max(1, int(round(h * s)))),
+                               interpolation=cv2.INTER_AREA)
+            h, w = image.shape[:2]
+            print(f"[webtoon] strip narrowed to {w}px wide for processing")
+
+        base_path = self._base_path(output_path)
+        cv2.imwrite(base_path, image)
+
+        detect = (self._smart_detect if self.use_smart_detection
+                  else self._standard_detect)
+        noop = lambda *a, **k: None
+        tmp_out = self._suffix_path(output_path, "band")
+
+        band_px = max(900, int(band_px))
+        overlap_px = max(120, min(int(overlap_px), band_px // 2))
+        step_px = band_px - overlap_px
+        starts = list(range(0, max(1, h - overlap_px), step_px)) or [0]
+        # Fold a runt final band into its predecessor rather than running a
+        # near-empty pass on a 60px sliver.
+        if len(starts) > 1 and h - starts[-1] < band_px * 0.35:
+            starts.pop()
+        total = len(starts)
+        update(1, f"Long strip: {w}x{h}, translating in {total} section(s)...", 8)
+
+        all_items, all_masks = [], {}
+        next_id = 1
+        placed = []          # (box, text) of everything accepted so far
+
+        def _iou(a, b):
+            ax, ay, aw, ah = a
+            bx_, by_, bw_, bh_ = b
+            ix0, iy0 = max(ax, bx_), max(ay, by_)
+            ix1 = min(ax + aw, bx_ + bw_)
+            iy1 = min(ay + ah, by_ + bh_)
+            if ix1 <= ix0 or iy1 <= iy0:
+                return 0.0
+            inter = (ix1 - ix0) * (iy1 - iy0)
+            return inter / float(aw * ah + bw_ * bh_ - inter)
+
+        for i, y0 in enumerate(starts):
+            y1 = min(h, y0 + band_px) if i < total - 1 else h
+            update(2, f"Translating section {i + 1} of {total}...",
+                   10 + int(72 * i / max(1, total)))
+            band = image[y0:y1].copy()
+            if band.shape[0] < 40:
+                continue
+            try:
+                items, _ann, masks = detect(band, tmp_out, noop)
+            except Exception as e:
+                print(f"[webtoon] section {i + 1} failed: {e}")
+                continue
+            masks = masks or {}
+            for it in items:
+                bx, by, bbw, bbh = [int(v) for v in it["bbox"]]
+                gy = by + y0
+                gbox = (bx, gy, bbw, bbh)
+                txt = (it.get("original") or it.get("translation") or "").strip()
+                # Overlap dedupe: the SAME balloon seen from two bands lands on
+                # the same pixels, so box overlap is the reliable signal —
+                # matching text is only a bonus (two reads of one bubble can
+                # differ, and non-CJK reads share no characters at all, which
+                # is exactly how a text-only rule lets duplicates through).
+                dup = False
+                for pbox, ptxt in placed:
+                    ov = _iou(gbox, pbox)
+                    if ov >= 0.45 or (ov >= 0.2 and txt and ptxt
+                                      and _texts_match(txt, ptxt)):
+                        dup = True
+                        break
+                if dup:
+                    continue
+                # A box touching a band edge that ISN'T the strip edge is a
+                # balloon the cut went through — the neighbouring band holds
+                # the whole thing, so let that copy win.
+                if total > 1:
+                    edge = 6
+                    if y0 > 0 and by <= edge:
+                        continue
+                    if y1 < h and (by + bbh) >= (y1 - y0) - edge:
+                        continue
+                # Lift this item's balloon mask from band-local coordinates
+                # onto the full strip, in the same step as its id remap.
+                old_id = it["id"]
+                it["id"] = next_id
+                it["bbox"] = [bx, gy, bbw, bbh]
+                m = masks.get(old_id)
+                if m is not None:
+                    full = np.zeros((h, w), np.uint8)
+                    mh, mw = m.shape[:2]
+                    ch, cw = min(mh, h - y0), min(mw, w)
+                    full[y0:y0 + ch, :cw] = m[:ch, :cw]
+                    all_masks[next_id] = full
+                all_items.append(it)
+                placed.append((gbox, txt))
+                next_id += 1
+
+        update(4, f"Composing the full strip ({len(all_items)} translations)...", 88)
+        result = self.compositor.compose(image.copy(), all_items, all_masks)
+        if self.finish in ("clean", "api"):
+            result = scan_finish(result)
+        cv2.imwrite(output_path, result)
+        self.last_masks = all_masks
+        update(5, f"Done — {len(all_items)} translations down a "
+               f"{h}px strip", 100)
+        return self._result(output_path, base_path, all_items, "")
 
     def process_pieces(self, image_path, output_path, regions,
                        progress_cb=None, translate_all=True):

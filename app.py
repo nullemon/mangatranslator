@@ -397,6 +397,61 @@ async def health(refresh: bool = False):
     return _HEALTH_CACHE
 
 
+@app.post("/api/merge-strip")
+async def merge_strip(files: list[UploadFile] = File(...),
+                      trim_seams: str = Form("true")):
+    """Webtoon mode: stack the uploaded episode slices into ONE long strip.
+
+    Slices arrive in the order the browser sent them (the frontend sorts by
+    filename first, so 01, 02, ... 10 stack correctly rather than 1, 10, 2).
+    Returns a merged image the normal translate flow then treats as a single
+    very tall page."""
+    if not files:
+        raise HTTPException(400, "Upload at least one image")
+    from core.pipeline import stitch_vertical
+
+    mid = str(uuid.uuid4())
+    parts = []
+    try:
+        for i, f in enumerate(files):
+            if not f.content_type or not f.content_type.startswith("image/"):
+                continue
+            p = f"uploads/{mid}_part{i:03d}{Path(f.filename or '.png').suffix or '.png'}"
+            with open(p, "wb") as fh:
+                fh.write(await f.read())
+            parts.append(p)
+        if not parts:
+            raise HTTPException(400, "No readable images in the upload")
+
+        merged_path = f"uploads/{mid}_strip.png"
+        loop = asyncio.get_event_loop()
+        h, w, n = await loop.run_in_executor(
+            None,
+            lambda: stitch_vertical(parts, merged_path,
+                                    trim_seams=(trim_seams == "true")),
+        )
+    finally:
+        for p in parts:                     # the slices are merged; drop them
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    return {"strip_id": mid, "url": f"/api/strip/{mid}",
+            "width": w, "height": h, "slices": n}
+
+
+@app.get("/api/strip/{strip_id}")
+async def get_strip(strip_id: str):
+    """The merged webtoon strip, so the browser can preview it before running."""
+    if not re.fullmatch(r"[a-f0-9\-]{36}", strip_id or ""):
+        raise HTTPException(404, "Not found")
+    p = f"uploads/{strip_id}_strip.png"
+    if not os.path.exists(p):
+        raise HTTPException(404, "Strip not found")
+    return FileResponse(p, media_type="image/png")
+
+
 @app.post("/api/translate")
 async def translate(
     file: UploadFile = File(...),
@@ -433,6 +488,7 @@ async def translate(
     gpu_cap: str = Form("100"),
     cut_regions: str = Form(""),
     one_by_one: str = Form("false"),
+    webtoon: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
@@ -460,7 +516,12 @@ async def translate(
     output_path = f"output/{task_id}{ext}"
 
     # Maximum Quality keeps the upload uncompressed (full resolution end-to-end).
-    content = compress_upload(await file.read(), full=(max_quality == "true"))
+    # Webtoon strips must NOT be capped at the normal 4000px long side — that
+    # would squash a 20000px episode down and destroy every letter. The band
+    # processor keeps memory sane instead.
+    content = compress_upload(
+        await file.read(),
+        full=(max_quality == "true" or webtoon == "true"))
     with open(upload_path, "wb") as f:
         f.write(content)
 
@@ -490,6 +551,7 @@ async def translate(
         "source_lang": source_lang,
         "target_lang": target_lang,
         "smart_mode": smart_mode == "true",
+        "webtoon": webtoon == "true",
         "translate_sfx": translate_sfx == "true",
         "max_quality": max_quality == "true",
         "remove_watermark": remove_watermark == "true",
@@ -521,6 +583,7 @@ async def translate(
             credit=credit.strip(),
             cut_regions=cut_regions,
             one_by_one=(one_by_one == "true"),
+            webtoon=(webtoon == "true"),
         )
     )
 
@@ -562,6 +625,7 @@ async def _run(
     credit: str = "",
     cut_regions: str = "",
     one_by_one: bool = False,
+    webtoon: bool = False,
 ):
     try:
         loop = asyncio.get_event_loop()
@@ -681,6 +745,7 @@ async def _run(
             isolate_page=isolate_page,
             credit=credit,
             one_by_one=one_by_one,
+            webtoon=webtoon,
         )
 
         def on_progress(update):
@@ -693,6 +758,14 @@ async def _run(
                 None,
                 lambda: pipeline.process_pieces(
                     translate_source, output_path, pieces, on_progress),
+            )
+        elif webtoon and not clean_only:
+            # Long vertical strip: walk it in overlapping bands so the
+            # lettering is never resized into mush, then compose one long page.
+            result = await loop.run_in_executor(
+                None,
+                lambda: pipeline.process_webtoon(
+                    translate_source, output_path, on_progress),
             )
         else:
             result = await loop.run_in_executor(

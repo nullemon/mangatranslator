@@ -124,6 +124,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // SBS / text-heavy mode: forces AI-vision detection (best for dense paragraph
   // pages) and surfaces the transcript.
   const oneByOne = document.getElementById("oneByOne");
+  const webtoonMode = document.getElementById("webtoonMode");
   if (oneByOne) {
     oneByOne.checked = localStorage.getItem("manga_one_by_one") === "1";
     oneByOne.addEventListener("change", () =>
@@ -909,7 +910,7 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ══ START / QUEUE ══ */
   goBtn.addEventListener("click", startBatch);
 
-  function startBatch() {
+  async function startBatch() {
     if (!pages.length) return;
     if (needsTranslate(workflow) && !apiKeyInput.value.trim()) {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
@@ -921,11 +922,74 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     enhanceKey.style.borderColor = "";
 
+    // Webtoon mode: stack every uploaded slice into ONE long strip first, then
+    // run the normal flow on that single tall page.
+    if (webtoonMode && webtoonMode.checked && pages.length >= 1) {
+      const merged = await mergeWebtoonStrip();
+      if (!merged) return;              // the error is already on screen
+    }
+
     pages.forEach(p => { if (p.status === "pending") p.status = "queued"; });
     activeUid = pages[0].uid;
     showSection("result");
     renderStrip(); updateBatch(); renderActivePage();
     pump();
+  }
+
+  /* Webtoon: send every slice to the server, get one merged strip back, and
+     collapse the page list down to that single long page. */
+  async function mergeWebtoonStrip() {
+    const slices = pages.filter(p => p.file);
+    if (!slices.length) return false;
+    goBtn.disabled = true;
+    const label = goBtn.textContent;
+    goBtn.textContent = `Merging ${slices.length} slice(s)...`;
+    try {
+      // Natural sort so 2 comes before 10 (plain sort puts 10 first).
+      const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+      slices.sort((a, b) => coll.compare(a.name || "", b.name || ""));
+
+      const fd = new FormData();
+      slices.forEach(p => fd.append("files", p.file, p.name || "slice.png"));
+      // Faithful stack: webtoon slices are exact cuts, so merging them
+      // untouched reproduces the episode exactly.
+      fd.append("trim_seams", "false");
+      const res = await fetch("/api/merge-strip", { method: "POST", body: fd });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { msg = (await res.json()).detail || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      const info = await res.json();
+
+      // Pull the merged strip back as a File so the rest of the flow (which
+      // uploads a file per page) needs no special-casing at all.
+      const blobRes = await fetch(info.url);
+      if (!blobRes.ok) throw new Error("Could not read the merged strip");
+      const blob = await blobRes.blob();
+      const chapter = (chapterName && chapterName.value.trim()) || "webtoon";
+      const file = new File([blob], `${chapter}.png`, { type: "image/png" });
+
+      pages.forEach(p => { try { URL.revokeObjectURL(p.thumb); } catch (_) {} });
+      pages.length = 0;
+      pages.push({
+        uid: ++uidCounter, file, name: file.name, size: blob.size,
+        thumb: URL.createObjectURL(blob),
+        status: "pending", progress: 0, step: 0, message: "", taskId: null,
+        result: null, items: [], added: [], covers: [], rotations: {},
+        excluded: new Set(), erased: new Set(), glows: new Set(), offsets: {},
+        colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+        cutRegions: [],
+      });
+      activeUid = pages[0].uid;
+      console.log(`[webtoon] merged ${info.slices} slice(s) -> ${info.width}x${info.height}`);
+      return true;
+    } catch (e) {
+      showError("Merge failed: " + e.message);
+      return false;
+    } finally {
+      goBtn.disabled = false; goBtn.textContent = label;
+    }
   }
 
   function pump() {
@@ -973,6 +1037,7 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", (smartMode.checked || (sbsMode && sbsMode.checked)) ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("one_by_one", oneByOne && oneByOne.checked ? "true" : "false");
+      f.append("webtoon", webtoonMode && webtoonMode.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");
       f.append("remove_watermark", removeWatermark && removeWatermark.checked ? "true" : "false");
