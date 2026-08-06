@@ -523,6 +523,7 @@
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso" title="Draw a free-form shape around anything (weird shapes) — content-aware erases it">⬡ Lasso erase</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="vert-add" title="Drag a box over a TALL vertical text run — it's read &amp; translated, and the English is typeset VERTICALLY (sideways, reading bottom-to-top)">↕ Vertical translate</button>
+              <button class="btn btn-ghost btn-sm tool-btn" data-tool="type-add" title="Drag a box, then TYPE the original Japanese/Korean yourself using the built-in keyboard (type it how it sounds, or click the characters) — for text the reader can't make out">あ Type text</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso-add" title="Draw a free-form shape over weird-shaped/missed text — it reads &amp; translates it">⬡＋ Lasso translate</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="pen-add" title="Pen select: CLICK points around the text to build a custom shape (click the first point or press Enter to close). Only what's inside is read, and the translation stays inside your shape.">⬠ Point translate</button>
               <button class="btn btn-ghost btn-sm tool-btn" data-tool="keep" title="Draw around the page — everything OUTSIDE the outline becomes white (removes carpet/floor/background)">⬚ Remove BG</button>
@@ -661,6 +662,7 @@
        after an update, the backend wasn't restarted or the pull didn't land. -->
   <div id="buildBadge" style="position:fixed;right:10px;bottom:8px;z-index:9999;font-size:11px;opacity:.6;font-family:monospace;pointer-events:none;color:#888">build {{ build }}</div>
 
+  <script src="/static/js/ime.js?v={{ version }}"></script>
   <script src="/static/js/app.js?v={{ version }}"></script>
 </body>
 </html>

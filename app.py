@@ -1860,6 +1860,44 @@ async def ocr_translate(task_id: str, request: Request):
     return result
 
 
+@app.post("/api/translate-text")
+async def translate_text(request: Request):
+    """Translate SOURCE text the user typed or pasted, with no image involved.
+
+    Backs the built-in Japanese/Korean keyboard: when OCR can't read a bubble
+    the user can key the original in by hand (or paste it) and get the same
+    quality of translation the automatic path produces."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+    text = (payload.get("text") or "").strip()
+    api_key = payload.get("api_key", "")
+    if not text:
+        raise HTTPException(400, "Type some text to translate")
+    if not api_key:
+        raise HTTPException(400, "api_key is required")
+
+    provider = payload.get("provider", "claude")
+    model = payload.get("model", "")
+    target_lang = payload.get("target_lang", "English")
+    source_lang = payload.get("source_lang", "Japanese")
+    style_prompt = payload.get("style_prompt", "")
+
+    def work():
+        from core.translator import make_translator
+        translator = make_translator(provider, api_key, model, style_prompt,
+                                     source_lang=source_lang)
+        out = translator.translate_texts({"0": text}, target_lang)
+        entry = out.get(0) or out.get("0") or {}
+        return {"original": text,
+                "translation": (entry.get("translation") or "").strip()}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, work)
+
+
 @app.get("/api/wm-preview")
 async def wm_preview(text: str = "@YourName", style: str = "clean",
                      place: str = "br", opacity: int = 70, size: str = "m",

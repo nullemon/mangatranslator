@@ -1577,6 +1577,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lasso: "Draw a free-form outline around anything (weird shapes) — it's content-aware erased. Then Apply & Re-render.",
     "lasso-add": "Draw a free-form shape over weird-shaped or missed text — it's read & translated. Edit, then Apply & Re-render.",
     add: "Drag a box over missed text — it's OCR'd and auto-translated; edit, then Apply & Re-render.",
+    "type-add": "Drag a box over the text, then TYPE the original yourself (type it how it sounds, or click the characters) — for text the reader can't make out.",
     "vert-add": "Drag a box over a TALL vertical text run — it's read & translated, and the English is set VERTICALLY (bottom-to-top). Edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
@@ -2023,6 +2024,7 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       <div class="edit-pop-row">
         <button class="btn btn-ghost btn-sm epop-remove">${isAdded ? "Delete" : "Skip"}</button>
+        <button class="btn btn-ghost btn-sm epop-ime" title="Retype the ORIGINAL text with the built-in Japanese/Korean keyboard and re-translate it — for a bubble the reader got wrong">あ Retype</button>
         ${isAdded ? "" : `<button class="btn btn-ghost btn-sm epop-erase" title="Delete this translation AND wipe the bubble clean — empty bubble, no text">Empty</button>`}
         <span class="spacer"></span>
         <button class="btn btn-ghost btn-sm epop-cancel">Cancel</button>
@@ -2099,6 +2101,26 @@ document.addEventListener("DOMContentLoaded", () => {
       closeEditor();
       applyChanges(editApply);
     });
+    const imeBtn = pop.querySelector(".epop-ime");
+    if (imeBtn) imeBtn.addEventListener("click", () => {
+      if (!window.KaisukiIME) return;
+      window.KaisukiIME.open({
+        title: "Retype the original text",
+        text: (it.original || "").trim(),
+        translation: (it.translation || "").trim(),
+        sourceLang: sourceLang ? sourceLang.value : "Japanese",
+        translate: translateTyped,
+        onUse: ({ original, translation }) => {
+          it.original = original;
+          it.translation = translation;
+          const box = pop.querySelector(".edit-pop-text");
+          if (box) box.value = translation;
+          const row = document.querySelector('.tl-edit[data-id="' + it.id + '"]');
+          if (row) row.value = translation;
+        },
+      });
+    });
+
     const eraseBtn = pop.querySelector(".epop-erase");
     if (eraseBtn) eraseBtn.addEventListener("click", () => {
       pushUndo(page);
@@ -2114,7 +2136,8 @@ document.addEventListener("DOMContentLoaded", () => {
   (function initDraw() {
     let drawing = false, sx, sy, rectEl = null;
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "cover" && tool !== "add" && tool !== "vert-add") return;
+      if (tool !== "cover" && tool !== "add" && tool !== "vert-add"
+          && tool !== "type-add") return;
       if (e.target !== moveLayer) return;   // don't start when clicking a box
       const page = getActive(); if (!page || !curDims()) return;
       drawing = true;
@@ -2156,6 +2179,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (tool === "cover") {
         page.covers.push([x, y, w, h]);
         buildOverlay();
+      } else if (tool === "type-add") {
+        typeTranslate(page, [x, y, w, h]);
       } else {
         autoTranslate(page, [x, y, w, h], null, tool === "vert-add");
       }
@@ -2332,6 +2357,60 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   })();
 
+  /* Translate SOURCE text the user typed on the built-in keyboard. */
+  async function translateTyped(text) {
+    const resp = await fetch("/api/translate-text", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        api_key: apiKeyInput.value.trim(),
+        provider: engineSelect.value,
+        model: modelSelect.value,
+        target_lang: targetLang.value,
+        source_lang: sourceLang ? sourceLang.value : "Japanese",
+        style_prompt: styleText(),
+      }),
+    });
+    if (!resp.ok) {
+      let m = resp.statusText;
+      try { m = (await resp.json()).detail || m; } catch (_) {}
+      throw new Error(m);
+    }
+    return (await resp.json()).translation || "";
+  }
+
+  /* Place a region whose ORIGINAL text the user keys in by hand. */
+  function typeTranslate(page, bbox, poly, vertical) {
+    if (!window.KaisukiIME) { autoTranslate(page, bbox, poly, vertical); return; }
+    editHint.textContent = "Type the original text, then place it.";
+    window.KaisukiIME.open({
+      title: "Type the original text",
+      sourceLang: sourceLang ? sourceLang.value : "Japanese",
+      translate: translateTyped,
+      onCancel: () => { editHint.textContent = HINTS[tool] || HINTS.add; },
+      onUse: ({ original, translation }) => {
+        placeAdded(page, bbox, poly, original, translation, vertical);
+      },
+    });
+  }
+
+  /* Shared placement used by every add path. */
+  function placeAdded(page, bbox, poly, original, translation, vertical) {
+    page.added = page.added || [];
+    page.addSeq = (page.addSeq || 0) + 1;
+    const nid = "m" + page.addSeq;
+    page.added.push({
+      id: nid, bbox, poly: poly || null,
+      original: original || "", translation: translation.trim(), placed: true,
+    });
+    if (vertical) {
+      page.rotations = page.rotations || {};
+      page.rotations[nid] = -90;
+    }
+    buildOverlay();
+    editHint.textContent = "Added! Hit Apply & Re-render when ready.";
+  }
+
   async function autoTranslate(page, bbox, poly, vertical) {
     editHint.textContent = "Reading & translating…";
     let data = { original: "", translation: "" };
@@ -2352,32 +2431,27 @@ document.addEventListener("DOMContentLoaded", () => {
       if (resp.ok) data = await resp.json();
     } catch (_) { /* fall through to manual entry */ }
 
-    // Auto-translated text pre-fills the prompt (editable); if no Japanese was
-    // read, fall back to manual entry so the tool still works anywhere.
+    // Nothing readable here: hand over to the built-in keyboard so the user
+    // can key the ORIGINAL in themselves (no system IME needed) and get a
+    // proper translation — far better than guessing at the English.
     const suggested = (data.translation || "").trim();
-    const label = suggested
-      ? "Edit translation (read: " + data.original + "):"
-      : "No text detected here — type the translation:";
+    if (!suggested && window.KaisukiIME) {
+      window.KaisukiIME.open({
+        title: "Couldn't read this — type the original text",
+        text: (data.original || "").trim(),
+        sourceLang: sourceLang ? sourceLang.value : "Japanese",
+        translate: translateTyped,
+        onCancel: () => { editHint.textContent = HINTS[tool] || HINTS.add; },
+        onUse: ({ original, translation }) => {
+          placeAdded(page, bbox, poly, original, translation, vertical);
+        },
+      });
+      return;
+    }
+    const label = "Edit translation (read: " + data.original + "):";
     const txt = prompt(label, suggested);
     if (txt && txt.trim()) {
-      page.added = page.added || [];
-      page.addSeq = (page.addSeq || 0) + 1;
-      const nid = "m" + page.addSeq;
-      page.added.push({
-        id: nid,
-        bbox,
-        poly: poly || null,
-        original: data.original || "",
-        translation: txt.trim(),
-        placed: true,
-      });
-      if (vertical) {
-        // Vertical-translate tool: typeset this one sideways, bottom-to-top.
-        page.rotations = page.rotations || {};
-        page.rotations[nid] = -90;
-      }
-      buildOverlay();
-      editHint.textContent = "Added! Hit Apply & Re-render when ready.";
+      placeAdded(page, bbox, poly, data.original || "", txt, vertical);
     } else {
       editHint.textContent = HINTS[tool] || HINTS.add;
     }
