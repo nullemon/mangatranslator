@@ -656,3 +656,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .ro-en{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ro-grip{color:var(--text-faint)}
 .ov-box.flash{outline:3px solid var(--accent);outline-offset:2px}
+.epop-rot-quick{gap:.25rem}
+.epop-ra{background:transparent;border:1px solid var(--border);color:var(--text-dim);
+  border-radius:6px;padding:.18rem .4rem;font-size:.72rem;cursor:pointer;transition:.15s}
+.epop-ra:hover{border-color:var(--accent);color:var(--accent);background:var(--ring)}
+.epop-rot-num{background:var(--input-bg,rgba(0,0,0,.18));border:1px solid var(--border);
+  color:var(--text);border-radius:6px;padding:.2rem .3rem;font-size:.75rem}

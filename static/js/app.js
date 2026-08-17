@@ -2141,10 +2141,22 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       <div class="edit-pop-color">
         <span class="epop-clabel">Tilt&deg;</span>
-        <input type="range" class="epop-rot" min="-80" max="80" step="1"
+        <input type="range" class="epop-rot" min="-180" max="180" step="1"
                value="${(page.rotations || {})[it.id] != null ? (page.rotations || {})[it.id] : (it.rotation || 0)}"
-               style="flex:1" title="Drag to tilt — live preview on the page">
+               style="flex:1" title="Drag to tilt — full turn, live preview on the page">
+        <input type="number" class="epop-rot-num" min="-180" max="180" step="1"
+               value="${(page.rotations || {})[it.id] != null ? (page.rotations || {})[it.id] : (it.rotation || 0)}"
+               style="width:58px" title="Type an exact angle">
         <span class="epop-rot-val" style="min-width:34px;text-align:right"></span>
+      </div>
+      <div class="edit-pop-color epop-rot-quick">
+        <span class="epop-clabel"></span>
+        <button class="epop-ra" data-a="0" title="Upright">0&deg;</button>
+        <button class="epop-ra" data-a="-90" title="Sideways, reading bottom-to-top">-90&deg;</button>
+        <button class="epop-ra" data-a="90" title="Sideways, reading top-to-bottom">90&deg;</button>
+        <button class="epop-ra" data-a="180" title="Upside down">180&deg;</button>
+        <button class="epop-ra" data-a="-45" title="Diagonal">-45&deg;</button>
+        <button class="epop-ra" data-a="45" title="Diagonal">45&deg;</button>
       </div>
       <div class="edit-pop-color">
         <span class="epop-clabel">Size</span>
@@ -2187,7 +2199,21 @@ document.addEventListener("DOMContentLoaded", () => {
         if (rotVal) rotVal.textContent = v + "\u00B0";
         if (fsVal) fsVal.textContent = Math.round(fscale * 100) + "%";
       };
-      rotEl.addEventListener("input", sync);
+      // Keep the slider, the number box and the quick buttons in step.
+      const numEl = pop.querySelector(".epop-rot-num");
+      const setRot = v => {
+        v = Math.max(-180, Math.min(180, Math.round(parseFloat(v) || 0)));
+        rotEl.value = v;
+        if (numEl) numEl.value = v;
+        sync();
+      };
+      rotEl.addEventListener("input", () => setRot(rotEl.value));
+      if (numEl) numEl.addEventListener("input", () => {
+        const v = parseFloat(numEl.value);
+        if (!isNaN(v)) { rotEl.value = Math.max(-180, Math.min(180, v)); sync(); }
+      });
+      pop.querySelectorAll(".epop-ra").forEach(b =>
+        b.addEventListener("click", () => setRot(b.dataset.a)));
       if (fsEl) fsEl.addEventListener("input", sync);
       sync();
     }

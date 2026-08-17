@@ -424,10 +424,35 @@ class TextRenderer:
         rad = math.radians(abs(angle_deg))
         c, s = abs(math.cos(rad)), abs(math.sin(rad))
 
+        # Pick the BIGGEST upright layer whose rotated bounding box still fits
+        # the target rect, i.e. maximise rw*rh subject to
+        #     rw*c + rh*s <= w   and   rw*s + rh*c <= h.
+        # The old code only solved for both constraints being tight. At oblique
+        # angles (around 60/120 deg) that solution collapses to a sliver — the
+        # text came out a fraction of the size it could have been. The optimum
+        # is that corner OR, when one constraint is slack, the balanced point on
+        # the other (AM-GM), so try all three and keep the largest that fits.
+        EPS = 1e-6
+        cands = []
         det = c * c - s * s
-        if abs(det) > 0.05:
-            rw = (w * c - h * s) / det
-            rh = (h * c - w * s) / det
+        if abs(det) > 1e-4:
+            cands.append(((w * c - h * s) / det, (h * c - w * s) / det))
+        if c > EPS and s > EPS:
+            cands.append((w / (2 * c), w / (2 * s)))     # width constraint tight
+            cands.append((h / (2 * s), h / (2 * c)))     # height constraint tight
+        else:
+            cands.append((w, h) if c > s else (h, w))    # axis-aligned
+
+        best, best_area = None, 0.0
+        for cw, ch in cands:
+            if cw <= 1 or ch <= 1:
+                continue
+            if cw * c + ch * s <= w + 1 and cw * s + ch * c <= h + 1:
+                area = cw * ch
+                if area > best_area:
+                    best, best_area = (cw, ch), area
+        if best is not None:
+            rw, rh = best
         else:
             rw = rh = min(w, h) * 0.71
 

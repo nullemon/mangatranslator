@@ -297,9 +297,9 @@ class Compositor:
 
             rotation = float(it.get("rotation", 0))
             if it.get("manual_rot"):
-                # User-set tilt: honour it as-is (safety-capped only). ±90 so
-                # the VERTICAL option renders truly sideways, not tilted 80°.
-                rotation = max(-90.0, min(90.0, rotation))
+                # User-set tilt: honour it as-is. Full ±180 covers every
+                # orientation — sideways, diagonal, fully upside down.
+                rotation = max(-180.0, min(180.0, rotation))
             elif abs(rotation) > 45:
                 # English text at steep angles (>45°) is unreadable sideways;
                 # render it horizontally in the (tall-narrow) rect instead.
