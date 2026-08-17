@@ -45,15 +45,25 @@ def _heartbeat(label: str, on_wait=None, every: float = 10.0):
 # larger than ~1568 px on the long edge anyway. Shrink to that and send JPEG so
 # a big lossless scan can't blow the limit. Detections use PERCENTAGE coords, so
 # this never shifts where text lands back on the full-res page.
-MAX_IMAGE_EDGE = 1568
+# How large an image each backend actually benefits from.
+#
+# 1568 is Anthropic's optimal tile size — sending Claude more just costs
+# tokens. Gemini is different: it tiles internally and reads much larger
+# images happily, and manga NEEDS that. A 2833x4000 page squeezed to 1568
+# leaves the text in a speech bubble only a few pixels tall, so the model
+# can no longer read the page itself and falls back on whatever the OCR
+# handed it — which is exactly why pasting a page into Gemini by hand beat
+# the app's own output.
+MAX_IMAGE_EDGE = 1568                  # Claude / default
+GEMINI_MAX_IMAGE_EDGE = 3072
 API_IMAGE_MEDIA_TYPE = "image/jpeg"
 
 
-def _prep_for_api(image: np.ndarray) -> np.ndarray:
+def _prep_for_api(image: np.ndarray, max_edge: int = MAX_IMAGE_EDGE) -> np.ndarray:
     h, w = image.shape[:2]
     long_edge = max(h, w)
-    if long_edge > MAX_IMAGE_EDGE:
-        s = MAX_IMAGE_EDGE / float(long_edge)
+    if long_edge > max_edge:
+        s = max_edge / float(long_edge)
         image = cv2.resize(
             image, (max(1, round(w * s)), max(1, round(h * s))),
             interpolation=cv2.INTER_AREA,
@@ -61,10 +71,11 @@ def _prep_for_api(image: np.ndarray) -> np.ndarray:
     return image
 
 
-def _encode_image_b64(image: np.ndarray, quality: int = 90) -> str:
+def _encode_image_b64(image: np.ndarray, quality: int = 90,
+                      max_edge: int = MAX_IMAGE_EDGE) -> str:
     """Downscale to the API's working size and encode as JPEG, stepping quality
     down if the result would still exceed the inline limit."""
-    image = _prep_for_api(image)
+    image = _prep_for_api(image, max_edge)
     ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise ValueError("Failed to encode image")
@@ -220,7 +231,11 @@ class GeminiTranslator:
         self.on_wait = None
 
     def _image_part(self, image: np.ndarray) -> dict:
-        return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE, "data": _encode_image_b64(image)}}
+        # Send the page big enough that Gemini can READ it rather than relying
+        # on the OCR text we also pass.
+        return {"inlineData": {"mimeType": API_IMAGE_MEDIA_TYPE,
+                               "data": _encode_image_b64(
+                                   image, max_edge=GEMINI_MAX_IMAGE_EDGE)}}
 
     def _ask(self, parts: list) -> str:
         def _body(budget) -> dict:

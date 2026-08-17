@@ -260,14 +260,20 @@ def text_translate_prompt(target_lang: str, style: str = "",
                           webtoon: bool = False) -> str:
     src = _source_label(source_lang, target_lang)
     img_line = (
-        "\nYou are ALSO shown the manga page image. READ THE PANEL — the "
-        "characters, their expressions and the action — and translate to fit "
-        "what is actually happening, not a literal word-for-word of the text.\n"
+        "\nThe manga page ITSELF is attached, and it is the authority.\n"
+        "- READ EACH BUBBLE FROM THE IMAGE. The text below came from an OCR "
+        "and it makes mistakes — merged furigana, wrong small kana, missing "
+        "characters, whole words dropped. Where the image and the text below "
+        "disagree, TRUST THE IMAGE and translate what is actually printed.\n"
+        "- If a bubble's entry below is empty, garbled or clearly not what "
+        "the picture shows, read that bubble yourself and translate it.\n"
+        "- READ THE PANEL too: who is speaking, their expression, and the "
+        "action — translate to fit what is happening, never word-for-word.\n"
         if with_image else "")
     return f"""You are an expert manga translator localizing for an official
 {target_lang} release. Below is a JSON object mapping each speech-bubble id to
-the {src} text that was read from that bubble (by OCR). Translate every
-entry into natural, punchy {target_lang}.
+an OCR's BEST GUESS at the {src} text in that bubble. Translate every entry
+into natural, punchy {target_lang} — correcting the guess against the page.
 {img_line}{_manga_context(target_lang, webtoon)}
 The ids are in reading order; treat them as one flowing conversation.
 
