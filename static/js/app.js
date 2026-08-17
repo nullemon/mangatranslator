@@ -1840,13 +1840,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
-        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer;pointer-events:none";   // see setHit()
         const pg = document.createElementNS(NS, "polygon");
         pg.setAttribute("points", cb.keep_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
         pg.setAttribute("fill", "none");
         pg.setAttribute("stroke", "#2563eb");
         pg.setAttribute("stroke-width", "0.6");
         pg.setAttribute("stroke-dasharray", "2 1.5");
+        pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
@@ -1857,13 +1858,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
-        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer;pointer-events:none";   // see setHit()
         const pg = document.createElementNS(NS, "polygon");
         pg.setAttribute("points", cb.restore_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
         pg.setAttribute("fill", "rgba(245,158,11,.14)");
         pg.setAttribute("stroke", "#f59e0b");
         pg.setAttribute("stroke-width", "0.5");
         pg.setAttribute("stroke-dasharray", "2 1.5");
+        pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
@@ -1887,7 +1889,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
-        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer;pointer-events:none";   // see setHit()
         const ln = document.createElementNS(NS, "line");
         ln.setAttribute("x1", cb.line[0][0] / W * 100);
         ln.setAttribute("y1", cb.line[0][1] / H * 100);
@@ -1895,7 +1897,16 @@ document.addEventListener("DOMContentLoaded", () => {
         ln.setAttribute("y2", cb.line[1][1] / H * 100);
         ln.setAttribute("stroke", "#06b6d4");
         ln.setAttribute("stroke-width", "0.7");
+        // A hairline is almost impossible to hit, so widen the CLICK target
+        // without changing how the line looks.
+        ln.style.pointerEvents = "stroke";
+        ln.setAttribute("stroke-linecap", "round");
+        const hit = ln.cloneNode();
+        hit.setAttribute("stroke", "transparent");
+        hit.setAttribute("stroke-width", "2.5");
+        hit.style.pointerEvents = "stroke";
         svg.appendChild(ln);
+        svg.appendChild(hit);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
         return;
@@ -1905,13 +1916,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
-        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer;pointer-events:none";   // see setHit()
         const pg = document.createElementNS(NS, "polygon");
         pg.setAttribute("points", cb.fill_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
         pg.setAttribute("fill", cb.tone ? "#64748b" : (cb.color || "#8b5cf6"));
         pg.setAttribute("fill-opacity", cb.tone ? ".55" : ".85");
         pg.setAttribute("stroke", "#8b5cf6");
         pg.setAttribute("stroke-width", "0.5");
+        pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
@@ -1922,12 +1934,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
-        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer;pointer-events:none";   // see setHit()
         const pg = document.createElementNS(NS, "polygon");
         pg.setAttribute("points", cb.poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
         pg.setAttribute("fill", "rgba(220,38,38,.18)");
         pg.setAttribute("stroke", "#dc2626");
         pg.setAttribute("stroke-width", "0.5");
+        pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
