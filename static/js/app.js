@@ -619,7 +619,7 @@ document.addEventListener("DOMContentLoaded", () => {
         uid: ++uidCounter, file, name: file.name, size: file.size,
         thumb: URL.createObjectURL(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
-        excluded: new Set(), erased: new Set(), glows: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
+        excluded: new Set(), erased: new Set(), glows: new Set(), fits: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
         cutRegions: [],
       });
     }
@@ -1136,6 +1136,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.erased = new Set();
             page.fontScales = {};
             page.glows = new Set();
+            page.fits = new Set();
             page.boxes = {};
             page.rev++;
             renderStrip(); updateBatch();
@@ -1340,6 +1341,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
           <button class="tl-vert${(page.rotations || {})[it.id] === -90 ? " on" : ""}" title="VERTICAL: set this text sideways, reading bottom-to-top (for tall single-column text). Click again for normal horizontal." data-id="${it.id}">↕</button>
+          <button class="tl-fit${page.fits && page.fits.has(String(it.id)) ? " on" : ""}" title="FIT THE BOX: grow this text until it properly fills its box (long words are hyphenated so one word can't keep everything tiny). Click again to go back to the normal fit." data-id="${it.id}">⤢</button>
           <button class="tl-glow${page.glows && page.glows.has(String(it.id)) ? " on" : ""}" title="Add a soft outer glow (match stylized/glowing original text)" data-id="${it.id}">✨</button>
           <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
           <button class="tl-x" title="${skipTitle}" data-id="${it.id}">✕</button>
@@ -1417,6 +1419,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (page.erased.has(id)) page.erased.delete(id);
         else { page.erased.add(id); page.excluded.delete(id); }
         buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-fit").forEach(btn => {
+      btn.addEventListener("click", () => {
+        pushUndo(page);
+        collectEdits(page);
+        const id = btn.dataset.id;
+        page.fits = page.fits || new Set();
+        if (page.fits.has(id)) page.fits.delete(id); else page.fits.add(id);
+        btn.classList.toggle("on");
       });
     });
     el.querySelectorAll(".tl-glow").forEach(btn => {
@@ -1537,7 +1549,7 @@ document.addEventListener("DOMContentLoaded", () => {
           raw_effect: !!page.rawEffect,
           raw_strength: rawStrength ? parseFloat(rawStrength.value) : 1.0,
           raw_style: rawStyle ? rawStyle.value : "photo",
-          glows: [...(page.glows || [])], edits,
+          glows: [...(page.glows || [])], fits: [...(page.fits || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
           boxes: page.boxes || {},
@@ -1581,6 +1593,9 @@ document.addEventListener("DOMContentLoaded", () => {
     "vert-add": "Drag a box over a TALL vertical text run — it's read & translated, and the English is set VERTICALLY (bottom-to-top). Edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
+    "tone-poly": "CLICK points around a hole in a toned area (click the first point again or Enter to close) — it's filled with matching screentone.",
+    clone: "Click a CLEAN patch of art to copy from, then click or drag over the damage to paint it in. Bracket keys [ ] change the brush size.",
+    line: "Click the START then the END of the line — it's redrawn straight. Shift keeps it horizontal/vertical; [ and ] change thickness.",
     "fill-poly": "CLICK points around the damaged area (click the first point again or press Enter to close, Esc cancels) — then pick the colour and it's flooded in.",
     restore: "Draw around a damaged spot — the ORIGINAL art comes back exactly as drawn (undoes content-aware cleaning there; original text returns too). Then Apply & Re-render.",
   };
@@ -1664,6 +1679,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function _snapshot(page) {
     return JSON.stringify({
       excluded: [...(page.excluded || [])], erased: [...(page.erased || [])],
+      fits: [...(page.fits || [])],
       glows: [...(page.glows || [])], offsets: page.offsets || {},
       colors: page.colors || {}, fontScales: page.fontScales || {},
       boxes: page.boxes || {}, covers: page.covers || [],
@@ -1675,6 +1691,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function _restore(page, str) {
     const s = JSON.parse(str);
     page.excluded = new Set(s.excluded); page.erased = new Set(s.erased);
+    page.fits = new Set(s.fits || []);
     page.glows = new Set(s.glows); page.offsets = s.offsets; page.colors = s.colors;
     page.fontScales = s.fontScales; page.boxes = s.boxes; page.covers = s.covers;
     page.rotations = s.rotations || {};
@@ -1752,6 +1769,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setTool(t) {
     tool = (tool === t) ? null : t;
+    // Let the stamp/line tools drop any half-finished state on a tool switch.
+    window.dispatchEvent(new CustomEvent("kaisuki:tool", { detail: tool }));
     toolBtns.forEach(b => {
       const on = b.dataset.tool === tool;
       b.classList.toggle("btn-primary", on);
@@ -1828,6 +1847,37 @@ document.addEventListener("DOMContentLoaded", () => {
         moveLayer.appendChild(svg);
         return;
       }
+      if (cb && cb.clone) {   // clone-stamp dab
+        const c = cb.clone;
+        const d = document.createElement("div");
+        d.className = "clone-dab";
+        d.style.left = ((c.dst[0] - c.r) / W * 100) + "%";
+        d.style.top = ((c.dst[1] - c.r) / H * 100) + "%";
+        d.style.width = (2 * c.r / W * 100) + "%";
+        d.style.height = (2 * c.r / H * 100) + "%";
+        d.title = "Clone dab — click to remove";
+        d.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        moveLayer.appendChild(d);
+        return;
+      }
+      if (cb && cb.line) {   // redrawn straight line
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        const ln = document.createElementNS(NS, "line");
+        ln.setAttribute("x1", cb.line[0][0] / W * 100);
+        ln.setAttribute("y1", cb.line[0][1] / H * 100);
+        ln.setAttribute("x2", cb.line[1][0] / W * 100);
+        ln.setAttribute("y2", cb.line[1][1] / H * 100);
+        ln.setAttribute("stroke", "#06b6d4");
+        ln.setAttribute("stroke-width", "0.7");
+        svg.appendChild(ln);
+        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        moveLayer.appendChild(svg);
+        return;
+      }
       if (cb && cb.fill_poly) {   // redraw / bucket fill
         const NS = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(NS, "svg");
@@ -1836,8 +1886,8 @@ document.addEventListener("DOMContentLoaded", () => {
         svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
         const pg = document.createElementNS(NS, "polygon");
         pg.setAttribute("points", cb.fill_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
-        pg.setAttribute("fill", cb.color || "#8b5cf6");
-        pg.setAttribute("fill-opacity", ".85");
+        pg.setAttribute("fill", cb.tone ? "#64748b" : (cb.color || "#8b5cf6"));
+        pg.setAttribute("fill-opacity", cb.tone ? ".55" : ".85");
         pg.setAttribute("stroke", "#8b5cf6");
         pg.setAttribute("stroke-width", "0.5");
         svg.appendChild(pg);
@@ -2207,6 +2257,139 @@ document.addEventListener("DOMContentLoaded", () => {
     moveLayer.addEventListener("pointercancel", finish);
   })();
 
+  /* ══ CLONE STAMP + LINE ══
+     Clone: first click sets the SOURCE, then every click/drag paints a patch
+     copied from there (the offset is locked on the first paint, so dragging
+     tracks the source the way a real clone brush does).
+     Line: click start, click end. */
+  (function initStampLine() {
+    let cloneSrc = null;        // [x,y] source point, image coords
+    let offset = null;          // [dx,dy] locked on the first paint
+    let painting = false;
+    let lineStart = null;
+    let brush = 34;             // radius, image px
+
+    function imgPt(e) {
+      const dims = curDims(); if (!dims) return null;
+      const [W, H] = dims;
+      const r = moveLayer.getBoundingClientRect();
+      return [Math.round((e.clientX - r.left) / r.width * W),
+              Math.round((e.clientY - r.top) / r.height * H)];
+    }
+
+    function stamp(page, at) {
+      if (!cloneSrc) return;
+      if (!offset) offset = [at[0] - cloneSrc[0], at[1] - cloneSrc[1]];
+      page.covers = page.covers || [];
+      page.covers.push({ clone: { src: [at[0] - offset[0], at[1] - offset[1]],
+                                  dst: at, r: brush } });
+    }
+
+    moveLayer.addEventListener("pointerdown", e => {
+      if (tool !== "clone" && tool !== "line") return;
+      if (e.target !== moveLayer) return;
+      const page = getActive(); const p = imgPt(e);
+      if (!page || !p) return;
+
+      if (tool === "line") {
+        if (!lineStart) {
+          lineStart = p;
+          editHint.textContent = "Now click where the line should END.";
+          return;
+        }
+        let end = p.slice();
+        if (e.shiftKey) {           // snap to horizontal / vertical
+          if (Math.abs(end[0] - lineStart[0]) > Math.abs(end[1] - lineStart[1]))
+            end[1] = lineStart[1];
+          else end[0] = lineStart[0];
+        }
+        pushUndo(page);
+        page.covers = page.covers || [];
+        page.covers.push({ line: [lineStart, end], width: lineWidth(),
+                           color: lineColour(page, lineStart) });
+        lineStart = null;
+        buildOverlay();
+        editHint.textContent = "Line added — hit Apply & Re-render.";
+        return;
+      }
+
+      // CLONE
+      if (!cloneSrc || e.altKey) {
+        cloneSrc = p; offset = null;
+        editHint.textContent = "Source set. Now click/drag over the damage to paint it in.";
+        buildOverlay();
+        return;
+      }
+      pushUndo(page);
+      painting = true;
+      stamp(page, p);
+      try { moveLayer.setPointerCapture(e.pointerId); } catch (_) {}
+      buildOverlay();
+    });
+
+    moveLayer.addEventListener("pointermove", e => {
+      if (!painting || tool !== "clone") return;
+      const page = getActive(); const p = imgPt(e);
+      if (!page || !p) return;
+      // Space the dabs out so a drag doesn't queue hundreds of covers.
+      const last = (page.covers || []).filter(c => c && c.clone).pop();
+      if (last && Math.hypot(last.clone.dst[0] - p[0],
+                             last.clone.dst[1] - p[1]) < brush * 0.5) return;
+      stamp(page, p);
+      buildOverlay();
+    });
+
+    const endPaint = e => {
+      if (!painting) return;
+      painting = false;
+      try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
+      editHint.textContent = "Painted — hit Apply & Re-render (Alt-click to pick a new source).";
+    };
+    moveLayer.addEventListener("pointerup", endPaint);
+    moveLayer.addEventListener("pointercancel", endPaint);
+
+    document.addEventListener("keydown", e => {
+      if (tool === "line") {
+        if (e.key === "[") { lastWidth = Math.max(1, lastWidth - 1); editHint.textContent = `Line thickness ${lastWidth}px`; }
+        if (e.key === "]") { lastWidth = Math.min(80, lastWidth + 1); editHint.textContent = `Line thickness ${lastWidth}px`; }
+        if (e.key === "Escape") { lineStart = null; editHint.textContent = HINTS.line; }
+        return;
+      }
+      if (tool !== "clone") return;
+      if (e.key === "[") { brush = Math.max(6, brush - 6); editHint.textContent = `Brush ${brush}px`; }
+      if (e.key === "]") { brush = Math.min(200, brush + 6); editHint.textContent = `Brush ${brush}px`; }
+      if (e.key === "Escape") { cloneSrc = null; offset = null; buildOverlay(); }
+    });
+
+    // Reset the tools' state whenever the active tool changes.
+    window.addEventListener("kaisuki:tool", () => {
+      cloneSrc = null; offset = null; painting = false; lineStart = null;
+    });
+
+    let lastWidth = 5;
+    function lineWidth() { return lastWidth; }
+
+    function lineColour(page, at) {
+      // The user clicks where the border is MISSING, so sampling that exact
+      // pixel returns the blank they want to cover. Judge the SURROUNDINGS
+      // instead: ink on a light page is black, on a dark panel it's white.
+      let sum = 0, n = 0;
+      for (let dx = -18; dx <= 18; dx += 6) {
+        for (let dy = -18; dy <= 18; dy += 6) {
+          const c = pixelAt(at[0] + dx, at[1] + dy);
+          if (!c) continue;
+          sum += parseInt(c.slice(1, 3), 16) + parseInt(c.slice(3, 5), 16)
+               + parseInt(c.slice(5, 7), 16);
+          n++;
+        }
+      }
+      const mean = n ? sum / (3 * n) : 255;
+      return mean < 110 ? "#ffffff" : "#000000";
+    }
+
+    window.__cloneSrc = () => cloneSrc;
+  })();
+
   /* free-form lasso erase surface */
   (function initLasso() {
     const NS = "http://www.w3.org/2000/svg";
@@ -2319,7 +2502,7 @@ document.addEventListener("DOMContentLoaded", () => {
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
         line = document.createElementNS(NS, "polyline");
-        const fm = tool === "fill-poly";
+        const fm = tool === "fill-poly" || tool === "tone-poly";
         line.setAttribute("fill", fm ? "rgba(139,92,246,.16)" : "rgba(22,163,74,.12)");
         line.setAttribute("stroke", fm ? "#8b5cf6" : "#16a34a");
         line.setAttribute("stroke-width", "0.15");
@@ -2339,6 +2522,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function finish() {
       const page = getActive(), dims = curDims();
       const fillMode = tool === "fill-poly";
+      const toneMode = tool === "tone-poly";
       const myPts = pts;
       reset();
       if (!page || !dims || myPts.length < 3) return;
@@ -2349,6 +2533,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const x = Math.min(...xs), y = Math.min(...ys);
       const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
       page.covers = page.covers || [];
+      if (toneMode) {
+        // Screentone patch: density is measured from the art around it.
+        page.covers.push({ fill_poly: polyImg, tone: true });
+        buildOverlay();
+        editHint.textContent = "Tone patch outlined — hit Apply & Re-render.";
+        return;
+      }
       if (fillMode) {
         // Redraw: ask which colour to flood the shape with (pre-sampled from
         // the art just outside it), then store it as a fill cover.
@@ -2372,7 +2563,8 @@ document.addEventListener("DOMContentLoaded", () => {
         } else { _eyedrop(null); }
         return;
       }
-      if ((tool !== "pen-add" && tool !== "fill-poly") || e.target !== moveLayer) return;
+      if ((tool !== "pen-add" && tool !== "fill-poly" && tool !== "tone-poly")
+          || e.target !== moveLayer) return;
       const page = getActive(); if (!page || !curDims()) return;
       if (svg && !svg.isConnected) reset();   // overlay was rebuilt — stale points
       const r = moveLayer.getBoundingClientRect();
@@ -2386,10 +2578,12 @@ document.addEventListener("DOMContentLoaded", () => {
       redraw();
     });
     moveLayer.addEventListener("dblclick", () => {
-      if ((tool === "pen-add" || tool === "fill-poly") && pts.length >= 3) finish();
+      if ((tool === "pen-add" || tool === "fill-poly" || tool === "tone-poly")
+          && pts.length >= 3) finish();
     });
     document.addEventListener("keydown", e => {
-      if ((tool !== "pen-add" && tool !== "fill-poly") || !pts.length) return;
+      if ((tool !== "pen-add" && tool !== "fill-poly" && tool !== "tone-poly")
+          || !pts.length) return;
       if (e.key === "Enter") { e.preventDefault(); finish(); }
       if (e.key === "Escape") reset();
     });
@@ -2811,7 +3005,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
-      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.glows = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+      p.items = []; p.excluded = new Set(); p.erased = new Set(); p.glows = new Set(); p.fits = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

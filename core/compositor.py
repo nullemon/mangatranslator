@@ -164,12 +164,34 @@ class Compositor:
         # Manual cover/erase regions the user drew to wipe leftover or
         # untranslated text. Erase them before placing anything else.
         for cb in (covers or []):
+            # Clone stamp: {"clone": {"src":[x,y], "dst":[x,y], "r":40}} — copy
+            # a circular patch of art from one place to another. The right
+            # repair for TEXTURED damage (screentone, hatching), where a flat
+            # colour fill reads as an obvious patch.
+            if isinstance(cb, dict) and cb.get("clone"):
+                touched = self._clone_patch(result, cb["clone"])
+                if touched:
+                    edited_rects.append(touched)
+                continue
+            # Straight line: {"line": [[x1,y1],[x2,y2]], "width": 6,
+            # "color": "#000000"} — redraw a panel border the cleaner ate.
+            if isinstance(cb, dict) and cb.get("line"):
+                touched = self._draw_line(result, cb["line"],
+                                          cb.get("width"), cb.get("color"))
+                if touched:
+                    edited_rects.append(touched)
+                continue
             # Redraw / bucket fill: {"fill_poly": [[x,y],...], "color": "#rrggbb"}
             # — flood the outlined shape with a flat colour (normally sampled
             # from the surrounding art) to rebuild a background the cleaner
             # damaged. Painted BEFORE any text so a translation can sit on top.
             if isinstance(cb, dict) and cb.get("fill_poly"):
-                touched = self._fill_poly(result, cb["fill_poly"], cb.get("color"))
+                if cb.get("tone"):
+                    touched = self._tone_poly(result, cb["fill_poly"],
+                                              cb.get("density"))
+                else:
+                    touched = self._fill_poly(result, cb["fill_poly"],
+                                              cb.get("color"))
                 if touched:
                     edited_rects.append(touched)
                 continue
@@ -221,7 +243,8 @@ class Compositor:
                         dark = self._is_dark_region(gray, cx, cy, cw, ch)
                         color = (255, 255, 255) if dark else (0, 0, 0)
                         placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
-                                           color, False, 0, self._item_scale(it), False))
+                                           color, False, 0, self._item_scale(it),
+                                           False, False))
                         it["placed"] = True
                 continue
 
@@ -254,7 +277,8 @@ class Compositor:
                                 whh_ = wh_cap
                             placements.append(((wx_, wy_, ww_, whh_),
                                                " ".join(self.watermark_text.split()),
-                                               self._pick_color(dark, it), False, 0, 1.0, True))
+                                               self._pick_color(dark, it), False, 0, 1.0,
+                                               True, False))
                             used_boxes.append((int(wx_), int(wy_), int(ww_), int(whh_)))
                         it["placed"] = True
                 continue
@@ -320,7 +344,7 @@ class Compositor:
                 mglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), mglow))
+                               self._item_scale(it), mglow, bool(it.get("fit_box"))))
                 it["placed"] = True
                 continue
 
@@ -355,7 +379,8 @@ class Compositor:
                              or (cap is not None and cap[4]))
                     placements.append((offset_rect(it, rect),
                                        " ".join(text.split()), color, ital, 0,
-                                       self._item_scale(it), tglow))
+                                       self._item_scale(it), tglow,
+                                       bool(it.get("fit_box"))))
                     it["placed"] = True
                     continue
                 # Better tilt logic: when the detector called this horizontal
@@ -448,7 +473,7 @@ class Compositor:
                 fglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), fglow))
+                               self._item_scale(it), fglow, bool(it.get("fit_box"))))
                 it["placed"] = True
                 continue
 
@@ -560,23 +585,25 @@ class Compositor:
             color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color, ital,
                                rotation if it.get("manual_rot") else 0,
-                               self._item_scale(it), fglow or self._item_glow(it)))
+                               self._item_scale(it), fglow or self._item_glow(it),
+                               bool(it.get("fit_box"))))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
         # AI box can push one past the edge, which is how text ended up out of
         # bounds. Clamp every rect to the page before anything is drawn.
         placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl)
-            for r, t, c, i, ro, fs, gl in placements
+            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb)
+            for r, t, c, i, ro, fs, gl, fb in placements
         ]
         placements = [p for p in placements if p[0] is not None]
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale, glow in placements:
+            for rect, text, color, ital, rot, fscale, glow, fit in placements:
                 self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
-                                           rotation=rot, scale=fscale, glow=glow)
+                                           rotation=rot, scale=fscale, glow=glow,
+                                           fit_box=fit)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         # Hard guarantee: only the exact regions we edited may differ from the
@@ -584,7 +611,7 @@ class Compositor:
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
         placement_rects = []
-        for rect, text, color, ital, rot, fscale, glow in placements:
+        for rect, text, color, ital, rot, fscale, glow, fit in placements:
             placement_rects.append(self._rotated_aabb(rect, rot))
 
         edited = np.zeros((h, w), np.uint8)
@@ -772,6 +799,130 @@ class Compositor:
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 <= x0 or y1 <= y0:
             return None
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def _clone_patch(self, result, spec):
+        """Clone-stamp: copy a soft-edged circular patch of art from `src` to
+        `dst`. Feathered at the rim so the graft blends instead of showing a
+        hard disc, which is what makes it usable on screentone and hatching
+        where a flat fill would read as a patch."""
+        try:
+            sx, sy = (int(v) for v in spec.get("src", (0, 0)))
+            dx, dy = (int(v) for v in spec.get("dst", (0, 0)))
+            rad = int(spec.get("r", 30))
+        except (TypeError, ValueError):
+            return None
+        rad = int(np.clip(rad, 3, 400))
+        H, W = result.shape[:2]
+        # Overlapping windows, clipped to the page on BOTH sides so a stamp
+        # near an edge copies the part that exists instead of erroring.
+        x0s, y0s = sx - rad, sy - rad
+        x0d, y0d = dx - rad, dy - rad
+        ox0 = max(0, -x0s, -x0d)
+        oy0 = max(0, -y0s, -y0d)
+        ox1 = min(2 * rad, W - x0s, W - x0d)
+        oy1 = min(2 * rad, H - y0s, H - y0d)
+        if ox1 - ox0 < 2 or oy1 - oy0 < 2:
+            return None
+        src = result[y0s + oy0:y0s + oy1, x0s + ox0:x0s + ox1]
+        dst = result[y0d + oy0:y0d + oy1, x0d + ox0:x0d + ox1]
+        if src.shape != dst.shape or src.size == 0:
+            return None
+
+        # Feathered circular alpha centred on the patch.
+        yy, xx = np.mgrid[oy0:oy1, ox0:ox1]
+        d = np.sqrt((xx - rad) ** 2 + (yy - rad) ** 2)
+        feather = max(2.0, rad * 0.25)
+        a = np.clip((rad - d) / feather, 0.0, 1.0)[..., None]
+        dst[:] = (dst * (1 - a) + src * a).astype(np.uint8)
+        return (x0d + ox0, y0d + oy0, ox1 - ox0, oy1 - oy0)
+
+    def _draw_line(self, result, pts, width=None, color=None):
+        """Redraw a straight line — panel borders and rules that cleaning ate.
+        Anti-aliased so it matches the printed art rather than looking digital."""
+        try:
+            (x1, y1), (x2, y2) = [[int(v) for v in p] for p in pts[:2]]
+        except (TypeError, ValueError, IndexError):
+            return None
+        w = int(np.clip(int(width or 4), 1, 80))
+        bgr = self._parse_color(color, (0, 0, 0))
+        cv2.line(result, (x1, y1), (x2, y2), bgr, w, lineType=cv2.LINE_AA)
+        H, W = result.shape[:2]
+        pad = w + 2
+        rx0 = max(0, min(x1, x2) - pad)
+        ry0 = max(0, min(y1, y2) - pad)
+        rx1 = min(W, max(x1, x2) + pad)
+        ry1 = min(H, max(y1, y2) + pad)
+        if rx1 <= rx0 or ry1 <= ry0:
+            return None
+        return (rx0, ry0, rx1 - rx0, ry1 - ry0)
+
+    def _tone_poly(self, result, pts, density=None):
+        """Fill an outline with SCREENTONE instead of a flat colour: a regular
+        dot grid whose spacing, dot size and two tones are measured from the
+        art immediately around the shape. On a toned background a flat fill is
+        an obvious patch; a matched dot field disappears into it."""
+        H, W = result.shape[:2]
+        try:
+            poly = np.array([[int(p[0]), int(p[1])] for p in pts], np.int32)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if len(poly) < 3:
+            return None
+        mask = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(mask, [poly], 255)
+        if cv2.countNonZero(mask) == 0:
+            return None
+
+        # Sample a band around the shape and split it into ink vs paper, which
+        # gives both tone colours and how much of the field is ink.
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (41, 41))
+        ring = cv2.subtract(cv2.dilate(mask, k), mask)
+        vals = result[ring > 0]
+        if vals.size == 0:
+            return self._fill_poly(result, pts, None)
+        lum = (0.114 * vals[:, 0] + 0.587 * vals[:, 1] + 0.299 * vals[:, 2])
+        thr = float(np.median(lum))
+        dark_px = vals[lum <= thr]
+        light_px = vals[lum > thr]
+        ink = (tuple(int(v) for v in np.median(dark_px, axis=0))
+               if dark_px.size else (0, 0, 0))
+        paper = (tuple(int(v) for v in np.median(light_px, axis=0))
+                 if light_px.size else (255, 255, 255))
+        # Coverage: how much of the surrounding field is actually ink.
+        if density is None:
+            frac = float((lum <= (thr + np.ptp(lum) * 0.0)).mean())
+            frac = float(np.clip((lum < (float(np.mean(lum)) - 6)).mean(), 0.05, 0.85))
+        else:
+            frac = float(np.clip(float(density), 0.02, 0.95))
+
+        step = 6                              # dot pitch in px (typical tone)
+        # dot radius from the coverage: area frac = pi r^2 / step^2
+        rad = max(0.6, min(step / 2.0 - 0.2, np.sqrt(frac * step * step / np.pi)))
+        x, y, bw, bh = cv2.boundingRect(poly)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + bw), min(H, y + bh)
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        # Build the tone at 4x and downsample: gives smooth, printed-looking
+        # dots instead of hard aliased blobs.
+        S = 4
+        tile = np.zeros(((y1 - y0) * S, (x1 - x0) * S, 3), np.uint8)
+        tile[:] = paper
+        for gy in range(y0 - (y0 % step), y1 + step, step):
+            for gx in range(x0 - (x0 % step), x1 + step, step):
+                # offset every other row — the standard staggered tone grid
+                ox = (step // 2) if ((gy // step) % 2) else 0
+                cx, cy = (gx + ox - x0) * S, (gy - y0) * S
+                if -step * S <= cx <= tile.shape[1] + step * S and \
+                   -step * S <= cy <= tile.shape[0] + step * S:
+                    cv2.circle(tile, (int(cx), int(cy)), max(1, int(rad * S)),
+                               ink, -1, lineType=cv2.LINE_AA)
+        tone = cv2.resize(tile, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
+
+        sub_mask = mask[y0:y1, x0:x1] > 0
+        result[y0:y1, x0:x1][sub_mask] = tone[sub_mask]
         return (x0, y0, x1 - x0, y1 - y0)
 
     def _inpaint_poly(self, result, pts):

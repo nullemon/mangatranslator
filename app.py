@@ -1424,6 +1424,10 @@ async def rerender(task_id: str, request: Request):
     excluded = {str(i) for i in payload.get("excluded", [])}
     erased = {str(i) for i in payload.get("erased", [])}
     glows = {str(i) for i in payload.get("glows", [])}
+    # "Fit box": grow this region's text until it really fills its box,
+    # hyphenating a word too long for the column instead of letting that one
+    # word cap the whole block. Opt-in per region.
+    fits = {str(i) for i in payload.get("fits", [])}
     raw_effect = bool(payload.get("raw_effect", False))
     try:
         raw_strength = float(payload.get("raw_strength", 1.0))
@@ -1495,6 +1499,7 @@ async def rerender(task_id: str, request: Request):
             "manual_rot": nid in rotations,
             "font_scale": _scale(nid),
             "glow": nid in glows,
+            "fit_box": nid in fits,
             # A box the user resized by hand is authoritative — the compositor
             # must use it as-is (erase + fit text to it), not re-shrink it.
             "manual_box": nid in boxes,
@@ -1538,6 +1543,7 @@ async def rerender(task_id: str, request: Request):
             "manual_rot": aid in rotations,
             "color": colors.get(aid, "auto"),
             "font_scale": _scale(aid),
+            "fit_box": aid in fits,
         })
 
     all_items = items + added

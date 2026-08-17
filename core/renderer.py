@@ -43,6 +43,9 @@ class TextRenderer:
         self._reshape_text = False             # True when we pre-shape (no raqm)
         self._mix = False                      # True = per-glyph font fallback (LTR)
         self._size_scale = 1.0                 # per-region font-size multiplier
+        # "Fit box": allow splitting a word that is too long for the column, so
+        # one unbreakable token stops capping the whole block's size.
+        self._break_words = False
 
     def _find_font(self) -> Optional[str]:
         for p in self.FONT_CANDIDATES:
@@ -252,7 +255,7 @@ class TextRenderer:
         return self.draw_in_rect(image, region.bbox, text, (0, 0, 0))
 
     def _draw_with_glow(self, image, rect, text, color, italic, rotation, scale,
-                        glow_color=(255, 255, 255)):
+                        fit_box=False, glow_color=(255, 255, 255)):
         """Draw the text with a soft outer halo behind it — for stylized lines
         (e.g. glowing Japanese narration). The text is rendered to a transparent
         layer, a blurred halo is built from its shape and painted under it, then
@@ -262,7 +265,8 @@ class TextRenderer:
         if color is not None and sum(color[:3]) >= 384:
             glow_color = (18, 18, 18)
         layer = Image.new("RGBA", (image.width, image.height), (0, 0, 0, 0))
-        self.draw_in_rect(layer, rect, text, color, italic, rotation, scale, glow=False)
+        self.draw_in_rect(layer, rect, text, color, italic, rotation, scale,
+                          glow=False, fit_box=fit_box)
         alpha = layer.split()[3]
         if not alpha.getbbox():          # nothing drawn
             return image
@@ -290,6 +294,7 @@ class TextRenderer:
         rotation: float = 0,
         scale: float = 1.0,
         glow: bool = False,
+        fit_box: bool = False,
     ) -> Image.Image:
         """Fit `text` (wrapped, auto-sized, centered) inside `rect`.
 
@@ -305,7 +310,8 @@ class TextRenderer:
         `glow` adds a soft outer halo behind the text (to match stylized
         Japanese narration that has an outer glow) — opt-in, for rare lines."""
         if glow:
-            return self._draw_with_glow(image, rect, text, color, italic, rotation, scale)
+            return self._draw_with_glow(image, rect, text, color, italic,
+                                        rotation, scale, fit_box)
         if self.uppercase:
             text = text.upper()
         text = self._normalize_text(text)
@@ -314,7 +320,9 @@ class TextRenderer:
         prev_font = self._active_font_path
         prev_dir, prev_reshape, prev_mix = self._draw_dir, self._reshape_text, self._mix
         prev_scale = self._size_scale
+        prev_break = self._break_words
         self._size_scale = max(0.4, min(float(scale or 1.0), 3.0))
+        self._break_words = bool(fit_box)
         rtl = self._is_rtl(text)
         if rtl:
             # Right-to-left text must be shaped + reordered as one run, so pick a
@@ -338,6 +346,7 @@ class TextRenderer:
             self._active_font_path = prev_font
             self._draw_dir, self._reshape_text, self._mix = prev_dir, prev_reshape, prev_mix
             self._size_scale = prev_scale
+            self._break_words = prev_break
 
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
@@ -431,7 +440,8 @@ class TextRenderer:
 
         tmp = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
         self.draw_in_rect(tmp, (0, 0, rw, rh), text, color, italic=italic,
-                          rotation=0, scale=self._size_scale)
+                          rotation=0, scale=self._size_scale,
+                          fit_box=self._break_words)
 
         rotated = tmp.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
 
@@ -582,10 +592,36 @@ class TextRenderer:
             test = f"{current} {word}".strip() if current else word
             if self._line_w(draw, test, font) <= max_w:
                 current = test
-            else:
-                if current:
-                    lines.append(current)
-                current = word
+                continue
+            if current:
+                lines.append(current)
+            current = word
+            # A single word wider than the column is what normally pins the
+            # whole block to a tiny size. In fit-box mode, hyphenate it.
+            if self._break_words and self._line_w(draw, word, font) > max_w:
+                for piece in self._split_word(word, font, max_w, draw):
+                    lines.append(piece)
+                current = lines.pop() if lines else ""
         if current:
             lines.append(current)
         return lines if lines else [" ".join(words)]
+
+    def _split_word(self, word, font, max_w, draw) -> List[str]:
+        """Break one over-long word into hyphenated chunks that each fit
+        `max_w`. The hyphen is measured as part of the chunk, so the result
+        really does fit — no chunk is ever emitted empty (that would loop)."""
+        out, rest = [], word
+        while rest and self._line_w(draw, rest, font) > max_w:
+            take = 0
+            for n in range(1, len(rest)):
+                if self._line_w(draw, rest[:n] + "-", font) <= max_w:
+                    take = n
+                else:
+                    break
+            if take < 1:                      # column narrower than one glyph
+                take = 1
+            out.append(rest[:take] + "-")
+            rest = rest[take:]
+        if rest:
+            out.append(rest)
+        return out or [word]

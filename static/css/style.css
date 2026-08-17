@@ -441,9 +441,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-fsb{background:transparent;border:1px solid var(--border);color:var(--text-faint);min-width:24px;height:25px;border-radius:6px;cursor:pointer;font-size:.72rem;line-height:1;transition:.15s}
 .tl-fsb:hover{border-color:var(--accent);color:var(--accent)}
 .tl-fsv{font-size:.7rem;color:var(--text-faint);min-width:30px;text-align:center}
-.tl-vert,.tl-glow{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
-.tl-vert:hover,.tl-glow:hover{border-color:var(--accent);color:var(--accent)}
-.tl-vert.on,.tl-glow.on{border-color:var(--accent);color:var(--accent);background:var(--ring)}
+.tl-fit,.tl-vert,.tl-glow{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
+.tl-fit:hover,.tl-vert:hover,.tl-glow:hover{border-color:var(--accent);color:var(--accent)}
+.tl-fit.on,.tl-vert.on,.tl-glow.on{border-color:var(--accent);color:var(--accent);background:var(--ring)}
 .tl-erase{margin-left:.35rem;background:transparent;border:1px solid var(--border);color:var(--text-faint);width:25px;height:25px;border-radius:6px;cursor:pointer;font-size:.8rem;line-height:1;transition:.15s}
 .tl-erase:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tl-erase.on{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
@@ -596,3 +596,6 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   font-family:ui-monospace,monospace;font-size:.85rem}
 .fill-row input[type=text]:focus{outline:none;border-color:var(--accent)}
 .fill-foot{display:flex;align-items:center;gap:.45rem;margin-top:.8rem}
+.clone-dab{position:absolute;border:1px dashed #06b6d4;border-radius:50%;
+  background:rgba(6,182,212,.12);z-index:4;cursor:pointer}
+.clone-dab:hover{background:rgba(6,182,212,.25)}
