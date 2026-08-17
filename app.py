@@ -516,8 +516,16 @@ async def translate(
     from core.gpu_throttle import set_cap as _set_gpu_cap
     _set_gpu_cap(gpu_cap)
     is_clean = clean_only == "true"
-    if not is_clean and not api_key:
+    is_offline = provider.strip().lower() in ("local", "offline")
+    if not is_clean and not is_offline and not api_key:
         raise HTTPException(400, "api_key is required to translate")
+    if is_offline and smart_mode == "true":
+        # Smart Detection is a vision-model feature; offline uses the local
+        # balloon detector + manga-ocr instead. Fall back silently rather
+        # than failing the run.
+        print("[translate] offline engine: Smart Detection not available, "
+              "using the local detectors")
+        smart_mode = "false"
 
     # Trained series profile: fold the learned glossary + house style into the
     # style instructions so this chapter matches the team's established style.
@@ -1827,7 +1835,7 @@ async def ocr_translate(task_id: str, request: Request):
 
     if not bbox or len(bbox) != 4:
         raise HTTPException(400, "bbox must be [x, y, w, h]")
-    if not api_key:
+    if not api_key and provider not in ("local", "offline"):
         raise HTTPException(400, "api_key is required")
 
     x, y, w, h = [int(v) for v in bbox]
@@ -1911,7 +1919,7 @@ async def retranslate_ordered(task_id: str, request: Request):
     api_key = payload.get("api_key", "")
     if not items:
         raise HTTPException(400, "No items to re-translate")
-    if not api_key:
+    if not api_key and payload.get("provider") not in ("local", "offline"):
         raise HTTPException(400, "api_key is required")
 
     provider = payload.get("provider", "claude")
@@ -1953,7 +1961,10 @@ async def retranslate_ordered(task_id: str, request: Request):
         return res
 
     loop = asyncio.get_event_loop()
-    translations = await loop.run_in_executor(None, work)
+    try:
+        translations = await loop.run_in_executor(None, work)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
     return {"translations": translations, "count": len(translations)}
 
 
@@ -1974,7 +1985,7 @@ async def translate_text(request: Request):
     api_key = payload.get("api_key", "")
     if not text:
         raise HTTPException(400, "Type some text to translate")
-    if not api_key:
+    if not api_key and payload.get("provider") not in ("local", "offline"):
         raise HTTPException(400, "api_key is required")
 
     provider = payload.get("provider", "claude")
@@ -1993,7 +2004,12 @@ async def translate_text(request: Request):
                 "translation": (entry.get("translation") or "").strip()}
 
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, work)
+    try:
+        return await loop.run_in_executor(None, work)
+    except RuntimeError as e:
+        # e.g. the offline model isn't downloaded yet — that message is written
+        # for the user, so show it instead of a bare 500.
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/wm-preview")

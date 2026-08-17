@@ -23,6 +23,10 @@ Usage:
   python setup_models.py --gpu      # NVIDIA CUDA builds (Windows/Linux)
   python setup_models.py --check    # only report what's present / missing
   python setup_models.py --dry-run  # print the commands without running
+  python setup_models.py --offline-translate
+                                    # also fetch the OFFLINE translation model
+                                    # (~300MB) so pages translate on this PC
+                                    # with no API key and no internet
 """
 import importlib.util
 import os
@@ -33,6 +37,7 @@ import sys
 CHECK = "--check" in sys.argv
 DRY = "--dry-run" in sys.argv
 GPU = "--gpu" in sys.argv
+OFFLINE_MT = "--offline-translate" in sys.argv
 IS_MAC = platform.system() == "Darwin"
 
 MODULES = {
@@ -146,6 +151,25 @@ def main():
     except Exception as e:
         print(f"  [--] balloon model: {e}")
     print("  (manga-ocr and LaMa download themselves on first use)")
+
+    if OFFLINE_MT:
+        print("\nOffline translation model (no API key, no internet)...")
+        pip(["sentencepiece", "sacremoses"])
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from core.local_mt import get, model_id_for
+            for lang in ("Japanese", "Korean"):
+                mid = model_id_for(lang)
+                print(f"  -> {lang}: {mid}")
+                if get(lang) is None:
+                    print(f"  [--] {lang} pack failed — retry, or use an API engine")
+                else:
+                    print(f"  [ok] {lang} pack ready")
+        except Exception as e:
+            print(f"  [--] offline translation setup failed: {e}")
+    else:
+        print("\nTip: add --offline-translate to also download the on-device")
+        print("     translation model (no API key, no internet, much faster).")
 
     print("\nDone." if steps_ok else
           "\nFinished with some failures — re-run, or check your internet "

@@ -377,6 +377,92 @@ _GEMINI_RETIRED = {
 }
 
 
+class LocalTranslator:
+    """Offline backend: the downloaded model translates text on your own GPU.
+
+    It handles the text paths (which is all the standard pipeline needs:
+    balloons are found by the segmentation model and read by manga-ocr, so
+    only the READING has to be translated). The vision-only paths — Smart
+    Detection and the AI free-text finder — have no local equivalent, so they
+    report as unavailable and the pipeline uses its local detectors instead.
+    """
+
+    def __init__(self, api_key: str = "", model: str = "", style: str = "",
+                 source_lang: str = "Japanese", translate_sfx: bool = False,
+                 webtoon: bool = False):
+        self.model = model or "offline"
+        self.style = (style or "").strip()
+        self.source_lang = source_lang or "Japanese"
+        self.translate_sfx = bool(translate_sfx)
+        self.webtoon = bool(webtoon)
+        self.on_wait = None
+
+    # -- the one that matters: bubble readings -> English ----------------
+    def translate_texts(self, id_to_text: dict, target_lang="English",
+                        image=None) -> Dict[int, dict]:
+        from . import local_mt
+        mt = local_mt.get(self.source_lang)
+        if mt is None:
+            raise RuntimeError(
+                "The offline translation model isn't installed. Run "
+                "`python setup_models.py --offline-translate`, or pick "
+                "Gemini/Claude as the engine.")
+        keys = list(id_to_text.keys())
+        outs = mt.translate_many([str(id_to_text[k]) for k in keys])
+        result = {}
+        for k, tr in zip(keys, outs):
+            try:
+                rid = int(k)
+            except (TypeError, ValueError):
+                continue
+            result[rid] = {"original": str(id_to_text[k]),
+                           "translation": tr, "type": "dialogue"}
+        return result
+
+    def translate_crop(self, image, target_lang="English") -> dict:
+        """Manual add / point-select: read the crop locally, then translate.
+        Keeps the editor's add tools working with no network."""
+        from .ocr import MangaOCR, _has_source_text
+        from . import local_mt
+        original = ""
+        try:
+            ocr = MangaOCR()
+            if ocr.ok:
+                import cv2
+                padded = cv2.copyMakeBorder(image, 12, 12, 12, 12,
+                                            cv2.BORDER_CONSTANT,
+                                            value=(255, 255, 255))
+                original = ocr.read(padded) or ""
+        except Exception as e:
+            print(f"[local-mt] crop OCR failed: {e}")
+        if not original or not _has_source_text(original, self.source_lang):
+            return {"original": original, "translation": ""}
+        mt = local_mt.get(self.source_lang)
+        if mt is None:
+            return {"original": original, "translation": ""}
+        return {"original": original, "translation": mt.translate_one(original)}
+
+    # -- vision-only paths: no local equivalent --------------------------
+    def _no_vision(self, what):
+        raise RuntimeError(
+            f"{what} needs a vision model. Offline mode uses the local "
+            f"balloon detector and manga-ocr instead — leave Smart Detection "
+            f"off, or switch the engine to Gemini/Claude.")
+
+    def smart_detect_and_translate(self, image, target_lang="English") -> List[dict]:
+        self._no_vision("Smart Detection")
+
+    def detect_free_text(self, image, target_lang="English", bubble_ids=None) -> List[dict]:
+        return []            # CRAFT + manga-ocr cover this locally
+
+    def translate_regions(self, original, annotated, num_regions,
+                          target_lang="English") -> Dict[int, dict]:
+        self._no_vision("Annotated-page translation")
+
+    def analyze_pages(self, images, target_lang="English") -> dict:
+        self._no_vision("Style training")
+
+
 def make_translator(provider: str, api_key: str, model: str = "", style: str = "",
                     source_lang: str = "Japanese", translate_sfx: bool = False,
                     webtoon: bool = False):
@@ -390,6 +476,11 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
         return ClaudeTranslator(api_key, model, style=style,
                                 source_lang=source_lang, translate_sfx=translate_sfx,
                                 webtoon=webtoon)
+
+    if provider in ("local", "offline"):
+        return LocalTranslator(api_key, model, style=style,
+                               source_lang=source_lang,
+                               translate_sfx=translate_sfx, webtoon=webtoon)
 
     if provider in ("gemini", "google"):
         if not model or model.startswith("claude"):

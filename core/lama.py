@@ -1,6 +1,10 @@
 """Local GPU inpainting (LaMa) for clean text removal over artwork and
 screentones — far better than OpenCV inpaint. Optional: if not installed,
-`ok` is False and callers fall back to cv2.inpaint."""
+`ok` is False and callers fall back to cv2.inpaint.
+
+The weights download ONCE into torch's hub cache and are reused forever
+after; loading them again later is a disk read, not a download."""
+import os
 import cv2
 import numpy as np
 from PIL import Image
@@ -21,13 +25,44 @@ class LamaInpaint:
             return True
         return self._load()
 
+    @staticmethod
+    def weights_path():
+        """Where the LaMa weights live once downloaded.
+
+        simple-lama-inpainting keeps them in torch's hub cache, so the ~200MB
+        download happens ONCE and every later start just reads the file. Set
+        TORCH_HOME to move that cache somewhere else."""
+        try:
+            import torch
+            return os.path.join(torch.hub.get_dir(), "checkpoints", "big-lama.pt")
+        except Exception:
+            return os.path.join(os.path.expanduser("~"), ".cache", "torch",
+                                "hub", "checkpoints", "big-lama.pt")
+
+    @classmethod
+    def cached(cls) -> bool:
+        """True when the weights are already on disk (no download needed)."""
+        try:
+            p = cls.weights_path()
+            return os.path.exists(p) and os.path.getsize(p) > 1_000_000
+        except Exception:
+            return False
+
     def _load(self) -> bool:
         if LamaInpaint._shared is not None:
             self._lama = LamaInpaint._shared
             return True
         try:
             from simple_lama_inpainting import SimpleLama
-            print("[lama] loading LaMa inpainting model (first run downloads ~200MB)...")
+            # Say which is actually happening: the old message claimed "first
+            # run downloads ~200MB" on EVERY load, which made a normal
+            # few-second read off disk look like a repeat download.
+            if self.cached():
+                print("[lama] loading inpainting model from disk cache...")
+            else:
+                print("[lama] downloading the inpainting model (~200MB, "
+                      "one time — kept at "
+                      f"{self.weights_path()})...", flush=True)
             self._lama = SimpleLama()
             LamaInpaint._shared = self._lama
             print("[lama] LaMa ready")

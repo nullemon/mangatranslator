@@ -61,6 +61,12 @@ def unload_models() -> bool:
     except Exception:
         pass
     try:
+        from . import local_mt
+        if local_mt.unload():
+            released = True
+    except Exception:
+        pass
+    try:
         from .lama import LamaInpaint
         if LamaInpaint._shared is not None:
             LamaInpaint._shared = None

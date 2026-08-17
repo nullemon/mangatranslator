@@ -268,6 +268,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const ENHANCE_MODELS = { gemini: "gemini-2.5-flash-image", openai: "gpt-image-1" };
   const ENGINE_CONFIG = {
+    local: {
+      label: "No key needed — runs on this PC",
+      placeholder: "offline: nothing to enter",
+      storageKey: "manga_key_local",
+      offline: true,
+      models: [
+        { value: "auto", text: "Downloaded language pack (auto by source language)" },
+      ],
+    },
     claude: {
       label: "Claude API Key", placeholder: "sk-ant-...", storageKey: "manga_key_claude",
       models: [
@@ -389,6 +398,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const savedModel = localStorage.getItem("manga_model_" + eng);
     if (savedModel && cfg.models.some(m => m.value === savedModel)) {
       modelSelect.value = savedModel;
+    }
+    // Offline needs no key at all — hide the field instead of leaving an
+    // empty box that looks like something is missing.
+    const keyGroup = apiKeyInput.closest(".setting-group");
+    if (keyGroup) keyGroup.style.display = cfg.offline ? "none" : "";
+    const smartOpt = document.getElementById("smartMode");
+    if (smartOpt) {
+      const wrap = smartOpt.closest(".opt");
+      if (cfg.offline) {
+        smartOpt.checked = false;
+        smartOpt.disabled = true;
+        if (wrap) wrap.title = "Smart Detection needs a vision model — offline "
+          + "mode uses the local balloon detector and manga-ocr instead.";
+        if (wrap) wrap.style.opacity = ".5";
+      } else {
+        smartOpt.disabled = false;
+        if (wrap) wrap.style.opacity = "";
+      }
     }
     localStorage.setItem("manga_engine", eng);
     engineInited = true;
@@ -912,7 +939,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startBatch() {
     if (!pages.length) return;
-    if (needsTranslate(workflow) && !apiKeyInput.value.trim()) {
+    const offlineEngine = (ENGINE_CONFIG[engineSelect.value] || {}).offline;
+    if (needsTranslate(workflow) && !offlineEngine && !apiKeyInput.value.trim()) {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
     apiKeyInput.style.borderColor = "";
