@@ -1866,6 +1866,72 @@ async def ocr_translate(task_id: str, request: Request):
     return result
 
 
+@app.post("/api/retranslate-ordered/{task_id}")
+async def retranslate_ordered(task_id: str, request: Request):
+    """Re-translate a page's bubbles in the order the USER put them in.
+
+    The detector's guess at panel order is what makes lines answer the wrong
+    bubble. Sending the source text in the reader's order — as one numbered
+    conversation — gives the model the context it needs to get the
+    back-and-forth right, without re-running detection or touching the art."""
+    if task_id not in tasks:
+        raise HTTPException(404, "Task not found")
+    t = tasks[task_id]
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+    items = payload.get("items") or []
+    api_key = payload.get("api_key", "")
+    if not items:
+        raise HTTPException(400, "No items to re-translate")
+    if not api_key:
+        raise HTTPException(400, "api_key is required")
+
+    provider = payload.get("provider", "claude")
+    model = payload.get("model", "")
+    target_lang = payload.get("target_lang", "English")
+    source_lang = payload.get("source_lang", t.get("source_lang", "Japanese"))
+    style_prompt = payload.get("style_prompt", "")
+
+    # Sequential keys preserve the user's order for the model, while `back`
+    # maps each one home again — the region ids themselves may be any value.
+    ordered, back = {}, {}
+    for n, it in enumerate(items, start=1):
+        text = (it.get("original") or "").strip()
+        if not text:
+            continue
+        ordered[str(n)] = text
+        back[n] = str(it.get("id"))
+    if not ordered:
+        raise HTTPException(400, "None of those items carry source text")
+
+    def work():
+        from core.translator import make_translator
+        translator = make_translator(
+            provider, api_key, model, style_prompt, source_lang=source_lang,
+            translate_sfx=bool(t.get("translate_sfx", False)),
+            webtoon=bool(t.get("webtoon", False)))
+        img = None
+        r = t.get("result") or {}
+        base = r.get("base_path", "")
+        if base and os.path.exists(base):
+            img = cv2.imread(base)          # panel context helps the wording
+        out = translator.translate_texts(ordered, target_lang, image=img)
+        res = []
+        for n, rid in back.items():
+            entry = out.get(n) or out.get(str(n)) or {}
+            tr = (entry.get("translation") or "").strip()
+            if tr:
+                res.append({"id": rid, "translation": tr})
+        return res
+
+    loop = asyncio.get_event_loop()
+    translations = await loop.run_in_executor(None, work)
+    return {"translations": translations, "count": len(translations)}
+
+
 @app.post("/api/translate-text")
 async def translate_text(request: Request):
     """Translate SOURCE text the user typed or pasted, with no image involved.

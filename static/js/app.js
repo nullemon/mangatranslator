@@ -1341,6 +1341,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
           <button class="tl-vert${(page.rotations || {})[it.id] === -90 ? " on" : ""}" title="VERTICAL: set this text sideways, reading bottom-to-top (for tall single-column text). Click again for normal horizontal." data-id="${it.id}">↕</button>
+          <button class="tl-style" title="Copy this bubble's LOOK (size, colour, glow, tilt, fit) — then paste it onto the others" data-id="${it.id}">🎨</button>
           <button class="tl-fit${page.fits && page.fits.has(String(it.id)) ? " on" : ""}" title="FIT THE BOX: grow this text until it properly fills its box (long words are hyphenated so one word can't keep everything tiny). Click again to go back to the normal fit." data-id="${it.id}">⤢</button>
           <button class="tl-glow${page.glows && page.glows.has(String(it.id)) ? " on" : ""}" title="Add a soft outer glow (match stylized/glowing original text)" data-id="${it.id}">✨</button>
           <button class="tl-erase${isErased ? " on" : ""}" title="Erase this region from the art (e.g. a watermark the AI typeset by mistake)" data-id="${it.id}">⌫</button>
@@ -1419,6 +1420,19 @@ document.addEventListener("DOMContentLoaded", () => {
         if (page.erased.has(id)) page.erased.delete(id);
         else { page.erased.add(id); page.excluded.delete(id); }
         buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-style").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        copiedStyle = {
+          scale: (page.fontScales || {})[id] || 1,
+          color: (page.colors || {})[id] || "auto",
+          glow: !!(page.glows && page.glows.has(id)),
+          fit: !!(page.fits && page.fits.has(id)),
+          rot: (page.rotations || {})[id],
+        };
+        showStyleBar(page);
       });
     });
     el.querySelectorAll(".tl-fit").forEach(btn => {
@@ -1520,6 +1534,11 @@ document.addEventListener("DOMContentLoaded", () => {
     URL.revokeObjectURL(a.href);
   });
 
+  const orderBtn = document.getElementById("orderBtn");
+  if (orderBtn) orderBtn.addEventListener("click", openReadingOrder);
+  const findReplaceBtn = document.getElementById("findReplaceBtn");
+  if (findReplaceBtn) findReplaceBtn.addEventListener("click", openFindReplace);
+
   const rawFxBtn = document.getElementById("rawFxBtn");
   if (rawFxBtn) rawFxBtn.addEventListener("click", () => {
     const page = getActive();
@@ -1531,10 +1550,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   applyBtn.addEventListener("click", () => applyChanges());
-  async function applyChanges(btn) {
-    const page = getActive();
+  async function applyChanges(btn, pageArg) {
+    const page = pageArg || getActive();
     if (!page || !page.taskId) return;
-    collectEdits(page);
+    // Only harvest the on-screen textareas when they actually belong to this
+    // page — a batch re-render (find & replace) walks pages that aren't
+    // rendered, and reading another page's boxes would clobber the new text.
+    if (!pageArg || pageArg.uid === activeUid) collectEdits(page);
     const edits = {};
     (page.items || []).forEach(it => { edits[it.id] = it.translation; });
 
@@ -2588,6 +2610,316 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.key === "Escape") reset();
     });
   })();
+
+  /* ══ MANUAL READING ORDER ══
+     When the detector guesses the panel order wrong, the translations answer
+     the wrong lines. Drag the bubbles into the order they should be READ, then
+     re-translate: the model receives them in that order as one conversation,
+     which is the context it needs to get the back-and-forth right. */
+  function openReadingOrder() {
+    const page = getActive();
+    if (!page || !page.items || !page.items.length) {
+      showError("Nothing to reorder on this page yet.");
+      return;
+    }
+    let order = page.items.map(it => String(it.id));
+
+    const back = document.createElement("div");
+    back.className = "ro-back";
+    back.innerHTML = `
+      <div class="ro-box">
+        <div class="ro-head"><strong>Reading order</strong>
+          <button class="ro-x" title="Close">✕</button></div>
+        <p class="ro-hint">Drag the lines into the order they should be read.
+          Re-translating sends them in this order as one conversation, so each
+          line answers the one before it.</p>
+        <div class="ro-list"></div>
+        <div class="ro-foot">
+          <span class="ro-msg"></span><span style="flex:1"></span>
+          <button class="btn btn-ghost btn-sm" id="roCancel">Cancel</button>
+          <button class="btn btn-ghost btn-sm" id="roSave">Save order only</button>
+          <button class="btn btn-primary btn-sm" id="roGo">Re-translate in this order</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+    const list = back.querySelector(".ro-list");
+
+    function draw() {
+      list.innerHTML = "";
+      order.forEach((id, idx) => {
+        const it = page.items.find(i => String(i.id) === id);
+        if (!it) return;
+        const row = document.createElement("div");
+        row.className = "ro-row";
+        row.draggable = true;
+        row.dataset.id = id;
+        row.innerHTML = `<span class="ro-n">${idx + 1}</span>
+          <span class="ro-jp">${esc((it.original || "").slice(0, 22))}</span>
+          <span class="ro-en">${esc((it.translation || "").slice(0, 46))}</span>
+          <span class="ro-grip">⠿</span>`;
+        row.addEventListener("dragstart", e => {
+          e.dataTransfer.setData("text/plain", id);
+          row.classList.add("dragging");
+        });
+        row.addEventListener("dragend", () => row.classList.remove("dragging"));
+        row.addEventListener("dragover", e => e.preventDefault());
+        row.addEventListener("drop", e => {
+          e.preventDefault();
+          const from = e.dataTransfer.getData("text/plain");
+          if (!from || from === id) return;
+          order = order.filter(x => x !== from);
+          order.splice(order.indexOf(id), 0, from);
+          draw();
+        });
+        // clicking a row flashes its bubble on the page
+        row.addEventListener("click", () => {
+          const b = document.querySelector('.ov-box[data-id="' + id + '"]');
+          if (b) { b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 700); }
+        });
+        list.appendChild(row);
+      });
+    }
+    draw();
+
+    const close = () => back.remove();
+    back.querySelector(".ro-x").onclick = close;
+    back.querySelector("#roCancel").onclick = close;
+
+    const persist = () => {
+      // Reorder page.items so every later step (rerender, transcript, export)
+      // sees the order the user chose.
+      const map = new Map(page.items.map(i => [String(i.id), i]));
+      page.items = order.map(id => map.get(id)).filter(Boolean);
+      page.readingOrder = order.slice();
+    };
+
+    back.querySelector("#roSave").onclick = () => {
+      pushUndo(page); persist(); close();
+      buildTranslationsList(page);
+      editHint.textContent = "Order saved.";
+    };
+
+    back.querySelector("#roGo").onclick = async () => {
+      const msg = back.querySelector(".ro-msg");
+      if (!apiKeyInput.value.trim()) { msg.textContent = "Add your API key first."; return; }
+      pushUndo(page); persist();
+      const btn = back.querySelector("#roGo");
+      btn.disabled = true; btn.textContent = "Re-translating…";
+      try {
+        const payload = page.items
+          .filter(it => (it.original || "").trim())
+          .map(it => ({ id: String(it.id), original: it.original }));
+        if (!payload.length) throw new Error("No source text on this page to re-translate.");
+        const res = await fetch(`/api/retranslate-ordered/${page.taskId}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: payload,
+            api_key: apiKeyInput.value.trim(),
+            provider: engineSelect.value,
+            model: modelSelect.value,
+            target_lang: targetLang.value,
+            source_lang: sourceLang ? sourceLang.value : "Japanese",
+            style_prompt: styleText(),
+          }),
+        });
+        if (!res.ok) {
+          let m = res.statusText;
+          try { m = (await res.json()).detail || m; } catch (_) {}
+          throw new Error(m);
+        }
+        const data = await res.json();
+        (data.translations || []).forEach(t => {
+          const it = page.items.find(i => String(i.id) === String(t.id));
+          if (it && (t.translation || "").trim()) it.translation = t.translation.trim();
+        });
+        close();
+        buildTranslationsList(page);
+        await applyChanges();
+        editHint.textContent = "Re-translated in your reading order.";
+      } catch (e) {
+        msg.textContent = e.message;
+        btn.disabled = false; btn.textContent = "Re-translate in this order";
+      }
+    };
+  }
+
+  /* ══ FIND & REPLACE ACROSS THE BATCH ══
+     A name spelled two ways across twenty pages is tedious to chase by hand.
+     Shows every match with its page and context BEFORE anything changes, then
+     rewrites only what you confirm and re-renders just the pages that changed. */
+  function openFindReplace() {
+    const done = pages.filter(p => p.status === "done");
+    if (!done.length) { showError("Translate some pages first."); return; }
+
+    const back = document.createElement("div");
+    back.className = "fr-back";
+    back.innerHTML = `
+      <div class="fr-box">
+        <div class="fr-head"><strong>Find &amp; replace across ${done.length} page(s)</strong>
+          <button class="fr-x" title="Close">✕</button></div>
+        <div class="fr-row">
+          <input type="text" id="frFind" placeholder="Find…" autocomplete="off">
+          <input type="text" id="frRepl" placeholder="Replace with…" autocomplete="off">
+        </div>
+        <div class="fr-row fr-opts">
+          <label><input type="checkbox" id="frCase"> Match case</label>
+          <label><input type="checkbox" id="frWhole"> Whole words only</label>
+          <span style="flex:1"></span>
+          <span class="fr-count"></span>
+        </div>
+        <div class="fr-list"></div>
+        <div class="fr-foot">
+          <span class="fr-msg"></span><span style="flex:1"></span>
+          <button class="btn btn-ghost btn-sm" id="frCancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="frGo" disabled>Replace &amp; re-render</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+
+    const find = back.querySelector("#frFind");
+    const repl = back.querySelector("#frRepl");
+    const list = back.querySelector(".fr-list");
+    const count = back.querySelector(".fr-count");
+    const go = back.querySelector("#frGo");
+    let hits = [];
+
+    const rx = () => {
+      const term = find.value;
+      if (!term) return null;
+      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const body = back.querySelector("#frWhole").checked ? `\\b${esc}\\b` : esc;
+      return new RegExp(body, back.querySelector("#frCase").checked ? "g" : "gi");
+    };
+
+    function scan() {
+      hits = [];
+      const r = rx();
+      list.innerHTML = "";
+      if (!r) { count.textContent = ""; go.disabled = true; return; }
+      done.forEach(p => {
+        const scanOne = (obj, kind) => {
+          const t = obj.translation || "";
+          r.lastIndex = 0;
+          if (!r.test(t)) return;
+          hits.push({ page: p, obj, kind });
+        };
+        (p.items || []).forEach(it => scanOne(it, "item"));
+        (p.added || []).forEach(a => scanOne(a, "added"));
+      });
+      count.textContent = hits.length
+        ? `${hits.length} bubble(s) match` : "no matches";
+      go.disabled = !hits.length;
+      hits.slice(0, 60).forEach(h => {
+        const row = document.createElement("div");
+        row.className = "fr-hit";
+        const r2 = rx();
+        const before = h.obj.translation;
+        const after = before.replace(r2, repl.value);
+        row.innerHTML = `<span class="fr-pg">${esc(h.page.name || "page")}</span>
+          <span class="fr-b">${esc(before)}</span>
+          <span class="fr-arrow">→</span>
+          <span class="fr-a">${esc(after)}</span>`;
+        list.appendChild(row);
+      });
+      if (hits.length > 60) {
+        const more = document.createElement("div");
+        more.className = "fr-more";
+        more.textContent = `…and ${hits.length - 60} more`;
+        list.appendChild(more);
+      }
+    }
+
+    [find, repl].forEach(el => el.addEventListener("input", scan));
+    back.querySelector("#frCase").addEventListener("change", scan);
+    back.querySelector("#frWhole").addEventListener("change", scan);
+
+    const close = () => back.remove();
+    back.querySelector(".fr-x").onclick = close;
+    back.querySelector("#frCancel").onclick = close;
+
+    go.onclick = async () => {
+      const touched = new Set();
+      hits.forEach(h => {
+        const r2 = rx();
+        h.obj.translation = h.obj.translation.replace(r2, repl.value);
+        touched.add(h.page);
+      });
+      close();
+      // Re-render only the pages that actually changed.
+      const list2 = [...touched];
+      editHint.textContent = `Replaced on ${list2.length} page(s) — re-rendering…`;
+      for (const p of list2) {
+        try { await applyChanges(null, p); } catch (_) {}
+      }
+      renderStrip();
+      renderActivePage();
+      editHint.textContent = `Done — updated ${list2.length} page(s).`;
+    };
+
+    setTimeout(() => find.focus(), 30);
+  }
+
+  /* ══ COPY TYPESETTING ══
+     Copy one bubble's look (size, colour, glow, fit, tilt) and stamp it onto
+     the others — the fiddly part of matching a chapter's lettering by hand. */
+  let copiedStyle = null;
+
+  function applyStyle(page, id, st) {
+    page.fontScales = page.fontScales || {};
+    page.colors = page.colors || {};
+    page.glows = page.glows || new Set();
+    page.fits = page.fits || new Set();
+    page.rotations = page.rotations || {};
+    if (st.scale && st.scale !== 1) page.fontScales[id] = st.scale;
+    else delete page.fontScales[id];
+    if (st.color && st.color !== "auto") page.colors[id] = st.color;
+    else delete page.colors[id];
+    if (st.glow) page.glows.add(id); else page.glows.delete(id);
+    if (st.fit) page.fits.add(id); else page.fits.delete(id);
+    if (st.rot !== undefined && st.rot !== null) page.rotations[id] = st.rot;
+    else delete page.rotations[id];
+  }
+
+  function showStyleBar(page) {
+    let bar = document.getElementById("styleBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "styleBar";
+      bar.className = "style-bar";
+      document.body.appendChild(bar);
+    }
+    const st = copiedStyle;
+    bar.innerHTML = `
+      <span class="sb-txt">Copied look: <b>${Math.round((st.scale || 1) * 100)}%</b>
+        · ${st.color || "auto"}${st.glow ? " · glow" : ""}${st.fit ? " · fit" : ""}${st.rot !== undefined && st.rot !== null ? " · " + st.rot + "&deg;" : ""}</span>
+      <button class="btn btn-ghost btn-sm" id="sbAll">Paste to all on this page</button>
+      <button class="btn btn-ghost btn-sm" id="sbBubbles">Only speech bubbles</button>
+      <button class="btn btn-ghost btn-sm" id="sbChapter">Every page in the batch</button>
+      <button class="btn btn-ghost btn-sm" id="sbClose">✕</button>`;
+    bar.style.display = "flex";
+
+    const paste = (pgs, onlyBubbles) => {
+      pgs.forEach(pg => {
+        pushUndo(pg);
+        (pg.items || []).forEach(it => {
+          if (onlyBubbles && it.in_bubble === false) return;
+          applyStyle(pg, String(it.id), st);
+        });
+        (pg.added || []).forEach(a => {
+          if (onlyBubbles) return;
+          applyStyle(pg, String(a.id), st);
+        });
+      });
+      buildTranslationsList(page);
+      bar.style.display = "none";
+      editHint.textContent = "Look pasted — hit Apply & Re-render.";
+    };
+    bar.querySelector("#sbAll").onclick = () => paste([page], false);
+    bar.querySelector("#sbBubbles").onclick = () => paste([page], true);
+    bar.querySelector("#sbChapter").onclick = () =>
+      paste(pages.filter(p => p.status === "done"), false);
+    bar.querySelector("#sbClose").onclick = () => { bar.style.display = "none"; };
+  }
 
   /* ══ REDRAW FILL: sample a colour, flood the outlined shape ══
      Reads pixels straight off the rendered page (same origin, so the canvas
