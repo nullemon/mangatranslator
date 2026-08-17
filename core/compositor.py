@@ -523,7 +523,8 @@ class Compositor:
             # "bubble"; flat-filling that mask stamps a giant blob over the
             # art. Only wipe interiors that really look like balloon paper —
             # anything else goes through the free-text machinery below.
-            if mask is not None and not self._is_real_balloon(gray, mask):
+            has_src = bool((it.get("original") or "").strip())
+            if mask is not None and not self._is_real_balloon(gray, mask, has_src):
                 # Loud on purpose: when a balloon is demoted, its text is only
                 # stroke-erased, which is how Japanese ends up surviving under
                 # the English. The reason tells us which rule to look at.
@@ -534,7 +535,7 @@ class Compositor:
                 # was ever OCR'd here there is no text to move — placing the
                 # LLM's stray translation would stamp English on a prop. Skip
                 # the item and leave the art alone.
-                if not (it.get("original") or "").strip():
+                if not has_src:
                     continue
                 mask = None
 
@@ -654,11 +655,19 @@ class Compositor:
             return (0, 0, 0)
         return (255, 255, 255) if dark else (0, 0, 0)
 
-    def _is_real_balloon(self, gray, mask):
+    def _is_real_balloon(self, gray, mask, has_text=False):
         """A real balloon's interior (minus the text strokes) is near-uniform
         paper enclosed by an inked outline. Balloon segmentation sometimes
         claims big haloed DISPLAY TEXT as a bubble — its "interior" is art —
-        and flat-filling that stamps a giant blob over the panel."""
+        and flat-filling that stamps a giant blob over the panel.
+
+        `has_text` says the OCR actually read source text inside this shape.
+        That changes what the margin-ring test means: the ring test exists to
+        catch LINE ART on white paper being mistaken for a balloon, and such a
+        mistake has no readable text in it by definition. A genuine bubble
+        packed with giant lettering reaches its own outline, so applying the
+        ring test to it disowned the balloon — after which only its strokes
+        were erased and the densest glyphs survived under the English."""
         self._balloon_why = ""
         if mask is None or cv2.countNonZero(mask) < 40:
             self._balloon_why = "mask too small"
@@ -692,7 +701,7 @@ class Compositor:
         # its lettering and the outline; artwork's lines run right across
         # that ring. Without this, line art on white paper reads as "flat
         # paper + strokes" and gets flat-filled into a giant blob.
-        if med >= 165:
+        if med >= 165 and not has_text:
             _, _, mw, mh = cv2.boundingRect(mask)
             depth = max(6, int(0.08 * min(mw, mh)))
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
