@@ -259,17 +259,35 @@ from core import memory as memsweep
 
 LAST_JOB_TS = time.time()
 _IDLE_TRIMMED = False
+_MODELS_DROPPED = False
 
 
 def _note_job_done():
-    global LAST_JOB_TS, _IDLE_TRIMMED
+    """A full page job finished — reset the idle clock and do a light sweep."""
+    global LAST_JOB_TS, _IDLE_TRIMMED, _MODELS_DROPPED
     LAST_JOB_TS = time.time()
     _IDLE_TRIMMED = False
+    _MODELS_DROPPED = False
     memsweep.light_sweep()
 
 
+def _note_activity():
+    """Editing counts as being in use.
+
+    Every editor action — re-render, OCR a drawn box, re-translate — runs the
+    same heavy models as a full job, but only the batch runners used to reset
+    the idle clock. So a long editing session looked "idle": the housekeeper
+    unloaded the models EVERY minute, and the next Apply paid to reload
+    text-seg and LaMa. No sweep here (it runs many times per minute) — just
+    the timestamp."""
+    global LAST_JOB_TS, _IDLE_TRIMMED, _MODELS_DROPPED
+    LAST_JOB_TS = time.time()
+    _IDLE_TRIMMED = False
+    _MODELS_DROPPED = False
+
+
 async def _housekeeper():
-    global LAST_JOB_TS, _IDLE_TRIMMED
+    global LAST_JOB_TS, _IDLE_TRIMMED, _MODELS_DROPPED
     loop = asyncio.get_event_loop()
     while True:
         await asyncio.sleep(60)
@@ -279,10 +297,13 @@ async def _housekeeper():
                 continue
             idle = time.time() - LAST_JOB_TS
             if idle >= 1800:
-                released = await loop.run_in_executor(None, memsweep.unload_models)
-                if released:
-                    print("[mem] idle 30 min — models released, VRAM freed "
-                          "(they reload automatically on the next job)")
+                if not _MODELS_DROPPED:
+                    released = await loop.run_in_executor(
+                        None, memsweep.unload_models)
+                    _MODELS_DROPPED = True
+                    if released:
+                        print("[mem] idle 30 min — models released, VRAM freed "
+                              "(they reload automatically on the next job)")
             elif idle >= 600 and not _IDLE_TRIMMED:
                 await loop.run_in_executor(None, memsweep.deep_sweep)
                 _IDLE_TRIMMED = True
@@ -1407,6 +1428,7 @@ async def original(task_id: str):
 
 @app.post("/api/rerender/{task_id}")
 async def rerender(task_id: str, request: Request):
+    _note_activity()   # editing keeps the models loaded
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
     t = tasks[task_id]
@@ -1679,6 +1701,7 @@ async def rerender(task_id: str, request: Request):
 
 @app.post("/api/rescan/{task_id}")
 async def rescan(task_id: str, request: Request):
+    _note_activity()   # a re-scan runs the detectors — keep them loaded
     """One-click 'find missed text': re-run AI detection on the page and merge in
     any region that isn't already covered, keeping all existing translations and
     edits. Returns the newly found regions."""
@@ -1780,6 +1803,7 @@ def _get_ocr():
 
 @app.post("/api/ocr-translate/{task_id}")
 async def ocr_translate(task_id: str, request: Request):
+    _note_activity()   # editing keeps the models loaded
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
     t = tasks[task_id]
@@ -1868,6 +1892,7 @@ async def ocr_translate(task_id: str, request: Request):
 
 @app.post("/api/retranslate-ordered/{task_id}")
 async def retranslate_ordered(task_id: str, request: Request):
+    _note_activity()   # editing keeps the models loaded
     """Re-translate a page's bubbles in the order the USER put them in.
 
     The detector's guess at panel order is what makes lines answer the wrong
@@ -1934,6 +1959,7 @@ async def retranslate_ordered(task_id: str, request: Request):
 
 @app.post("/api/translate-text")
 async def translate_text(request: Request):
+    _note_activity()   # editing keeps the models loaded
     """Translate SOURCE text the user typed or pasted, with no image involved.
 
     Backs the built-in Japanese/Korean keyboard: when OCR can't read a bubble
