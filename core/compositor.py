@@ -524,6 +524,12 @@ class Compositor:
             # art. Only wipe interiors that really look like balloon paper —
             # anything else goes through the free-text machinery below.
             if mask is not None and not self._is_real_balloon(gray, mask):
+                # Loud on purpose: when a balloon is demoted, its text is only
+                # stroke-erased, which is how Japanese ends up surviving under
+                # the English. The reason tells us which rule to look at.
+                print(f"[compositor] bubble {it.get('id')} at {bbox} NOT treated "
+                      f"as a balloon: {getattr(self, '_balloon_why', '?')} "
+                      f"-> stroke-only erase", flush=True)
                 # Not a balloon (headset mic, ornament, art blob). If nothing
                 # was ever OCR'd here there is no text to move — placing the
                 # LLM's stray translation would stamp English on a prop. Skip
@@ -653,7 +659,9 @@ class Compositor:
         paper enclosed by an inked outline. Balloon segmentation sometimes
         claims big haloed DISPLAY TEXT as a bubble — its "interior" is art —
         and flat-filling that stamps a giant blob over the panel."""
+        self._balloon_why = ""
         if mask is None or cv2.countNonZero(mask) < 40:
+            self._balloon_why = "mask too small"
             return False
         inner = cv2.erode(mask, np.ones((5, 5), np.uint8))
         if cv2.countNonZero(inner) < 40:
@@ -668,12 +676,17 @@ class Compositor:
             # (headset mic, silhouette) doesn't. No light strokes = not a
             # bubble.
             if float((vals > 180).mean()) < 0.02:
+                self._balloon_why = "dark shape with no light lettering"
                 return False
         else:
-            return False                # mid-gray interior = artwork
-        if body.size < 50:
+            self._balloon_why = f"mid-gray interior (median {med:.0f}) = artwork"
             return False
-        if float(np.std(body)) > 22.0:
+        if body.size < 50:
+            self._balloon_why = "too little paper to judge"
+            return False
+        std = float(np.std(body))
+        if std > 22.0:
+            self._balloon_why = f"interior not uniform (std {std:.1f} > 22)"
             return False
         # Decisive signature: a balloon keeps a clean paper MARGIN between
         # its lettering and the outline; artwork's lines run right across
@@ -687,8 +700,21 @@ class Compositor:
             core = cv2.erode(mask, k)
             ring = (inner > 0) & (core == 0)
             if int(ring.sum()) >= 40:
-                ring_dark = float((gray[ring] < 120).mean())
+                dark_ring = (gray < 120) & ring
+                # LETTERING is allowed to reach the margin: a bubble packed
+                # with giant display text (1on3で包囲させてもらう!) has glyphs
+                # running right out to the outline, and counting those as
+                # "artwork crossing the ring" disowned the balloon — it then
+                # fell through to stroke-only erasure and the Japanese
+                # survived under the English. Only NON-text ink counts.
+                if self._seg_mask is not None:
+                    txt = cv2.dilate(self._seg_mask,
+                                     np.ones((5, 5), np.uint8)) > 0
+                    dark_ring &= ~txt
+                ring_dark = float(dark_ring.sum()) / float(ring.sum())
                 if ring_dark > 0.06:
+                    self._balloon_why = (
+                        f"non-text ink in the margin ring ({ring_dark:.1%} > 6%)")
                     return False
         return True
 
