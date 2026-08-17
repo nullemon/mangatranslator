@@ -1581,6 +1581,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "vert-add": "Drag a box over a TALL vertical text run — it's read & translated, and the English is set VERTICALLY (bottom-to-top). Edit, then Apply & Re-render.",
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
+    "fill-poly": "CLICK points around the damaged area (click the first point again or press Enter to close, Esc cancels) — then pick the colour and it's flooded in.",
     restore: "Draw around a damaged spot — the ORIGINAL art comes back exactly as drawn (undoes content-aware cleaning there; original text returns too). Then Apply & Re-render.",
   };
 
@@ -1822,6 +1823,23 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("stroke", "#f59e0b");
         pg.setAttribute("stroke-width", "0.5");
         pg.setAttribute("stroke-dasharray", "2 1.5");
+        svg.appendChild(pg);
+        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        moveLayer.appendChild(svg);
+        return;
+      }
+      if (cb && cb.fill_poly) {   // redraw / bucket fill
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;cursor:pointer";
+        const pg = document.createElementNS(NS, "polygon");
+        pg.setAttribute("points", cb.fill_poly.map(p => `${p[0] / W * 100},${p[1] / H * 100}`).join(" "));
+        pg.setAttribute("fill", cb.color || "#8b5cf6");
+        pg.setAttribute("fill-opacity", ".85");
+        pg.setAttribute("stroke", "#8b5cf6");
+        pg.setAttribute("stroke-width", "0.5");
         svg.appendChild(pg);
         svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
         moveLayer.appendChild(svg);
@@ -2301,8 +2319,9 @@ document.addEventListener("DOMContentLoaded", () => {
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
         line = document.createElementNS(NS, "polyline");
-        line.setAttribute("fill", "rgba(22,163,74,.12)");
-        line.setAttribute("stroke", "#16a34a");
+        const fm = tool === "fill-poly";
+        line.setAttribute("fill", fm ? "rgba(139,92,246,.16)" : "rgba(22,163,74,.12)");
+        line.setAttribute("stroke", fm ? "#8b5cf6" : "#16a34a");
         line.setAttribute("stroke-width", "0.15");
         svg.appendChild(line);
         moveLayer.appendChild(svg);
@@ -2319,6 +2338,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     function finish() {
       const page = getActive(), dims = curDims();
+      const fillMode = tool === "fill-poly";
       const myPts = pts;
       reset();
       if (!page || !dims || myPts.length < 3) return;
@@ -2329,12 +2349,30 @@ document.addEventListener("DOMContentLoaded", () => {
       const x = Math.min(...xs), y = Math.min(...ys);
       const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
       page.covers = page.covers || [];
+      if (fillMode) {
+        // Redraw: ask which colour to flood the shape with (pre-sampled from
+        // the art just outside it), then store it as a fill cover.
+        openFillPicker(page, polyImg);
+        return;
+      }
       page.covers.push({ poly: polyImg });   // erase the original inside the shape
       if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h], polyImg);
       else buildOverlay();
     }
     moveLayer.addEventListener("pointerdown", e => {
-      if (tool !== "pen-add" || e.target !== moveLayer) return;
+      // Eyedropper armed: this click samples a colour instead of adding a point.
+      if (_eyedrop) {
+        e.preventDefault(); e.stopPropagation();
+        const r = moveLayer.getBoundingClientRect();
+        const dims = curDims();
+        if (dims) {
+          const [W, H] = dims;
+          _eyedrop(pixelAt((e.clientX - r.left) / r.width * W,
+                           (e.clientY - r.top) / r.height * H));
+        } else { _eyedrop(null); }
+        return;
+      }
+      if ((tool !== "pen-add" && tool !== "fill-poly") || e.target !== moveLayer) return;
       const page = getActive(); if (!page || !curDims()) return;
       if (svg && !svg.isConnected) reset();   // overlay was rebuilt — stale points
       const r = moveLayer.getBoundingClientRect();
@@ -2348,14 +2386,149 @@ document.addEventListener("DOMContentLoaded", () => {
       redraw();
     });
     moveLayer.addEventListener("dblclick", () => {
-      if (tool === "pen-add" && pts.length >= 3) finish();
+      if ((tool === "pen-add" || tool === "fill-poly") && pts.length >= 3) finish();
     });
     document.addEventListener("keydown", e => {
-      if (tool !== "pen-add" || !pts.length) return;
+      if ((tool !== "pen-add" && tool !== "fill-poly") || !pts.length) return;
       if (e.key === "Enter") { e.preventDefault(); finish(); }
       if (e.key === "Escape") reset();
     });
   })();
+
+  /* ══ REDRAW FILL: sample a colour, flood the outlined shape ══
+     Reads pixels straight off the rendered page (same origin, so the canvas
+     isn't tainted), so both the auto-sample and the eyedropper work without a
+     round trip to the server. */
+  let _fillCanvas = null;
+
+  function pageCanvas() {
+    // transFull is the full-resolution page already loaded for the editor.
+    if (!transFull || !transFull.naturalWidth) return null;
+    if (_fillCanvas && _fillCanvas._src === transFull.src
+        && _fillCanvas.width === transFull.naturalWidth) return _fillCanvas;
+    const c = document.createElement("canvas");
+    c.width = transFull.naturalWidth;
+    c.height = transFull.naturalHeight;
+    try {
+      c.getContext("2d").drawImage(transFull, 0, 0);
+    } catch (_) { return null; }
+    c._src = transFull.src;
+    _fillCanvas = c;
+    return c;
+  }
+
+  const hex2 = v => Math.max(0, Math.min(255, v | 0)).toString(16).padStart(2, "0");
+  const toHex = (r, g, b) => "#" + hex2(r) + hex2(g) + hex2(b);
+
+  function pixelAt(x, y) {
+    const c = pageCanvas(); if (!c) return null;
+    x = Math.max(0, Math.min(c.width - 1, Math.round(x)));
+    y = Math.max(0, Math.min(c.height - 1, Math.round(y)));
+    try {
+      const d = c.getContext("2d").getImageData(x, y, 1, 1).data;
+      return toHex(d[0], d[1], d[2]);
+    } catch (_) { return null; }
+  }
+
+  /* Median colour of a ring just OUTSIDE the outline = the background the
+     shape sits in. Median (not mean) so a stray dark line in the ring can't
+     drag the sample grey. */
+  function sampleAround(poly) {
+    const c = pageCanvas(); if (!c) return "#ffffff";
+    const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const ctx = c.getContext("2d");
+    const R = [], G = [], B = [];
+    for (const [px, py] of poly) {
+      // step ~10px outward from each vertex, away from the centre
+      const dx = px - cx, dy = py - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      const sx = Math.round(px + (dx / len) * 10);
+      const sy = Math.round(py + (dy / len) * 10);
+      if (sx < 0 || sy < 0 || sx >= c.width || sy >= c.height) continue;
+      try {
+        const d = ctx.getImageData(sx, sy, 1, 1).data;
+        R.push(d[0]); G.push(d[1]); B.push(d[2]);
+      } catch (_) { return "#ffffff"; }
+    }
+    if (!R.length) return "#ffffff";
+    const med = a => a.sort((x, y) => x - y)[Math.floor(a.length / 2)];
+    return toHex(med(R), med(G), med(B));
+  }
+
+  let _eyedrop = null;   // active picker callback while sampling from the page
+
+  function openFillPicker(page, poly) {
+    const suggested = sampleAround(poly);
+    let colour = suggested;
+
+    const back = document.createElement("div");
+    back.className = "fill-back";
+    back.innerHTML = `
+      <div class="fill-box">
+        <div class="fill-head"><strong>Redraw this area</strong></div>
+        <p class="fill-hint">The colour was sampled from the art around your
+          outline. Use the dropper to take it from anywhere on the page, or set
+          it by hand.</p>
+        <div class="fill-row">
+          <span class="fill-sw" id="fillSw"></span>
+          <input type="color" id="fillPick" value="${suggested}">
+          <input type="text" id="fillHex" value="${suggested}" spellcheck="false">
+          <button class="btn btn-ghost btn-sm" id="fillDrop" title="Click the page to sample a colour">Dropper</button>
+        </div>
+        <div class="fill-row">
+          <button class="btn btn-ghost btn-sm fill-preset" data-c="${suggested}">Sampled</button>
+          <button class="btn btn-ghost btn-sm fill-preset" data-c="#ffffff">White</button>
+          <button class="btn btn-ghost btn-sm fill-preset" data-c="#000000">Black</button>
+        </div>
+        <div class="fill-foot">
+          <span style="flex:1"></span>
+          <button class="btn btn-ghost btn-sm" id="fillCancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="fillOk">Fill it</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+
+    const sw = back.querySelector("#fillSw");
+    const pick = back.querySelector("#fillPick");
+    const hex = back.querySelector("#fillHex");
+    const setColour = v => {
+      if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+      colour = v.toLowerCase();
+      sw.style.background = colour;
+      pick.value = colour; hex.value = colour;
+    };
+    setColour(suggested);
+
+    pick.addEventListener("input", () => setColour(pick.value));
+    hex.addEventListener("change", () => setColour(hex.value.trim()));
+    back.querySelectorAll(".fill-preset").forEach(
+      b => b.addEventListener("click", () => setColour(b.dataset.c)));
+
+    const close = () => { _eyedrop = null; back.remove(); };
+    back.querySelector("#fillCancel").addEventListener("click", () => {
+      close(); buildOverlay();
+    });
+    back.querySelector("#fillOk").addEventListener("click", () => {
+      page.covers = page.covers || [];
+      page.covers.push({ fill_poly: poly, color: colour });
+      close();
+      buildOverlay();
+      editHint.textContent = "Area outlined — hit Apply & Re-render to paint it.";
+    });
+    back.querySelector("#fillDrop").addEventListener("click", () => {
+      // Hide the dialog, let the next click on the page pick the colour.
+      back.style.display = "none";
+      editHint.textContent = "Click anywhere on the page to take that colour…";
+      _eyedrop = c => {
+        back.style.display = "";
+        if (c) setColour(c);
+        _eyedrop = null;
+        editHint.textContent = HINTS["fill-poly"];
+      };
+    });
+  }
 
   /* Translate SOURCE text the user typed on the built-in keyboard. */
   async function translateTyped(text) {

@@ -1,4 +1,5 @@
 import math
+import re
 import cv2
 import numpy as np
 from PIL import Image
@@ -163,6 +164,15 @@ class Compositor:
         # Manual cover/erase regions the user drew to wipe leftover or
         # untranslated text. Erase them before placing anything else.
         for cb in (covers or []):
+            # Redraw / bucket fill: {"fill_poly": [[x,y],...], "color": "#rrggbb"}
+            # — flood the outlined shape with a flat colour (normally sampled
+            # from the surrounding art) to rebuild a background the cleaner
+            # damaged. Painted BEFORE any text so a translation can sit on top.
+            if isinstance(cb, dict) and cb.get("fill_poly"):
+                touched = self._fill_poly(result, cb["fill_poly"], cb.get("color"))
+                if touched:
+                    edited_rects.append(touched)
+                continue
             # Free-form lasso: {"poly": [[x,y], ...]} — content-aware heal the
             # whole outlined shape (for weird-shaped leftovers the box can't hug).
             if isinstance(cb, dict) and cb.get("poly"):
@@ -702,6 +712,67 @@ class Compositor:
         return cv2.morphologyEx(
             mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         )
+
+    @staticmethod
+    def _parse_color(value, fallback=(255, 255, 255)):
+        """Accept '#rrggbb', 'rgb(r,g,b)' or [b,g,r]; return a BGR tuple."""
+        if value is None:
+            return fallback
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            try:
+                return tuple(int(np.clip(int(v), 0, 255)) for v in value[:3])
+            except (TypeError, ValueError):
+                return fallback
+        s = str(value).strip()
+        m = re.fullmatch(r"#?([0-9a-fA-F]{6})", s)
+        if m:
+            r = int(m.group(1)[0:2], 16)
+            g = int(m.group(1)[2:4], 16)
+            b = int(m.group(1)[4:6], 16)
+            return (b, g, r)                      # OpenCV order
+        m = re.fullmatch(r"rgba?\(([^)]+)\)", s)
+        if m:
+            try:
+                parts = [int(float(p)) for p in m.group(1).split(",")[:3]]
+                return (parts[2], parts[1], parts[0])
+            except (TypeError, ValueError, IndexError):
+                return fallback
+        return fallback
+
+    def _fill_poly(self, result, pts, color=None):
+        """Flat-fill an outlined shape with `color`. When no colour is given,
+        sample the ring of pixels JUST OUTSIDE the outline and use their median
+        — so a hole in flat paper, a tone field or a black panel is rebuilt in
+        the shade that actually surrounds it. Returns the touched bbox."""
+        H, W = result.shape[:2]
+        try:
+            poly = np.array([[int(p[0]), int(p[1])] for p in pts], np.int32)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if len(poly) < 3:
+            return None
+        mask = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(mask, [poly], 255)
+        if cv2.countNonZero(mask) == 0:
+            return None
+
+        if color is None:
+            # Ring just outside the shape = the background it sits in.
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+            ring = cv2.subtract(cv2.dilate(mask, k), mask)
+            vals = result[ring > 0]
+            bgr = (tuple(int(v) for v in np.median(vals, axis=0))
+                   if vals.size else (255, 255, 255))
+        else:
+            bgr = self._parse_color(color)
+
+        result[mask > 0] = bgr
+        x, y, w, h = cv2.boundingRect(poly)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return (x0, y0, x1 - x0, y1 - y0)
 
     def _inpaint_poly(self, result, pts):
         """Content-aware fill an arbitrary free-form (lasso) region — the whole
