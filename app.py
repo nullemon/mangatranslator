@@ -257,6 +257,43 @@ MASKS: dict = {}
 # the next job in a few seconds).
 from core import memory as memsweep
 
+# One re-render at a time per page. The editor fires an Apply per edit, so
+# several can land together; without this they all write the SAME output file
+# concurrently and each other's readers see a half-written PNG ("libpng error:
+# IDAT: CRC error", and a briefly garbled page in the browser).
+_TASK_LOCKS = {}
+
+
+def _task_lock(task_id: str):
+    lk = _TASK_LOCKS.get(task_id)
+    if lk is None:
+        lk = asyncio.Lock()
+        _TASK_LOCKS[task_id] = lk
+        while len(_TASK_LOCKS) > 64:          # bound the bookkeeping
+            _TASK_LOCKS.pop(next(iter(_TASK_LOCKS)), None)
+    return lk
+
+
+def _write_atomic(path: str, img) -> bool:
+    """Write an image so readers never see it half-finished: render to a temp
+    file beside the target, then rename (atomic on the same filesystem)."""
+    # Keep the real extension on the temp name: OpenCV picks its encoder from
+    # it, and a bare ".tmp1234" makes imwrite fail outright.
+    root, ext = os.path.splitext(path)
+    tmp = f"{root}.tmp{os.getpid()}{ext or '.png'}"
+    try:
+        if not cv2.imwrite(tmp, img):
+            return False
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 LAST_JOB_TS = time.time()
 _IDLE_TRIMMED = False
 _MODELS_DROPPED = False
@@ -1667,14 +1704,17 @@ async def rerender(task_id: str, request: Request):
                 out[rm] = src[rm]
         if raw_effect:
             out = raw_scan(out, strength=raw_strength, style=raw_style)
-        cv2.imwrite(r["output_path"], out)
+        _write_atomic(r["output_path"], out)
         wm = t.get("watermark", "")
         if wm:
             _stamp_watermark(r["output_path"], wm,
                              t.get("wm_place", "br"), t.get("wm_opacity", 50),
                              t.get("wm_size", "m"), t.get("wm_style", "clean"))
 
-    await asyncio.get_event_loop().run_in_executor(None, work)
+    # Serialise per page: two Applies landing together used to write the same
+    # file at once and corrupt each other's output.
+    async with _task_lock(task_id):
+        await asyncio.get_event_loop().run_in_executor(None, work)
 
     # Reflect new placement / edits back into the stored result.
     r["items"] = [

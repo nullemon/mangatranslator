@@ -119,12 +119,20 @@ class ClaudeTranslator:
 
     def _ask(self, content: list) -> str:
         t0 = time.time()
-        with _heartbeat(self.model, getattr(self, "on_wait", None)):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=8192,   # a full page of dialogue can overrun 4096 and truncate the JSON
-                messages=[{"role": "user", "content": content}],
-            )
+        try:
+            with _heartbeat(self.model, getattr(self, "on_wait", None)):
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=8192,   # a full page of dialogue can overrun 4096 and truncate the JSON
+                    messages=[{"role": "user", "content": content}],
+                )
+        except anthropic.APIConnectionError as e:
+            print(f"[claude] network error after {time.time() - t0:.0f}s: {e}",
+                  flush=True)
+            raise RuntimeError(
+                "Can't reach the Claude API — check your internet connection. "
+                "Nothing was charged; retry when you're back online, or use "
+                "the Offline engine.")
         el = time.time() - t0
         if el >= 5:
             print(f"[claude] {self.model}: {el:.1f}s", flush=True)
@@ -274,6 +282,16 @@ class GeminiTranslator:
             raise RuntimeError(
                 f"Gemini ({self.model}) timed out after {int(self.timeout)}s — "
                 "the model may be overloaded; try again or pick a faster model")
+        except httpx.TransportError as e:
+            # DNS failure, dropped Wi-Fi, VPN flap. Used to escape as a raw
+            # httpx traceback ("Temporary failure in name resolution"); say
+            # plainly that it's the connection, not the page or the key.
+            print(f"[gemini] network error after {time.time() - t0:.0f}s: {e}",
+                  flush=True)
+            raise RuntimeError(
+                "Can't reach the Gemini API — check your internet connection "
+                f"({type(e).__name__}). Nothing was charged; retry when you're "
+                "back online, or use the Offline engine.")
         el = time.time() - t0
         if el >= 5 or resp.status_code != 200:
             print(f"[gemini] {self.model}: {el:.1f}s "

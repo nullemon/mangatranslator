@@ -162,23 +162,39 @@ class TextSegmenter:
 
     @staticmethod
     def _strip_nontext_blobs(m):
-        """Text strokes are THIN — even bold title kanji fill well under half
-        of their bounding box. An eye (dark ellipse with a glint), a solid
-        ornament or a screentone patch comes back as one FAT blob, and every
-        consumer of this mask (erasure, verification, cleaning) then treats it
-        as text — which is how eyes got erased. Drop large components whose
-        fill ratio says 'solid shape', keep everything stroke-like."""
+        """Drop genuinely SOLID blobs (eyes, ornaments, tone patches) from the
+        stroke mask, so they don't get treated as text and erased.
+
+        Judged by STROKE THICKNESS, not fill ratio. A glyph is built from
+        strokes: however dense it looks, no ink pixel sits far from an edge. A
+        filled shape has a centre far from every edge. Measured as
+        2 x (max distance-to-edge) / smaller side:
+
+            bold kanji  0.21 - 0.42      eyes / solid shapes  0.80 - 1.04
+
+        Fill ratio alone was the old test and it does NOT separate them — 囲
+        fills 0.66 of its box and was being stripped as "solid", which is
+        exactly why big bold bubble text survived erasure and the translation
+        landed on top of it. Fill is still required as a second opinion, so a
+        blob must look solid BOTH ways before it goes."""
         if m is None:
             return m
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(
-            (m > 0).astype(np.uint8), 8)
+        binary = (m > 0).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
         out = m.copy()
         removed = 0
         for i in range(1, n):
             x, y, w, h, area = stats[i]
             if area < 400:
                 continue
-            if area / max(w * h, 1) > 0.62:
+            if area / max(w * h, 1) <= 0.62:
+                continue                      # clearly stroke-like
+            comp = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+            # pad so the distance transform sees the real edges
+            comp = cv2.copyMakeBorder(comp, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+            dt = cv2.distanceTransform(comp, cv2.DIST_L2, 5)
+            thickness = float(2.0 * dt.max()) / max(min(w, h), 1)
+            if thickness >= 0.60:             # solid lump, not lettering
                 out[labels == i] = 0
                 removed += 1
         if removed:
