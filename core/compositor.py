@@ -692,7 +692,20 @@ class Compositor:
         inner = cv2.erode(mask, np.ones((5, 5), np.uint8))
         if cv2.countNonZero(inner) < 40:
             inner = mask
-        vals = gray[inner > 0]
+        sel = inner > 0
+        # Judge the PAPER, not the lettering. Big bold text drags a lot of
+        # antialiased edge pixels into the "paper" sample and pushes its spread
+        # over the limit, so a perfectly ordinary bubble packed with display
+        # text was being called artwork and demoted to stroke-only erase.
+        # Excluding the text strokes (and their soft edges) leaves the paper
+        # itself, which is what this test is actually about. Artwork has no
+        # strokes to exclude, so nothing changes for it.
+        if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
+            txt = cv2.dilate(self._seg_mask, np.ones((7, 7), np.uint8)) > 0
+            paper_only = sel & ~txt
+            if int(paper_only.sum()) >= 200:
+                sel = paper_only
+        vals = gray[sel]
         med = float(np.median(vals))
         if med >= 165:
             body = vals[vals > 120]     # paper side, strokes excluded
