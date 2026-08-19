@@ -1,4 +1,4 @@
-KAISUKI — MAC QUICK START
+MANGATRANSLATOR — MAC QUICK START
 =========================
 
 1. Move this whole folder somewhere permanent

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# Kaisuki / MangaTranslator — start the app on a Mac
+# MangaTranslator — start the app on a Mac
 #
 # Double-click this file in Finder. It starts the server and opens your
 # browser. Leave the Terminal window open while you work; close it (or press
@@ -20,7 +20,7 @@ fi
 . venv/bin/activate
 
 PORT="${PORT:-8000}"
-echo "Starting Kaisuki on http://localhost:$PORT"
+echo "Starting MangaTranslator on http://localhost:$PORT"
 echo "(leave this window open; press Control-C to stop)"
 echo ""
 

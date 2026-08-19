@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# Kaisuki / MangaTranslator — one-step Mac setup
+# MangaTranslator — one-step Mac setup
 #
 # Double-click this file in Finder, or run it in Terminal:
 #     chmod +x setup_mac.command && ./setup_mac.command
@@ -31,7 +31,7 @@ for arg in "$@"; do
 done
 
 echo "═══════════════════════════════════════════════════════"
-echo "  Kaisuki — Mac setup"
+echo "  MangaTranslator — Mac setup"
 echo "═══════════════════════════════════════════════════════"
 echo "  folder: $(pwd)"
 echo "  mac   : $(sw_vers -productVersion 2>/dev/null || echo '?') on $(uname -m)"

@@ -1820,7 +1820,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function setTool(t) {
     tool = (tool === t) ? null : t;
     // Let the stamp/line tools drop any half-finished state on a tool switch.
-    window.dispatchEvent(new CustomEvent("kaisuki:tool", { detail: tool }));
+    window.dispatchEvent(new CustomEvent("mangatranslator:tool", { detail: tool }));
     toolBtns.forEach(b => {
       const on = b.dataset.tool === tool;
       b.classList.toggle("btn-primary", on);
@@ -2260,8 +2260,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     const imeBtn = pop.querySelector(".epop-ime");
     if (imeBtn) imeBtn.addEventListener("click", () => {
-      if (!window.KaisukiIME) return;
-      window.KaisukiIME.open({
+      if (!window.MangaIME) return;
+      window.MangaIME.open({
         title: "Retype the original text",
         text: (it.original || "").trim(),
         translation: (it.translation || "").trim(),
@@ -2451,7 +2451,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Reset the tools' state whenever the active tool changes.
-    window.addEventListener("kaisuki:tool", () => {
+    window.addEventListener("mangatranslator:tool", () => {
       cloneSrc = null; offset = null; painting = false; lineStart = null;
     });
 
@@ -3147,9 +3147,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* Place a region whose ORIGINAL text the user keys in by hand. */
   function typeTranslate(page, bbox, poly, vertical) {
-    if (!window.KaisukiIME) { autoTranslate(page, bbox, poly, vertical); return; }
+    if (!window.MangaIME) { autoTranslate(page, bbox, poly, vertical); return; }
     editHint.textContent = "Type the original text, then place it.";
-    window.KaisukiIME.open({
+    window.MangaIME.open({
       title: "Type the original text",
       sourceLang: sourceLang ? sourceLang.value : "Japanese",
       translate: translateTyped,
@@ -3201,8 +3201,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // can key the ORIGINAL in themselves (no system IME needed) and get a
     // proper translation — far better than guessing at the English.
     const suggested = (data.translation || "").trim();
-    if (!suggested && window.KaisukiIME) {
-      window.KaisukiIME.open({
+    if (!suggested && window.MangaIME) {
+      window.MangaIME.open({
         title: "Couldn't read this — type the original text",
         text: (data.original || "").trim(),
         sourceLang: sourceLang ? sourceLang.value : "Japanese",

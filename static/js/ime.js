@@ -13,7 +13,7 @@
        syllables exactly as a Korean keyboard does: ㅎ + ㅏ + ㄴ -> 한).
 
    Pasting works too, for anyone copying text from elsewhere.
-   window.KaisukiIME.open({...}) is the only entry point.
+   window.MangaIME.open({...}) is the only entry point.
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   "use strict";
@@ -337,5 +337,5 @@
     setTimeout(() => (mode === "ko" ? src : romaji).focus(), 30);
   }
 
-  window.KaisukiIME = { open, romajiToKana, composeHangul, toKatakana };
+  window.MangaIME = { open, romajiToKana, composeHangul, toKatakana };
 })();
