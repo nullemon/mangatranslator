@@ -127,6 +127,16 @@ def _onnx():
     return f"{ort.__version__} | {accel} ({len(provs)} providers)"
 check("gpu", "onnxruntime", _onnx)
 
+def _offline_packs():
+    from core.local_mt import installed_langs, DEFAULT_MODELS
+    got = installed_langs()
+    if not got:
+        return ("SKIP:none downloaded — run "
+                "`python setup_models.py --offline-translate` for on-device "
+                "translation with no API key")
+    return f"{len(got)}/{len(DEFAULT_MODELS)} packs: {', '.join(sorted(got))}"
+check("gpu", "offline translation packs", _offline_packs)
+
 def _ultra():
     import ultralytics; return ultralytics.__version__
 check("gpu", "ultralytics (YOLO)", _ultra)

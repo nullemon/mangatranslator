@@ -29,13 +29,44 @@ import os
 import re
 from typing import Dict, List, Optional
 
-# One model per source language. All are small seq2seq (Marian) checkpoints.
+# One model per source language. All are small seq2seq (Marian) checkpoints,
+# roughly 300MB each — you only need the languages you actually read.
 DEFAULT_MODELS = {
     "japanese": "Helsinki-NLP/opus-mt-ja-en",
     "korean": "Helsinki-NLP/opus-mt-ko-en",
     "chinese": "Helsinki-NLP/opus-mt-zh-en",
     "arabic": "Helsinki-NLP/opus-mt-ar-en",
+    "spanish": "Helsinki-NLP/opus-mt-es-en",
+    "french": "Helsinki-NLP/opus-mt-fr-en",
+    "german": "Helsinki-NLP/opus-mt-de-en",
+    "portuguese": "Helsinki-NLP/opus-mt-roa-en",
+    "russian": "Helsinki-NLP/opus-mt-ru-en",
+    "italian": "Helsinki-NLP/opus-mt-it-en",
+    "indonesian": "Helsinki-NLP/opus-mt-id-en",
+    "thai": "Helsinki-NLP/opus-mt-th-en",
+    "vietnamese": "Helsinki-NLP/opus-mt-vi-en",
 }
+
+# What a fresh install actually needs. Everything else is opt-in, because
+# each pack is a few hundred MB and most people read one or two languages.
+COMMON_LANGS = ("japanese", "korean")
+
+
+def installed_langs():
+    """Which packs are already on disk (no download, no model load)."""
+    out = []
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except Exception:
+        return out
+    for lang, mid in DEFAULT_MODELS.items():
+        try:
+            hit = try_to_load_from_cache(mid, "config.json")
+            if isinstance(hit, str) and os.path.exists(hit):
+                out.append(lang)
+        except Exception:
+            continue
+    return out
 FALLBACK_MODEL = "Helsinki-NLP/opus-mt-mul-en"   # many-to-English
 
 _CACHE: Dict[str, "LocalMT"] = {}

@@ -45,7 +45,7 @@ def _load_craft():
         # dtype=object — the historical numpy behaviour craft was built on.
         # Worst case the shim fails and the existing CV fallback still runs.
         try:
-            from craft_text_detector import predict as _cpredict
+            import importlib
             import numpy as _np
 
             class _RaggedNP:
@@ -59,7 +59,21 @@ def _load_craft():
                     except ValueError:
                         return _np.array(obj, dtype=object)
 
-            _cpredict.np = _RaggedNP()
+            # The ragged np.array() call is NOT only in predict — the crash
+            # reported on real pages ("inhomogeneous shape ... (22,)") comes
+            # from adjustResultCoordinates in craft_utils, which is why
+            # patching predict alone left CRAFT dropping to the weaker CV
+            # detector. Shim every module that touches numpy.
+            for _mod in ("craft_text_detector.predict",
+                         "craft_text_detector.craft_utils",
+                         "craft_text_detector.image_utils",
+                         "craft_text_detector.torch_utils"):
+                try:
+                    m = importlib.import_module(_mod)
+                    if getattr(m, "np", None) is not None:
+                        m.np = _RaggedNP()
+                except Exception:
+                    continue
         except Exception:
             pass
         import torch

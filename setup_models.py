@@ -24,9 +24,14 @@ Usage:
   python setup_models.py --check    # only report what's present / missing
   python setup_models.py --dry-run  # print the commands without running
   python setup_models.py --offline-translate
-                                    # also fetch the OFFLINE translation model
-                                    # (~300MB) so pages translate on this PC
-                                    # with no API key and no internet
+                                    # OFFLINE translation packs (~300MB each)
+                                    # so pages translate on this PC with no
+                                    # API key and no internet. Japanese and
+                                    # Korean by default.
+  python setup_models.py --offline-translate --langs all
+                                    # every language pack
+  python setup_models.py --offline-translate --langs japanese,chinese
+                                    # just the ones you read
 """
 import importlib.util
 import os
@@ -38,6 +43,19 @@ CHECK = "--check" in sys.argv
 DRY = "--dry-run" in sys.argv
 GPU = "--gpu" in sys.argv
 OFFLINE_MT = "--offline-translate" in sys.argv
+
+
+def _arg_list(flag):
+    """--langs all   /   --langs japanese,korean   /   --langs=japanese"""
+    for i, a in enumerate(sys.argv):
+        if a == flag and i + 1 < len(sys.argv):
+            return [s.strip().lower() for s in sys.argv[i + 1].split(",") if s.strip()]
+        if a.startswith(flag + "="):
+            return [s.strip().lower() for s in a.split("=", 1)[1].split(",") if s.strip()]
+    return []
+
+
+OFFLINE_LANGS = _arg_list("--langs")
 IS_MAC = platform.system() == "Darwin"
 
 MODULES = {
@@ -153,23 +171,44 @@ def main():
     print("  (manga-ocr and LaMa download themselves on first use)")
 
     if OFFLINE_MT:
-        print("\nOffline translation model (no API key, no internet)...")
+        print("\nOffline translation packs (no API key, no internet)...")
         pip(["sentencepiece", "sacremoses"])
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from core.local_mt import get, model_id_for
-            for lang in ("Japanese", "Korean"):
-                mid = model_id_for(lang)
-                print(f"  -> {lang}: {mid}")
+            from core.local_mt import (get, model_id_for, DEFAULT_MODELS,
+                                       COMMON_LANGS, installed_langs)
+            already = set(installed_langs())   # NB: `have` is a module fn
+            if OFFLINE_LANGS == ["all"]:
+                langs = list(DEFAULT_MODELS)
+            elif OFFLINE_LANGS:
+                langs = OFFLINE_LANGS
+            else:
+                langs = list(COMMON_LANGS)
+            unknown = [l for l in langs if l not in DEFAULT_MODELS]
+            for u in unknown:
+                print(f"  [--] no pack for {u!r}. Available: "
+                      f"{', '.join(sorted(DEFAULT_MODELS))}")
+            langs = [l for l in langs if l in DEFAULT_MODELS]
+            todo = [l for l in langs if l not in already]
+            for l in langs:
+                if l in already:
+                    print(f"  [ok] {l} already downloaded")
+            if todo:
+                print(f"  downloading {len(todo)} pack(s), "
+                      f"about {0.3 * len(todo):.1f}GB total")
+            for lang in todo:
+                print(f"  -> {lang}: {model_id_for(lang)}")
                 if get(lang) is None:
-                    print(f"  [--] {lang} pack failed — retry, or use an API engine")
+                    print(f"  [--] {lang} failed — retry, or use an API engine")
                 else:
-                    print(f"  [ok] {lang} pack ready")
+                    print(f"  [ok] {lang} ready")
         except Exception as e:
             print(f"  [--] offline translation setup failed: {e}")
     else:
-        print("\nTip: add --offline-translate to also download the on-device")
-        print("     translation model (no API key, no internet, much faster).")
+        print("\nTip: --offline-translate downloads the on-device translation")
+        print("     packs (no API key, no internet, much faster). By default")
+        print("     that is Japanese and Korean; add --langs all for every")
+        print("     language, or --langs japanese,chinese to pick your own.")
 
     print("\nDone." if steps_ok else
           "\nFinished with some failures — re-run, or check your internet "
