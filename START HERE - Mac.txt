@@ -40,6 +40,28 @@ WHAT YOU NEED
 - An internet connection for the first run
 
 
+OPTIONAL: TRANSLATE WITHOUT AN API KEY
+--------------------------------------
+The app can translate entirely on your Mac, with no key and no internet,
+using downloaded language packs. Quality is below Gemini or Claude -- it
+reads one line at a time and can't see the page -- so it's best for bulk
+passes and pages you'll letter by hand anyway.
+
+Open Terminal in this folder and run one of:
+
+  source venv/bin/activate
+  python setup_models.py --offline-translate
+        Japanese and Korean (about 600MB)
+
+  python setup_models.py --offline-translate --langs all
+        all 13 languages (about 3.9GB)
+
+  python setup_models.py --offline-translate --langs japanese,chinese
+        just the ones you read
+
+Then pick "Offline -- on this PC, no key, no internet" as the engine.
+
+
 GOOD TO KNOW
 ------------
 - On Apple Silicon the AI models run on your Mac's own GPU. You'll see
