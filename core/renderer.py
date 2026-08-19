@@ -348,6 +348,191 @@ class TextRenderer:
             self._size_scale = prev_scale
             self._break_words = prev_break
 
+    # ══ Balloon-shaped layout ═════════════════════════════════════════
+    # Lettering follows the bubble: short lines at the top and bottom, long
+    # ones through the middle. Laying text into the largest RECTANGLE that
+    # fits an oval wastes the widest part of the balloon and leaves obvious
+    # dead space above and below the text.
+
+    def _row_spans(self, shape_mask, rect):
+        """Left/right edge of the balloon on every row of `rect`."""
+        x, y, w, h = [int(v) for v in rect]
+        sub = shape_mask[max(0, y):y + h, max(0, x):x + w]
+        if sub.size == 0:
+            return None
+        spans = []
+        for row in (sub > 0):
+            idx = np.flatnonzero(row)
+            spans.append((int(idx[0]), int(idx[-1]) + 1) if idx.size else (0, 0))
+        return spans
+
+    def _band_width(self, spans, y0, y1, sw):
+        """Usable width for a line occupying rows y0..y1 — the NARROWEST point
+        it passes through, minus room for the stroke halo."""
+        lo = max(0, min(len(spans) - 1, y0))
+        hi = max(lo + 1, min(len(spans), y1))
+        band = spans[lo:hi]
+        if not band:
+            return 0, 0
+        left = max(b[0] for b in band)
+        right = min(b[1] for b in band)
+        return left, max(0, right - left - sw)
+
+    def _fit_lines(self, draw, words, spans, size, rect_h, n_lines,
+                   allow_hyphen=False, width_scale=1.0):
+        """Try to lay `words` into exactly `n_lines` lines at `size`, with the
+        block CENTRED in the shape. Returns the placed lines or None."""
+        font = self._get_font(size)
+        sw = max(1, size // 18) * 2
+        spacing = max(int(size * self.line_spacing_ratio), 1)
+        probe = self._bbox(draw, "Ag", font)
+        lh = max(1, probe[3] - probe[1])
+
+        total = n_lines * lh + (n_lines - 1) * spacing
+        if total > rect_h:
+            return None
+        top = (rect_h - total) // 2          # centred: this is the whole point
+
+        out, wi = [], 0
+        pending = list(words)
+        for i in range(n_lines):
+            y0 = top + i * (lh + spacing)
+            left, avail = self._band_width(spans, y0, y0 + lh, sw)
+            full_avail = avail
+            # Narrowing the working width is how the words get SPREAD over the
+            # line count we asked for. Greedy at full width always packs into
+            # the fewest possible lines, which leaves a short block sitting in
+            # the middle of the balloon — the exact thing this is meant to fix.
+            avail = int(avail * width_scale)
+            if avail < max(8, size // 2):
+                return None                   # this row is too pinched
+            line = ""
+            while wi < len(pending):
+                cand = f"{line} {pending[wi]}".strip()
+                if self._line_w(draw, cand, font) <= avail:
+                    line, wi = cand, wi + 1
+                else:
+                    break
+            if not line:
+                if not allow_hyphen:
+                    return None
+                word = pending[wi]
+                cut = word.rfind("-", 0, max(1, len(word) - 1))
+                head = word[:cut + 1] if cut > 0 else ""
+                if head and self._line_w(draw, head, font) <= avail:
+                    line = head                       # break at its own hyphen
+                    pending[wi] = word[cut + 1:]
+                else:
+                    pieces = self._split_word(word, font, avail, draw)
+                    if not pieces or self._line_w(draw, pieces[0], font) > avail:
+                        return None
+                    line = pieces[0]
+                    taken = len(line) - (1 if line.endswith("-") else 0)
+                    rest = word[taken:]
+                    if rest:
+                        pending[wi] = rest
+                    else:
+                        wi += 1
+            out.append((line, y0, left, left + full_avail + sw))
+        if wi < len(pending):
+            return None                       # words left over
+        return out, lh
+
+    def _shape_layout(self, draw, text, spans, rect_h, allow_hyphen=False):
+        """Largest size whose text fits the balloon's shape. Returns
+        (size, lines, lh) or None."""
+        words = [w for w in text.split() if w]
+        if not words:
+            return None
+        best = None
+        lo, hi = self.min_font_size, min(400, max(self.min_font_size, rect_h))
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            # Prefer MORE lines at the same size: a taller block fills the
+            # balloon top to bottom, and the outer lines come out shorter,
+            # which is what makes it read as hand lettering instead of a
+            # paragraph parked in the middle. Fewest-lines-first left obvious
+            # dead space above and below.
+            hit = None
+            for n in range(10, 0, -1):
+                # Balance: squeeze the working width until the words really do
+                # spread across n lines with none left empty.
+                for ws in (1.0, 0.9, 0.8, 0.72, 0.64, 0.56, 0.48):
+                    got = self._fit_lines(draw, words, spans, mid, rect_h, n,
+                                          allow_hyphen, ws)
+                    if got:
+                        hit = got
+                        break
+                if hit:
+                    break
+            if hit:
+                best, lo = (mid, hit[0], hit[1]), mid + 1
+            else:
+                hi = mid - 1
+        return best
+
+    def _draw_shaped(self, image, draw, rect, text, color, italic, shape_mask,
+                     baseline_size):
+        """Draw `text` to the balloon's shape. Only used when it beats the
+        plain rectangular fit — so it can never make a bubble worse."""
+        # Work from the BALLOON's own extent, not the rect we were handed —
+        # that rect is the inscribed rectangle (the fallback), which is much
+        # smaller than the bubble we are trying to fill.
+        ys, xs = np.nonzero(shape_mask)
+        if xs.size == 0:
+            return False
+        x, y = int(xs.min()), int(ys.min())
+        w, h = int(xs.max()) - x + 1, int(ys.max()) - y + 1
+        m = max(2, int(min(w, h) * 0.05))
+        rx, ry = x + m, y + m
+        rw, rh = max(8, w - 2 * m), max(8, h - 2 * m)
+        spans = self._row_spans(shape_mask, (rx, ry, rw, rh))
+        if not spans:
+            return False
+
+        # Prefer unbroken words; allow hyphenation only if nothing fits whole.
+        got = self._shape_layout(draw, text, spans, rh, allow_hyphen=False)
+        if got is None:
+            got = self._shape_layout(draw, text, spans, rh, allow_hyphen=True)
+        if got is None:
+            return False
+        size, lines, lh = got
+
+        # SAFETY NET: if the shape gains us nothing over the rectangle, don't
+        # use it. The first version of this feature shipped layouts that were
+        # smaller AND uglier than what it replaced.
+        if size <= baseline_size:
+            return False
+
+        size = max(self.min_font_size, int(round(size * self._size_scale)))
+        if self._size_scale != 1.0:
+            re_got = (self._shape_layout(draw, text, spans, rh, False)
+                      if self._size_scale < 1.0 else None)
+            if re_got:
+                size, lines, lh = re_got
+
+        self._last_font_size = size
+        font = self._get_font(size)
+        stroke_c = (255, 255, 255) if color[0] < 128 else (0, 0, 0)
+        stroke_w = max(1, size // 18)
+        for line, ly, left, right in lines:
+            bb = self._bbox(draw, line, font)
+            lw = bb[2] - bb[0]
+            lx = rx + left + max(0, ((right - left) - lw) // 2)
+            ty = ry + ly
+            if self._needs_mix(line) and not italic:
+                self._draw_mixed_line(draw, ty, lx, lw + 2, line, font,
+                                      color, stroke_w, stroke_c)
+                continue
+            if italic:
+                self._draw_italic_line(image, lx - bb[0], ty - bb[1], line,
+                                       font, color, stroke_w, stroke_c)
+            else:
+                draw.text((lx - bb[0], ty - bb[1]), self._shape(line), fill=color,
+                          font=font, stroke_width=stroke_w, stroke_fill=stroke_c,
+                          **self._dir_kw())
+        return True
+
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
         x, y, w, h = rect
 
@@ -368,6 +553,15 @@ class TextRenderer:
 
         draw = ImageDraw.Draw(image)
         font_size = self._optimal_size(text, inner_w, inner_h, draw)
+
+        # A balloon mask was supplied: try laying the text out to the bubble's
+        # real shape. Falls straight back to the rectangle below unless the
+        # shape actually fits BIGGER text.
+        shape = getattr(self, "_shape_mask", None)
+        if shape is not None and abs(rotation) < 2:
+            if self._draw_shaped(image, draw, (x, y, w, h), text, color,
+                                 italic, shape, font_size):
+                return image
         if self._size_scale != 1.0:
             # Per-region bump/shrink. Allowed to exceed the auto-fit (the user
             # asked for bigger) but kept within the rect so it can't blow up.

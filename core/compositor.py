@@ -244,7 +244,7 @@ class Compositor:
                         color = (255, 255, 255) if dark else (0, 0, 0)
                         placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
                                            color, False, 0, self._item_scale(it),
-                                           False, False))
+                                           False, False, None))
                         it["placed"] = True
                 continue
 
@@ -278,7 +278,7 @@ class Compositor:
                             placements.append(((wx_, wy_, ww_, whh_),
                                                " ".join(self.watermark_text.split()),
                                                self._pick_color(dark, it), False, 0, 1.0,
-                                               True, False))
+                                               True, False, None))
                             used_boxes.append((int(wx_), int(wy_), int(ww_), int(whh_)))
                         it["placed"] = True
                 continue
@@ -344,7 +344,7 @@ class Compositor:
                 mglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), mglow, bool(it.get("fit_box"))))
+                               self._item_scale(it), mglow, bool(it.get("fit_box")), None))
                 it["placed"] = True
                 continue
 
@@ -380,7 +380,7 @@ class Compositor:
                     placements.append((offset_rect(it, rect),
                                        " ".join(text.split()), color, ital, 0,
                                        self._item_scale(it), tglow,
-                                       bool(it.get("fit_box"))))
+                                       bool(it.get("fit_box")), None))
                     it["placed"] = True
                     continue
                 # Better tilt logic: when the detector called this horizontal
@@ -473,7 +473,7 @@ class Compositor:
                 fglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), fglow, bool(it.get("fit_box"))))
+                               self._item_scale(it), fglow, bool(it.get("fit_box")), None))
                 it["placed"] = True
                 continue
 
@@ -546,9 +546,22 @@ class Compositor:
                     continue
                 used_boxes.append(bb)
                 self._wipe(result, mask, dark)
-                rect = self._inner_rect(mask)
-                if rect is None:
-                    rect = (bb[0] + 2, bb[1] + 2, max(bb[2] - 4, 10), max(bb[3] - 4, 10))
+                inner = self._inner_rect(mask)
+                rect = inner or (bb[0] + 2, bb[1] + 2,
+                                 max(bb[2] - 4, 10), max(bb[3] - 4, 10))
+                # Hand the renderer the balloon itself so the lettering can
+                # follow its shape. It only uses this when the shape fits
+                # BIGGER text than this rectangle, so it can never make a
+                # bubble worse; the rect below stays the fallback.
+                # NB: `rect` stays the INSCRIBED rectangle. It is both the
+                # fallback and the yardstick — handing over the balloon's full
+                # bounding box instead would let the fallback text overflow the
+                # oval, and would make the shaped layout look worse than a
+                # baseline it could never legitimately beat.
+                bshape = cv2.erode(mask, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (9, 9)))
+                if cv2.countNonZero(bshape) >= 200:
+                    it["_shape"] = bshape
             else:
                 # No reliable balloon. Treat like floating text: framed white
                 # interiors still get a clean caption fill; text over art has
@@ -593,24 +606,28 @@ class Compositor:
             placements.append((offset_rect(it, rect), text, color, ital,
                                rotation if it.get("manual_rot") else 0,
                                self._item_scale(it), fglow or self._item_glow(it),
-                               bool(it.get("fit_box"))))
+                               bool(it.get("fit_box")), it.get("_shape")))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
         # AI box can push one past the edge, which is how text ended up out of
         # bounds. Clamp every rect to the page before anything is drawn.
         placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb)
-            for r, t, c, i, ro, fs, gl, fb in placements
+            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh)
+            for r, t, c, i, ro, fs, gl, fb, sh in placements
         ]
         placements = [p for p in placements if p[0] is not None]
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale, glow, fit in placements:
-                self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
-                                           rotation=rot, scale=fscale, glow=glow,
-                                           fit_box=fit)
+            for rect, text, color, ital, rot, fscale, glow, fit, shp in placements:
+                self.renderer._shape_mask = shp
+                try:
+                    self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
+                                               rotation=rot, scale=fscale,
+                                               glow=glow, fit_box=fit)
+                finally:
+                    self.renderer._shape_mask = None
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         # Hard guarantee: only the exact regions we edited may differ from the
@@ -618,7 +635,7 @@ class Compositor:
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
         placement_rects = []
-        for rect, text, color, ital, rot, fscale, glow, fit in placements:
+        for rect, text, color, ital, rot, fscale, glow, fit, shp in placements:
             placement_rects.append(self._rotated_aabb(rect, rot))
 
         edited = np.zeros((h, w), np.uint8)
