@@ -3498,16 +3498,23 @@ document.addEventListener("DOMContentLoaded", () => {
   transFull.addEventListener("load", () => { if (tool) buildOverlay(); });
 
   /* ══ DOWNLOAD / ZIP / NEW ══ */
-  downloadBtn.addEventListener("click", () => {
+  function downloadPage(withWatermark) {
     const p = getActive();
     if (!p || p.status !== "done") return;
     const a = document.createElement("a");
-    a.href = `/api/result/${p.taskId}?t=${p.rev}`;
+    a.href = `/api/result/${p.taskId}?t=${p.rev}` +
+             (withWatermark ? "" : "&watermark=0");
     const chN = (chapterName && chapterName.value.trim()) || "";
     const stem = (p.name || "page.png").replace(/\.[^.]+$/, "");
-    a.download = (chN ? chN + " - " + stem : "translated_" + stem) + ".png";
+    a.download = (chN ? chN + " - " + stem : "translated_" + stem) +
+                 (withWatermark ? "" : " (no watermark)") + ".png";
     a.click();
-  });
+  }
+
+  downloadBtn.addEventListener("click", () => downloadPage(true));
+  const downloadCleanBtn = document.getElementById("downloadCleanBtn");
+  if (downloadCleanBtn) downloadCleanBtn.addEventListener(
+    "click", () => downloadPage(false));
 
   const wmStyle = document.getElementById("wmStyle");
   const wmPreview = document.getElementById("wmPreview");
@@ -3592,30 +3599,41 @@ document.addEventListener("DOMContentLoaded", () => {
     finally { stampBtn.disabled = false; }
   });
 
-  zipBtn.addEventListener("click", async () => {
+  // Watermarked or clean, chosen when you download rather than when you
+  // translate. The unstamped page is kept next to the stamped one, so asking
+  // for the other version costs nothing and re-runs nothing.
+  async function downloadZip(btn, withWatermark) {
     const ids = pages.filter(p => p.status === "done").map(p => p.taskId);
     if (!ids.length) return;
     const chName = (chapterName && chapterName.value.trim()) || "";
-    zipBtn.disabled = true; zipBtn.textContent = "Zipping...";
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Zipping...";
     try {
       const res = await fetch("/api/zip", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task_ids: ids, name: chName }),
+        body: JSON.stringify({ task_ids: ids, name: chName,
+                               watermark: withWatermark }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = (chName ? chName : "translated_pages") + ".zip";
+      a.download = (chName ? chName : "translated_pages") +
+                   (withWatermark ? "" : " (no watermark)") + ".zip";
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
       showError(e.message);
     } finally {
-      zipBtn.disabled = false; zipBtn.textContent = "Download All (ZIP)";
+      btn.disabled = false; btn.textContent = label;
       updateBatch();
     }
-  });
+  }
+
+  zipBtn.addEventListener("click", () => downloadZip(zipBtn, true));
+  const zipCleanBtn = document.getElementById("zipCleanBtn");
+  if (zipCleanBtn) zipCleanBtn.addEventListener(
+    "click", () => downloadZip(zipCleanBtn, false));
 
   translateScanBtn.addEventListener("click", async () => {
     const p = getActive();

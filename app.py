@@ -86,6 +86,64 @@ _WM_FONT_CANDIDATES = [
 ]
 
 
+#: Marks the unwatermarked twin of a finished page. Kept beside the delivered
+#: file so both versions are a download away and neither costs a re-run.
+CLEAN_SUFFIX = ".__clean"
+
+
+def clean_master(path: str) -> str:
+    """Where the unstamped copy of `path` lives."""
+    stem, ext = os.path.splitext(path)
+    return stem + CLEAN_SUFFIX + ext
+
+
+def deliverable(path: str, with_watermark: bool = True) -> str:
+    """Which file to hand over. Falls back to the delivered page whenever no
+    clean twin was kept — that happens when nothing was stamped in the first
+    place (so the page IS clean), and in "replace site watermark" mode, where
+    the mark is composited into the art and cannot be lifted back out."""
+    if with_watermark:
+        return path
+    twin = clean_master(path)
+    return twin if os.path.exists(twin) else path
+
+
+def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
+                  wm_size="m", credit="", wm_style="clean"):
+    """Stamp a finished page, keeping the unmarked version alongside it.
+
+    Watermarking used to be one-way: the mark went into the file and the clean
+    page was gone, so getting one without it meant translating the chapter
+    again — the same API calls, the same money, for a page that had already
+    been made. The clean render is now copied aside first, so both versions
+    exist and Download can offer either.
+
+    Called after EVERY output write, including when there is nothing to stamp:
+    that is what keeps the twin honest. Without it, re-rendering a page with
+    the watermark switched off would leave the previous run's twin sitting
+    there, and "download without watermark" would quietly hand back a stale
+    page.
+    """
+    twin = clean_master(output_path)
+    if not (watermark or credit):
+        if os.path.exists(twin):          # nothing stamped — the page is clean
+            try:
+                os.remove(twin)
+            except OSError:
+                pass
+        return
+    try:
+        import shutil
+        shutil.copyfile(output_path, twin)
+    except Exception as e:
+        # Not fatal: the page still gets its watermark, the user just cannot
+        # ask for a clean copy of this one.
+        print(f"[watermark] couldn't keep a clean copy of "
+              f"{os.path.basename(output_path)}: {e}")
+    _stamp_all(output_path, watermark, wm_place, wm_opacity, wm_size, credit,
+               wm_style)
+
+
 def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
                wm_size="m", credit="", wm_style="clean"):
     """Stamp the user's watermark and/or credit line on ANY finished output
@@ -1052,15 +1110,29 @@ async def _run(
         # User watermark (corner by default; tiled optional). Skipped when
         # "replace watermark" is on — there the user's mark is dropped in place
         # of the erased site watermark instead.
-        if watermark and not replace_watermark:
-            _stamp_watermark(output_path, watermark, wm_place, wm_opacity,
-                             wm_size, wm_style)
+        #
+        # Called even when there is no watermark, so a page re-run with the
+        # mark turned off drops the previous run's clean twin instead of
+        # leaving it to be served as if it were current.
+        _stamp_output(output_path,
+                      watermark if not replace_watermark else "",
+                      wm_place, wm_opacity, wm_size, "", wm_style)
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
         if compress:
             try:
                 newp = await loop.run_in_executor(None, lambda: compress_output(output_path))
                 if newp != output_path and isinstance(result, dict):
+                    # Compressing renames the delivered page (.png -> .jpg), so
+                    # its clean twin has to follow it or the pair comes apart
+                    # and the no-watermark download silently serves the
+                    # watermarked file.
+                    old_twin = clean_master(output_path)
+                    if os.path.exists(old_twin):
+                        try:
+                            os.replace(old_twin, clean_master(newp))
+                        except OSError as e:
+                            print(f"[watermark] clean copy lost on compress: {e}")
                     result["output_path"] = newp
             except Exception as e:
                 print(f"[run] output compress failed: {e}")
@@ -1248,9 +1320,9 @@ async def _run_enhance(
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, do_work)
-        if wm and (wm.get("watermark") or wm.get("credit")):
-            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+        if wm:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
                        wm.get("wm_style", "clean"))
 
         tasks[task_id].update(
@@ -1370,9 +1442,9 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
             return out.shape
 
         shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
-        if wm and (wm.get("watermark") or wm.get("credit")):
-            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+        if wm:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
                        wm.get("wm_style", "clean"))
         tasks[task_id].update({
             "status": "done", "step": 2, "progress": 100,
@@ -1412,9 +1484,9 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str,
 
         loop = asyncio.get_event_loop()
         shape = await loop.run_in_executor(None, do_work)
-        if wm and (wm.get("watermark") or wm.get("credit")):
-            _stamp_all(output_path, wm["watermark"], wm["wm_place"],
-                       wm["wm_opacity"], wm["wm_size"], wm["credit"],
+        if wm:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
                        wm.get("wm_style", "clean"))
         tasks[task_id].update({
             "status": "done",
@@ -1637,7 +1709,7 @@ _NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
 
 
 @app.get("/api/result/{task_id}")
-async def result(task_id: str):
+async def result(task_id: str, watermark: int = 1):
     if task_id not in tasks:
         raise HTTPException(404)
     t = tasks[task_id]
@@ -1646,6 +1718,9 @@ async def result(task_id: str):
     p = t["result"]["output_path"]
     if not os.path.exists(p):
         raise HTTPException(404)
+    # The page as delivered by default; ?watermark=0 for the clean twin. The
+    # editor's preview never passes this, so what is on screen is unchanged.
+    p = deliverable(p, bool(watermark))
     mt = "image/jpeg" if p.lower().endswith((".jpg", ".jpeg")) else "image/png"
     return FileResponse(p, media_type=mt, headers=_NO_CACHE)
 
@@ -1899,11 +1974,13 @@ async def rerender(task_id: str, request: Request):
         if raw_effect:
             out = raw_scan(out, strength=raw_strength, style=raw_style)
         _write_atomic(r["output_path"], out)
-        wm = t.get("watermark", "")
-        if wm:
-            _stamp_watermark(r["output_path"], wm,
-                             t.get("wm_place", "br"), t.get("wm_opacity", 50),
-                             t.get("wm_size", "m"), t.get("wm_style", "clean"))
+        # Unconditional: a re-render rebuilds the page from scratch, so the
+        # clean twin has to be rebuilt with it (or dropped, if the watermark
+        # has since been cleared).
+        _stamp_output(r["output_path"], t.get("watermark", ""),
+                      t.get("wm_place", "br"), t.get("wm_opacity", 50),
+                      t.get("wm_size", "m"), "",
+                      t.get("wm_style", "clean"))
 
     # Serialise per page: two Applies landing together used to write the same
     # file at once and corrupt each other's output.
@@ -2346,8 +2423,8 @@ async def stamp_page(task_id: str, request: Request):
         op = int(payload.get("wm_opacity") or 50)
     except (TypeError, ValueError):
         op = 50
-    _stamp_all(p, wmk, place, op, size, cr,
-               str(payload.get("wm_style") or "clean").strip() or "clean")
+    _stamp_output(p, wmk, place, op, size, cr,
+                  str(payload.get("wm_style") or "clean").strip() or "clean")
     return {"ok": True}
 
 
@@ -2363,6 +2440,11 @@ async def make_zip(request: Request):
     # or site upload without renaming.
     name = re.sub(r'[\\/:*?"<>|]+', "", str(payload.get("name") or "")).strip()
     name = name[:80]
+    # Watermarked or clean, decided here rather than at translation time — the
+    # unstamped page was kept beside the stamped one, so both are a download
+    # away and neither costs a re-run.
+    with_wm = payload.get("watermark", True)
+    with_wm = with_wm not in (False, 0, "0", "false", "off", "no")
 
     buf = io.BytesIO()
     count = 0
@@ -2374,6 +2456,7 @@ async def make_zip(request: Request):
             path = (t.get("result") or {}).get("output_path", "")
             if not path or not os.path.exists(path):
                 continue
+            path = deliverable(path, with_wm)
             stem = os.path.splitext(os.path.basename(t.get("name", f"page_{i}")))[0]
             arcname = (f"{name} - {i:03d}.png" if name
                        else f"{i:03d}_{stem}.png")
@@ -2394,11 +2477,13 @@ async def make_zip(request: Request):
         raise HTTPException(400, "No finished pages to download yet")
 
     buf.seek(0)
+    base = name or "translated_pages"
+    if not with_wm:
+        base += " (no watermark)"
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition":
-                 f'attachment; filename="{(name or "translated_pages")}.zip"'},
+        headers={"Content-Disposition": f'attachment; filename="{base}.zip"'},
     )
 
 
