@@ -25,6 +25,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const hdUpscale      = document.getElementById("hdUpscale");
   const fontSelect     = document.getElementById("fontSelect");
   const fontUpload     = document.getElementById("fontUpload");
+  const orientAll      = document.getElementById("orientAll");
+  const orientNote     = document.getElementById("orientNote");
   const enhanceProvider= document.getElementById("enhanceProvider");
   const enhanceKey     = document.getElementById("enhanceKey");
   const enhanceKeyLabel= document.getElementById("enhanceKeyLabel");
@@ -1037,6 +1039,130 @@ document.addEventListener("DOMContentLoaded", () => {
     renderStrip();
   }
 
+  /* ══ ORIENTATION ══
+     Scans arrive upside down, mirrored or sideways more often than you would
+     think — a phone photo of a tankoubon, a badly batched scan, a strip saved
+     from a site that flipped it for right-to-left reading. You can tell at a
+     glance from the text, but until now the only fix was to leave the app,
+     re-edit the file and upload it again.
+
+     The turn is done here in the browser on the page's own image, so it costs
+     nothing and needs no round trip. It rewrites the file that gets sent, which
+     is what makes it a real fix rather than a display trick: detection, OCR and
+     the translation all then see a page the right way up. */
+  const ORIENT = {
+    "180":    { label: "flipped 180°",   swap: false, rotate: Math.PI,      flip: false },
+    "mirror": { label: "mirrored",       swap: false, rotate: 0,            flip: true  },
+    "left":   { label: "turned 90° left",  swap: true,  rotate: -Math.PI / 2, flip: false },
+    "right":  { label: "turned 90° right", swap: true,  rotate: Math.PI / 2,  flip: false },
+  };
+
+  function transformImage(file, kind) {
+    const spec = ORIENT[kind];
+    return new Promise((resolve, reject) => {
+      if (!file || !spec) { reject(new Error("Nothing to turn")); return; }
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          // 90° turns swap the page's width and height; 180° and mirror don't.
+          const w = img.naturalWidth, h = img.naturalHeight;
+          const cv = document.createElement("canvas");
+          cv.width  = spec.swap ? h : w;
+          cv.height = spec.swap ? w : h;
+          const ctx = cv.getContext("2d");
+          ctx.translate(cv.width / 2, cv.height / 2);
+          if (spec.rotate) ctx.rotate(spec.rotate);
+          if (spec.flip) ctx.scale(-1, 1);
+          ctx.drawImage(img, -w / 2, -h / 2);
+          // PNG, not JPEG: a page may be turned more than once (a mirrored AND
+          // upside-down scan needs two), and re-encoding as JPEG each time
+          // would grind the linework down a little more every click.
+          cv.toBlob(b => {
+            URL.revokeObjectURL(url);
+            if (!b) { reject(new Error("Could not turn the page")); return; }
+            resolve(b);
+          }, "image/png");
+        } catch (e) {
+          URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read the page image")); };
+      img.src = url;
+    });
+  }
+
+  async function reorientPage(p, kind) {
+    if (!p || !p.file) return false;
+    const blob = await transformImage(p.file, kind);
+    const name = p.name || "page.png";
+    p.file = new File([blob], name, { type: "image/png" });
+    p.size = blob.size;
+    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    p.thumb = URL.createObjectURL(blob);
+    // A result from the old orientation describes a page that no longer
+    // exists, so it goes. Back to "pending", NOT "queued": re-running costs
+    // real money and that is the user's call, not a side effect of
+    // straightening a scan.
+    if (p.taskId || p.status === "done" || p.status === "error") {
+      p.taskId = null; p.result = null; p.rev = 0; p.error = "";
+      p.items = []; p.excluded = new Set(); p.erased = new Set();
+      p.glows = new Set(); p.fits = new Set();
+      p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+    }
+    p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
+    return true;
+  }
+
+  async function applyOrient(kind, scope) {
+    // scope: "all" / "active", or left out to follow the "every page" box.
+    const all = scope ? scope === "all" : !!(orientAll && orientAll.checked);
+    // Before anything is translated there is no active page yet, so fall back
+    // to the first — that is the one on screen in the upload preview.
+    const targets = all ? pages.filter(p => p.file)
+                        : [getActive() || pages[0]].filter(p => p && p.file);
+    if (!targets.length) { showError("No page image to turn."); return; }
+    const bar = document.getElementById("orientBar");
+    if (bar) bar.style.opacity = ".5";
+    let done = 0, lost = 0;
+    try {
+      for (const p of targets) {
+        const had = p.status === "done";
+        if (await reorientPage(p, kind)) { done++; if (had) lost++; }
+      }
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      if (bar) bar.style.opacity = "";
+    }
+    if (!done) return;
+    const spec = ORIENT[kind];
+    if (orientNote) {
+      orientNote.textContent =
+        `${done} page${done === 1 ? "" : "s"} ${spec.label}` +
+        (lost ? " — press Translate to run again" : "");
+      clearTimeout(orientNote._t);
+      orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 8000);
+    }
+    // Keep the upload preview in step when only one page is loaded. The old
+    // thumbnail URL has just been revoked, so anything still pointing at it
+    // shows a broken image — and before the first translation there is no
+    // "active" page, so fall back to the first exactly as above.
+    const act = getActive() || pages[0];
+    if (act && previewImg && pages.length === 1) {
+      previewImg.src = act.thumb;
+      if (fileSize) fileSize.textContent = formatBytes(act.size);
+    }
+    renderStrip(); updateBatch(); renderActivePage();
+  }
+
+  function syncOrientBar() {
+    const bar = document.getElementById("orientBar");
+    if (!bar) return;
+    bar.style.display = pages.some(p => p.file) ? "" : "none";
+  }
+
   function buildRequest(file) {
     const f = new FormData();
     f.append("file", file);
@@ -1199,11 +1325,35 @@ document.addEventListener("DOMContentLoaded", () => {
     p.status = "queued"; renderActivePage(); renderStrip(); updateBatch(); pump();
   });
 
+  [["orient180", "180"], ["orientMirror", "mirror"],
+   ["orientLeft", "left"], ["orientRight", "right"]].forEach(([id, kind]) => {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener("click", () => applyOrient(kind));
+  });
+
+  // Same fix on the upload screen, before a penny is spent. Here it turns
+  // EVERY selected page: a chapter that was scanned upside down was scanned
+  // that way from cover to cover.
+  const flipBtn = document.getElementById("flipBtn");
+  if (flipBtn) flipBtn.addEventListener("click", async () => {
+    if (!pages.length) return;
+    flipBtn.disabled = true;
+    const was = flipBtn.textContent;
+    flipBtn.textContent = "Turning…";
+    try {
+      await applyOrient("180", "all");
+      if (previewImg && pages[0]) previewImg.src = pages[0].thumb;
+    } finally {
+      flipBtn.disabled = false; flipBtn.textContent = was;
+    }
+  });
+
   /* ══ PAGE STRIP ══ */
   function renderStrip() {
     const multi = pages.length > 1;
     batchBar.style.display = multi ? "" : "none";
     pageStrip.style.display = multi ? "" : "none";
+    syncOrientBar();          // one page or fifty, a bad scan is still a bad scan
     if (!multi) return;
 
     pageStrip.innerHTML = "";
@@ -1218,6 +1368,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <span class="pg-dot ${p.status}"></span>
         <div class="pg-tools">
           <button data-act="left" title="Move left" ${i === 0 ? "disabled" : ""}>‹</button>
+          <button data-act="flip" title="Flip this page 180° (upside-down scan)" ${p.file ? "" : "disabled"}>⟳</button>
           <button data-act="right" title="Move right" ${i === pages.length - 1 ? "disabled" : ""}>›</button>
           <button data-act="remove" title="Remove">✕</button>
         </div>`;
@@ -1233,6 +1384,14 @@ document.addEventListener("DOMContentLoaded", () => {
   function stripAction(uid, act) {
     const i = pages.findIndex(p => p.uid === uid);
     if (i < 0) return;
+    if (act === "flip") {
+      // Turn just this page, whatever the "every page" box says — a chapter
+      // usually has only one or two slides in the wrong way round.
+      reorientPage(pages[i], "180")
+        .then(() => { renderStrip(); updateBatch(); renderActivePage(); })
+        .catch(e => showError(e.message));
+      return;
+    }
     if (act === "left" && i > 0) { [pages[i - 1], pages[i]] = [pages[i], pages[i - 1]]; }
     else if (act === "right" && i < pages.length - 1) { [pages[i + 1], pages[i]] = [pages[i], pages[i + 1]]; }
     else if (act === "remove") {
@@ -1258,6 +1417,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderActivePage() {
     const p = getActive();
     if (!p) return;
+    syncOrientBar();
     const rawFx = document.getElementById("rawFxBtn");
     if (rawFx) {
       rawFx.classList.toggle("btn-primary", !!p.rawEffect);

@@ -442,6 +442,7 @@
           <div class="preview-btns">
             <button class="btn btn-primary" id="goBtn">Translate</button>
             <button class="btn btn-ghost" id="cropBtn" title="Crop image before translating">Crop</button>
+            <button class="btn btn-ghost" id="flipBtn" title="Scan came in upside down? Turn every selected page 180° before translating">⟳ Flip 180°</button>
             <button class="btn btn-ghost" id="cutBtn" title="Cut a dense SBS page into pieces — each part is translated on its own, then merged back" style="display:none">✂ Cut pieces</button>
             <button class="btn btn-ghost" id="clearBtn">Clear</button>
           </div>
@@ -464,6 +465,19 @@
 
       <!-- page strip (multi-page only) -->
       <div class="page-strip" id="pageStrip" style="display:none"></div>
+
+      <!-- Orientation. A scan that came in upside down or mirrored is obvious
+           the moment you look at the text, and until now the only fix was to
+           re-edit the file outside the app and upload it again. -->
+      <div class="orient-bar" id="orientBar" style="display:none">
+        <span class="orient-label">Scan the wrong way round?</span>
+        <button class="btn btn-ghost btn-sm" id="orient180" title="Turn the page 180° — the fix for a scan that came in upside down">⟳ Flip 180°</button>
+        <button class="btn btn-ghost btn-sm" id="orientMirror" title="Mirror left-to-right — the fix for a scan that reads backwards, as if held up to a mirror">⇋ Mirror</button>
+        <button class="btn btn-ghost btn-sm" id="orientLeft" title="Turn 90° anticlockwise — for a page scanned sideways">⟲ 90°</button>
+        <button class="btn btn-ghost btn-sm" id="orientRight" title="Turn 90° clockwise — for a page scanned sideways">⟳ 90°</button>
+        <label class="orient-all" title="A chapter scanned upside down is usually upside down on every page"><input type="checkbox" id="orientAll"> every page</label>
+        <span class="orient-note" id="orientNote"></span>
+      </div>
 
       <!-- active page: processing state -->
       <div id="pageProcessing" style="display:none">
