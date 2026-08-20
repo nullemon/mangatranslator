@@ -164,6 +164,7 @@ class LocalMT:
                 self._device = "cpu"          # e.g. an unsupported Metal op
                 self._model = self._model.to("cpu")
             self._model.eval()
+            self._quiet_length_warning()
             self.ok = True
             print(f"[local-mt] ready on {self._device}", flush=True)
         except Exception as e:
@@ -176,6 +177,31 @@ class LocalMT:
             LocalMT.last_error = f"{self.model_id}: {msg}"
             print(f"[local-mt] could not load {self.model_id}: {msg}")
             self.ok = False
+
+    def _quiet_length_warning(self):
+        """Stop transformers warning about the output length on every call.
+
+        These checkpoints ship `max_length=512` in their generation config,
+        and we ask for `max_new_tokens=256`. transformers sees two length
+        rules, prints
+
+            Both `max_new_tokens` (=256) and `max_length`(=512) seem to have
+            been set. `max_new_tokens` will take precedence.
+
+        and then does exactly what we wanted anyway. On a manga page that is
+        one line of noise per batch, which buries the messages that matter.
+
+        Clearing the config's `max_length` leaves `max_new_tokens` as the only
+        length rule, so there is nothing to disagree about. Verified to produce
+        identical output — this silences the complaint, it does not change how
+        much text the model generates.
+        """
+        try:
+            cfg = getattr(self._model, "generation_config", None)
+            if cfg is not None and getattr(cfg, "max_length", None) is not None:
+                cfg.max_length = None
+        except Exception:
+            pass                    # a warning is not worth failing a load over
 
     # ── text prep ───────────────────────────────────────────────────────
     @staticmethod

@@ -725,8 +725,25 @@ class Compositor:
             return False
         std = float(np.std(body))
         if std > 22.0:
-            self._balloon_why = f"interior not uniform (std {std:.1f} > 22)"
-            return False
+            # std is easily wrecked by a small tail. A soft scan, JPEG mush, or
+            # a few glyph edges the stroke mask missed drag it well past 22 on
+            # a perfectly ordinary bubble — measured 24.1 on a softly scanned
+            # one and 30.7 on a very soft one, both plainly bubbles.
+            #
+            # What actually separates paper from artwork is whether there is
+            # ONE dominant tone. Paper is a big peak plus a thin tail, so
+            # almost everything sits in a narrow band round the median; a
+            # screentone or gradient panel has no such peak. On the same
+            # samples: soft bubble 89%, very soft bubble 79%, screentone
+            # artwork 37%. So only call it artwork when the spread is wide AND
+            # there is no dominant tone holding it together.
+            bmed = float(np.median(body))
+            flat = float((np.abs(body.astype(np.int16) - bmed) <= 18).mean())
+            if flat < 0.70:
+                self._balloon_why = (
+                    f"interior not uniform (std {std:.1f} > 22, "
+                    f"only {flat:.0%} of it one tone)")
+                return False
         # Decisive signature: a balloon keeps a clean paper MARGIN between
         # its lettering and the outline; artwork's lines run right across
         # that ring. Without this, line art on white paper reads as "flat
