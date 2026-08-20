@@ -95,12 +95,32 @@ class LocalMT:
         self._device = "cpu"
         self._load()
 
+    #: set when loading failed, so callers can tell the user WHY
+    last_error = ""
+
     def _load(self):
         try:
             from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
         except Exception as e:
-            print(f"[local-mt] transformers unavailable ({e}); "
-                  f"offline translation is off")
+            LocalMT.last_error = (
+                "The `transformers` library is missing. Install the offline "
+                "packs with: python setup_models.py --offline-translate")
+            print(f"[local-mt] transformers unavailable ({e})")
+            return
+        # These checkpoints are Marian models, whose tokenizer is
+        # sentencepiece-based. Without sentencepiece, transformers cannot build
+        # it and reports the deeply unhelpful "Unrecognized configuration class
+        # MarianConfig to build an AutoTokenizer" — with MarianConfig listed
+        # among the supported ones. Check up front and say what is actually
+        # wrong.
+        import importlib.util
+        if importlib.util.find_spec("sentencepiece") is None:
+            LocalMT.last_error = (
+                "`sentencepiece` is missing — the offline translation models "
+                "need it to read text. Install it with:\n"
+                "    python setup_models.py --offline-translate\n"
+                "or directly:  pip install sentencepiece sacremoses")
+            print(f"[local-mt] {LocalMT.last_error}", flush=True)
             return
         try:
             import torch
@@ -119,7 +139,14 @@ class LocalMT:
             self.ok = True
             print(f"[local-mt] ready on {self._device}", flush=True)
         except Exception as e:
-            print(f"[local-mt] could not load {self.model_id}: {e}")
+            msg = str(e)
+            if "AutoTokenizer" in msg and "Unrecognized configuration" in msg:
+                # same root cause, reached a different way
+                msg = ("the tokenizer could not be built — this almost always "
+                       "means `sentencepiece` is missing. "
+                       "pip install sentencepiece sacremoses")
+            LocalMT.last_error = f"{self.model_id}: {msg}"
+            print(f"[local-mt] could not load {self.model_id}: {msg}")
             self.ok = False
 
     # ── text prep ───────────────────────────────────────────────────────

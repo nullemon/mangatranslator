@@ -1548,6 +1548,12 @@ class TranslationPipeline:
                     update(2, f"Translated {len(out)} bubbles (OCR)", 50)
                     return out
                 except Exception as e:
+                    # The offline engine has no vision path to fall back to —
+                    # retrying there just produced a second, more confusing
+                    # error ("Annotated-page translation needs a vision
+                    # model") that buried the real one. Surface the real cause.
+                    if not getattr(self.translator, "has_vision", True):
+                        raise
                     print(f"[pipeline] text translation failed, using vision path: {e}")
 
         update(2, "Translating bubbles...", 32)

@@ -436,10 +436,9 @@ class LocalTranslator:
         from . import local_mt
         mt = local_mt.get(self.source_lang)
         if mt is None:
-            raise RuntimeError(
-                "The offline translation model isn't installed. Run "
-                "`python setup_models.py --offline-translate`, or pick "
-                "Gemini/Claude as the engine.")
+            why = getattr(local_mt.LocalMT, "last_error", "") or (
+                "the model isn't downloaded yet")
+            raise RuntimeError(f"Offline translation is unavailable — {why}")
         keys = list(id_to_text.keys())
         outs = mt.translate_many([str(id_to_text[k]) for k in keys])
         result = {}
@@ -474,6 +473,9 @@ class LocalTranslator:
         if mt is None:
             return {"original": original, "translation": ""}
         return {"original": original, "translation": mt.translate_one(original)}
+
+    #: the pipeline checks this before falling back to a vision path
+    has_vision = False
 
     # -- vision-only paths: no local equivalent --------------------------
     def _no_vision(self, what):
