@@ -76,11 +76,29 @@ def have(mod):
 
 
 def pip(args):
-    cmd = [sys.executable, "-m", "pip", "install"] + args
-    print("  $ " + " ".join(cmd[3:]))
+    """Install packages, coping with Debian/Ubuntu's managed Python.
+
+    Recent Debian and Ubuntu refuse `pip install` into the system Python
+    ("error: externally-managed-environment", PEP 668). Inside a virtualenv
+    that never happens; outside one it stops the install dead. So: try the
+    plain command first, and only if it fails that way retry the way the
+    GPU setup script already installs on these systems."""
+    base = [sys.executable, "-m", "pip", "install"]
+    print("  $ " + " ".join(base[3:] + args))
     if DRY:
         return True
-    return subprocess.call(cmd) == 0
+    proc = subprocess.run(base + args, capture_output=True, text=True)
+    if proc.returncode == 0:
+        return True
+    blob = (proc.stdout or "") + (proc.stderr or "")
+    if "externally-managed-environment" in blob:
+        print("    (system Python is managed — retrying with --user)")
+        retry = base + ["--user", "--break-system-packages"] + args
+        if subprocess.call(retry) == 0:
+            return True
+    else:
+        sys.stderr.write(blob[-1500:])
+    return False
 
 
 def main():
