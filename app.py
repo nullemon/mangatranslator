@@ -99,6 +99,158 @@ def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
         _stamp_watermark(output_path, credit, cplace, 85, "s", "clean")
 
 
+def _text_keepout(img, pad_px: int):
+    """Where the watermark must NOT go: the page's lettering, fattened.
+
+    A watermark dropped on top of dialogue ruins both — the mark is unreadable
+    and so is the line under it. Corner placement used to take whatever was in
+    the corner, and a bottom-right balloon is extremely common.
+
+    Lettering is picked out by the shape of its ink rather than by how dark it
+    is, because manga artwork is just as black as its text. Glyphs are small,
+    thin-stroked and tightly grouped; panel borders are long and straight,
+    screentone is tiny and evenly spread, and figure art is large. Components
+    that pass are merged into blocks and grown by `pad_px`, so the mark keeps
+    clear of the text rather than just missing it.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                cv2.THRESH_BINARY_INV, 25, 12)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    keep = np.zeros((h, w), np.uint8)
+    # A glyph is a small fraction of the page height. Below this it is
+    # screentone or dust; above it, artwork.
+    lo, hi = max(4, int(h * 0.006)), int(h * 0.09)
+    for i in range(1, n):
+        x, y, cw, ch, area = stats[i]
+        if not (lo <= ch <= hi) or cw > hi * 3:
+            continue
+        if area < 12 or cw < 2:
+            continue
+        # Solid blobs (a filled eye, a spot of black) and hairline rules (a
+        # panel border, a speed line) are both common and neither is text.
+        fill = area / float(max(1, cw * ch))
+        if fill > 0.92 or fill < 0.05:
+            continue
+        ar = cw / float(max(1, ch))
+        if ar > 8 or ar < 0.06:
+            continue
+        keep[lab == i] = 255
+
+    glyphs = keep.copy()          # before any growing — used to find balloons
+    if cv2.countNonZero(keep):
+        # Join the glyphs of a line, then a block, so the gaps inside a word
+        # are not read as somewhere the mark could sit.
+        gap = max(3, int(h * 0.012))
+        keep = cv2.dilate(keep, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap + 1)))
+
+    # Speech balloons, whole.
+    #
+    # Glyph-shape detection has one predictable blind spot: a character that
+    # TOUCHES the balloon outline merges with it into a single component far
+    # too big to be a letter, so it is dropped and the mark can sit on it. A
+    # balloon is where dialogue lives, so the safer rule is that the mark never
+    # goes inside one at all, whether or not every glyph was picked out.
+    #
+    # Balloons are found as bright blobs that CONTAIN lettering. That last part
+    # is what makes it safe: the page background and the panel gutters are just
+    # as bright, and they hold no text, so they are not mistaken for balloons
+    # and the whole page does not become out of bounds. All plain OpenCV — no
+    # model, no download, a few milliseconds.
+    if cv2.countNonZero(glyphs):
+        _, bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        # Outer contours, filled. The lettering punches holes in a balloon's
+        # bright interior and taking the outer boundary closes them back up.
+        # Deliberately NOT a morphological close: a kernel wide enough to span
+        # the gaps between lines of dialogue also steps straight over the
+        # balloon's own outline, merging it into the panel behind and making
+        # the whole thing too big to recognise.
+        cnts, _h = cv2.findContours(bright, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+        page_area = float(h * w)
+        for c in cnts:
+            x, y, cw, ch = cv2.boundingRect(c)
+            area = float(cv2.contourArea(c))
+            if area < page_area * 0.004 or area > page_area * 0.30:
+                continue
+            # A blob spanning almost the whole page is the paper, not a bubble.
+            if cw > w * 0.85 or ch > h * 0.85:
+                continue
+            # Balloons are compact; a sprawling bright background is not.
+            if area / float(max(1, cw * ch)) < 0.5:
+                continue
+            filled = np.zeros((h, w), np.uint8)
+            cv2.drawContours(filled, [c], -1, 255, -1)
+            if not (glyphs[filled > 0] > 0).any():
+                continue                     # bright but empty — not a bubble
+            cv2.rectangle(keep, (x, y), (x + cw, y + ch), 255, -1)
+
+    if pad_px > 0 and cv2.countNonZero(keep):
+        keep = cv2.dilate(keep, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (pad_px * 2 + 1, pad_px * 2 + 1)))
+    return keep
+
+
+def _clear_spot(img, tw, th, place, keepout):
+    """The best top-left corner for a `tw`×`th` mark.
+
+    The chosen corner is honoured whenever it is actually free — "bottom
+    right" should stay bottom right, and quietly relocating a mark the user
+    positioned is its own kind of wrong. Only when the preferred spot lands on
+    text does this look elsewhere, trying the same corner nudged along the
+    edge first and the other corners after that, so the mark moves as little
+    as it can get away with.
+    """
+    h, w = img.shape[:2]
+    m = max(12, int(w * 0.015))
+    tw, th = max(1, int(tw)), max(1, int(th))
+    if tw >= w or th >= h:
+        return m, m
+    # Summed-area table, so scoring a candidate box is four lookups however
+    # many candidates the sweep below tries.
+    integral = cv2.integral((keepout > 0).astype(np.uint8), sdepth=cv2.CV_32S)
+
+    def hits(x, y):
+        x0, y0 = int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
+        x1, y1 = x0 + tw, y0 + th
+        return int(integral[y1, x1] - integral[y0, x1]
+                   - integral[y1, x0] + integral[y0, x0])
+
+    corners = {"br": (w - tw - m, h - th - m), "bl": (m, h - th - m),
+               "tr": (w - tw - m, m), "tl": (m, m)}
+    order = ([place] if place in corners else []) + \
+            [c for c in ("br", "bl", "tr", "tl") if c != place]
+
+    cands = []
+    for c in order:
+        cx, cy = corners[c]
+        cands.append((cx, cy))
+        # Same corner, nudged: along its edge, then inward. A mark that shifts
+        # a little still reads as "in the corner".
+        for d in (1, 2, 3):
+            step = int(th * 0.9 * d)
+            cands.append((cx, cy - step if c in ("br", "bl") else cy + step))
+            side = int(tw * 0.35 * d)
+            cands.append((cx - side if c in ("br", "tr") else cx + side, cy))
+
+    for x, y in cands:
+        if hits(x, y) == 0:
+            return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
+
+    # Nowhere clear in a corner — sweep the page and take the emptiest spot.
+    best, score = corners.get(place, (m, m)), None
+    for y in range(m, max(m + 1, h - th - m), max(8, th // 2)):
+        for x in range(m, max(m + 1, w - tw - m), max(8, tw // 3)):
+            s = hits(x, y)
+            if score is None or s < score:
+                score, best = s, (x, y)
+                if s == 0:
+                    return best
+    return int(np.clip(best[0], 0, w - tw)), int(np.clip(best[1], 0, h - th))
+
+
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
                      opacity: int = 50, size: str = "m", style: str = "clean"):
     """Watermark the finished page. Six styles, all sized off the PAGE WIDTH
@@ -144,25 +296,41 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         bb = draw.textbbox((0, 0), text, font=font)
         return bb, bb[2] - bb[0], bb[3] - bb[1]
 
+    # Worked out once, only if a placed style actually needs it — the
+    # full-page styles below use it differently and the ribbon spans the width
+    # regardless.
+    _ko = {}
+
+    def _keepout():
+        if "m" not in _ko:
+            _ko["m"] = _text_keepout(img, max(4, int(fs * 0.35)))
+        return _ko["m"]
+
     def _corner_xy(tw, th, pad):
         m = max(12, int(w * 0.015))
         if place == "random":
+            # "Random quiet spot" used to mean twelve random guesses scored by
+            # how flat they were. Flat is exactly what the inside of a speech
+            # balloon is, so it would happily drop the mark next to a line of
+            # dialogue. It now means the quietest spot that is genuinely clear
+            # of lettering.
+            keep = _keepout()
             gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            x_lo = int(0.06 * w)
+            x_lo, y_lo = int(0.06 * w), int(0.06 * h)
             x_hi = max(int(0.94 * w) - tw, x_lo + 1)
-            y_lo = int(0.06 * h)
             y_hi = max(int(0.94 * h) - th, y_lo + 1)
-            best, score = (m, m), 1e18
-            for _ in range(12):
+            best, score = None, 1e18
+            for _ in range(60):
                 cx = random.randint(x_lo, x_hi)
                 cy = random.randint(y_lo, y_hi)
+                if keep[cy:cy + th, cx:cx + tw].any():
+                    continue
                 reg = gray_full[cy:cy + th, cx:cx + tw]
                 if reg.size and float(reg.std()) < score:
                     score, best = float(reg.std()), (cx, cy)
-            return best
-        x = (w - tw - m - pad) if place in ("br", "tr") else m
-        y = (h - th - m - pad) if place in ("br", "bl") else m
-        return x, y
+            return best if best else _clear_spot(img, tw, th, "br", keep)
+        # Keep the chosen corner when it is free; step aside when it is not.
+        return _clear_spot(img, tw, th, place, _keepout())
 
     def _auto_colors(x, y, tw, th):
         region = img[max(0, y - 4):min(h, y + th + 4),
@@ -196,6 +364,16 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         bb, tw, th = _measure(font)
         band_h = int(th * 1.9)
         y0 = 0 if place in ("tl", "tr") else h - band_h
+        # A ribbon is anchored to an edge and spans the width, so it cannot be
+        # nudged out of the way — but it can take the other edge. Pick the one
+        # with less lettering under it.
+        keep = _text_keepout(img, max(2, int(fs * 0.15)))
+        top_hit = int((keep[0:band_h, :] > 0).sum())
+        bot_hit = int((keep[h - band_h:h, :] > 0).sum())
+        if y0 == 0 and top_hit > bot_hit:
+            y0 = h - band_h
+        elif y0 != 0 and bot_hit > top_hit:
+            y0 = 0
         draw.rectangle([0, y0, w, y0 + band_h],
                        fill=(12, 12, 12, min(235, int(alpha * 1.1))))
         draw.text(((w - tw) // 2 - bb[0],
@@ -228,6 +406,22 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         fill, stroke = _auto_colors(x, y, tw, th)
         draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
                   stroke_width=max(1, font.size // 16), stroke_fill=stroke)
+
+    if style in ("tile", "ghost"):
+        # These two cover the whole page by design, so there is nowhere to
+        # move them to. Instead the mark is cut away wherever it would cross
+        # lettering, which reads as the watermark passing BEHIND the text —
+        # the page stays legible and the mark still covers the art.
+        # A generous margin here is deliberate. A mark cut flush to the glyph
+        # edges still crowds them, and it also covers the one case the glyph
+        # pass can miss: a character touching a balloon outline merges with it
+        # and is dropped, so the halo around its neighbours has to reach far
+        # enough to cover it. The margin reads as intentional either way.
+        keep = _text_keepout(img, max(6, int(w * 0.022)))
+        if cv2.countNonZero(keep):
+            a = np.array(overlay.split()[-1])
+            a[keep > 0] = 0
+            overlay.putalpha(Image.fromarray(a))
 
     pil = Image.alpha_composite(pil, overlay)
     result = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
@@ -2051,6 +2245,39 @@ async def translate_text(request: Request):
         # e.g. the offline model isn't downloaded yet — that message is written
         # for the user, so show it instead of a bare 500.
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/check-orientation")
+async def check_orientation(file: UploadFile = File(...),
+                            source_lang: str = Form("Japanese")):
+    """Is this page upside down?
+
+    Reads a few of its balloons both ways up and reports which way produced
+    real language. Runs entirely on this machine — no API call, nothing
+    charged — so a whole chapter can be checked before a single page is
+    translated.
+    """
+    import tempfile
+    from core import orient
+    suffix = os.path.splitext(file.filename or "")[1] or ".png"
+    fd, tmp = tempfile.mkstemp(suffix=suffix, dir="uploads")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(await file.read())
+        loop = asyncio.get_event_loop()
+        verdict = await loop.run_in_executor(
+            None, lambda: orient.check_file(tmp, source_lang))
+    except Exception as e:
+        print(f"[orient] check failed: {e}")
+        verdict = {"upside_down": False, "sure": False,
+                   "why": f"could not be checked ({e})", "up": 0, "down": 0}
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    verdict["name"] = file.filename or ""
+    return JSONResponse(verdict)
 
 
 @app.get("/api/wm-preview")

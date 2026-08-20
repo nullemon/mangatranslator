@@ -1331,6 +1331,70 @@ document.addEventListener("DOMContentLoaded", () => {
     if (b) b.addEventListener("click", () => applyOrient(kind));
   });
 
+  // One click for the whole chapter: read each page and turn over the ones
+  // that are upside down.
+  //
+  // The server decides, by reading the balloons both ways up and seeing which
+  // way produces real Japanese — upside-down text is not slightly worse to an
+  // OCR model, it is noise, so the answer is usually emphatic. It runs on this
+  // PC with no API call, which is why it is safe to point at a whole chapter.
+  //
+  // Only pages the server is SURE about are turned. A page it cannot read, or
+  // one that reads about as badly either way, is listed and left exactly as it
+  // is: turning over a page that was already correct is a worse outcome than
+  // leaving an inverted one for the ⟳ button.
+  const orientAuto = document.getElementById("orientAuto");
+  if (orientAuto) orientAuto.addEventListener("click", async () => {
+    const targets = pages.filter(p => p.file);
+    if (!targets.length) { showError("No pages loaded to check."); return; }
+    const say = (t) => { if (orientNote) orientNote.textContent = t; };
+    orientAuto.disabled = true;
+    const label = orientAuto.textContent;
+    const flip = [], unsure = [];
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const p = targets[i];
+        orientAuto.textContent = `Reading ${i + 1}/${targets.length}…`;
+        try {
+          const fd = new FormData();
+          fd.append("file", p.file, p.name || "page.png");
+          fd.append("source_lang", sourceLang ? sourceLang.value : "Japanese");
+          const r = await fetch("/api/check-orientation", { method: "POST", body: fd });
+          const v = await r.json();
+          if (v.upside_down && v.sure) flip.push(p);
+          else if (!v.sure) unsure.push(p.name || `page ${i + 1}`);
+        } catch (_) {
+          unsure.push(p.name || `page ${i + 1}`);
+        }
+      }
+      let lost = 0;
+      for (const p of flip) {
+        const had = p.status === "done";
+        if (await reorientPage(p, "180")) { if (had) lost++; }
+      }
+      renderStrip(); updateBatch(); renderActivePage();
+      const act = getActive() || pages[0];
+      if (act && previewImg && pages.length === 1) previewImg.src = act.thumb;
+
+      if (flip.length) {
+        say(`Turned ${flip.length} upside-down page${flip.length === 1 ? "" : "s"}` +
+            (lost ? " — press Translate to run them again" : "") +
+            (unsure.length ? `; ${unsure.length} couldn't be checked` : ""));
+      } else if (unsure.length === targets.length) {
+        say("Couldn't read these pages — use ⟳ Flip 180° if they look wrong.");
+      } else {
+        say(`All ${targets.length} page${targets.length === 1 ? "" : "s"} look the right way up.`);
+      }
+      if (orientNote) {
+        clearTimeout(orientNote._t);
+        orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 10000);
+      }
+    } finally {
+      orientAuto.disabled = false;
+      orientAuto.textContent = label;
+    }
+  });
+
   // Same fix on the upload screen, before a penny is spent. Here it turns
   // EVERY selected page: a chapter that was scanned upside down was scanned
   // that way from cover to cover.
