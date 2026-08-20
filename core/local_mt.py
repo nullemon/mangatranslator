@@ -14,12 +14,17 @@ What it is good for
 
 What it is NOT
 --------------
-It is a sentence-level model. It sees ONE line at a time with no picture and
-no memory of the previous bubble, so it cannot do what the big vision models
-do: read the panel, work out who is speaking, and keep a character's voice
-consistent down the page. Expect flatter, more literal English, and the
-occasional miss on fragments and slang. Use it for volume; use Gemini/Claude
-when the wording matters.
+Do not expect anything close to Gemini or Claude. These are ~300MB
+sentence-level models; the big ones are many thousands of times larger and
+can SEE the page. This one gets one line at a time, with no picture and no
+memory of the previous bubble, so it cannot work out who is speaking, cannot
+resolve the dropped subjects Japanese leans on constantly, and cannot keep a
+character's voice consistent. Manga is close to the hardest case for it:
+short fragments, slang, and no punctuation.
+
+Realistically it is useful for a rough pass on a chapter you are going to
+rewrite anyway, for bulk work where the gist is enough, and for working with
+no internet. For anything you intend to publish, use Gemini or Claude.
 
 Models are the Helsinki-NLP OPUS-MT set — a few hundred MB each, one per
 source language. Override the choice with MANGA_MT_MODEL if you prefer
@@ -29,10 +34,21 @@ import os
 import re
 from typing import Dict, List, Optional
 
-# One model per source language. All are small seq2seq (Marian) checkpoints,
-# roughly 300MB each — you only need the languages you actually read.
+# Candidate checkpoints per source language, BEST FIRST. All are Marian-class
+# seq2seq models (~300MB each) so they share one code path, and the loader
+# falls through to the next if one is unavailable.
+#
+# For Japanese the default is FuguMT rather than the OPUS-MT baseline. OPUS-MT
+# is trained largely on news and formal prose, which is close to the worst
+# possible match for manga: short fragments, dropped subjects, slang and no
+# punctuation. FuguMT is trained on far broader Japanese and handles that
+# register noticeably better. OPUS-MT stays as the fallback.
+MODEL_CANDIDATES = {
+    "japanese": ["staka/fugumt-ja-en", "Helsinki-NLP/opus-mt-ja-en"],
+}
+
 DEFAULT_MODELS = {
-    "japanese": "Helsinki-NLP/opus-mt-ja-en",
+    "japanese": "staka/fugumt-ja-en",
     "korean": "Helsinki-NLP/opus-mt-ko-en",
     "chinese": "Helsinki-NLP/opus-mt-zh-en",
     "arabic": "Helsinki-NLP/opus-mt-ar-en",
@@ -72,16 +88,28 @@ FALLBACK_MODEL = "Helsinki-NLP/opus-mt-mul-en"   # many-to-English
 _CACHE: Dict[str, "LocalMT"] = {}
 
 
-def model_id_for(source_lang: str) -> str:
-    """Which checkpoint translates FROM this language."""
+def _lang_key(source_lang: str) -> str:
+    key = (source_lang or "Japanese").strip().lower()
+    for name in DEFAULT_MODELS:
+        if key == name or key.startswith(name[:2]):
+            return name
+    return key
+
+
+def models_for(source_lang: str) -> List[str]:
+    """Every checkpoint worth trying for this language, best first."""
     override = (os.environ.get("MANGA_MT_MODEL") or "").strip()
     if override:
-        return override
-    key = (source_lang or "Japanese").strip().lower()
-    for name, mid in DEFAULT_MODELS.items():
-        if key.startswith(name[:2]) or key == name:
-            return mid
-    return DEFAULT_MODELS.get(key, FALLBACK_MODEL)
+        return [override]
+    key = _lang_key(source_lang)
+    if key in MODEL_CANDIDATES:
+        return list(MODEL_CANDIDATES[key])
+    return [DEFAULT_MODELS.get(key, FALLBACK_MODEL)]
+
+
+def model_id_for(source_lang: str) -> str:
+    """The checkpoint that will be tried first for this language."""
+    return models_for(source_lang)[0]
 
 
 class LocalMT:
@@ -255,13 +283,23 @@ class LocalMT:
 
 
 def get(source_lang: str = "Japanese") -> Optional[LocalMT]:
-    """Load (once) and return the offline model for this source language."""
-    mid = model_id_for(source_lang)
-    hit = _CACHE.get(mid)
-    if hit is None:
-        hit = LocalMT(mid)
-        _CACHE[mid] = hit
-    return hit if hit.ok else None
+    """Load (once) and return the best available model for this language.
+
+    Tries each candidate in order, so a preferred checkpoint that is missing
+    or fails to download quietly falls back to the next one instead of
+    leaving the user with no offline translation at all."""
+    tried = []
+    for mid in models_for(source_lang):
+        hit = _CACHE.get(mid)
+        if hit is None:
+            hit = LocalMT(mid)
+            _CACHE[mid] = hit
+        if hit.ok:
+            return hit
+        tried.append(mid)
+    if len(tried) > 1:
+        print(f"[local-mt] none of {tried} could be loaded")
+    return None
 
 
 def unload() -> bool:
