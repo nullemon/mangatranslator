@@ -287,21 +287,27 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     gemini: {
       label: "Gemini API Key", placeholder: "AIza...", storageKey: "manga_key_gemini",
+      // The "×" figures are what a page costs RELATIVE to Flash-Lite, worked
+      // out from Google's list prices. They are rough and they will drift, but
+      // the ordering is the point: Pro is not a little dearer than Flash, it is
+      // roughly twenty times dearer, and picking it for a whole chapter is a
+      // decision worth making on purpose. The app prints the real figure for
+      // every page it finishes.
       models: [
         // Rolling "latest" aliases — Google keeps these pointed at the current
         // models, so they never hit the "no longer available" error. Best
         // default for a fresh install.
-        { value: "gemini-flash-latest", text: "Gemini Flash (Latest — recommended)" },
-        { value: "gemini-pro-latest", text: "Gemini Pro (Latest — best)" },
-        { value: "gemini-flash-lite-latest", text: "Gemini Flash-Lite (Latest — cheapest)" },
+        { value: "gemini-flash-latest", text: "Gemini Flash (Latest — recommended, ~5× cost)" },
+        { value: "gemini-pro-latest", text: "Gemini Pro (Latest — best quality, ~25× cost)" },
+        { value: "gemini-flash-lite-latest", text: "Gemini Flash-Lite (Latest — cheapest, 1×)" },
         // Newest named models (may depend on account access).
-        { value: "gemini-3-pro-preview", text: "Gemini 3 Pro (Newest)" },
+        { value: "gemini-3-pro-preview", text: "Gemini 3 Pro (Newest — ~25× cost)" },
         // Current stable 2.5 line.
-        { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast)" },
-        { value: "gemini-2.5-flash-lite", text: "Gemini 2.5 Flash-Lite" },
+        { value: "gemini-2.5-flash", text: "Gemini 2.5 Flash (Fast — ~5× cost)" },
+        { value: "gemini-2.5-flash-lite", text: "Gemini 2.5 Flash-Lite (1×)" },
         // Kept for existing accounts — newer Google accounts may 404 on these.
-        { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (older accounts)" },
-        { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (older accounts)" },
+        { value: "gemini-2.5-pro",   text: "Gemini 2.5 Pro (older accounts — ~20× cost)" },
+        { value: "gemini-2.0-flash", text: "Gemini 2.0 Flash (older accounts — 1×)" },
       ],
     },
   };

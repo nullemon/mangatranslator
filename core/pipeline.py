@@ -8,6 +8,7 @@ from typing import Callable, Optional, Dict, Any, List
 from .detector import BubbleDetector, TextRegion
 from .translator import make_translator
 from .compositor import Compositor
+from . import usage
 
 
 _WATERMARK_RE = re.compile(
@@ -1001,9 +1002,19 @@ class TranslationPipeline:
         output_path: str,
         progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
+        usage.start_page()
+
         def update(step: int, msg: str, pct: int):
             # Mirror progress to the console: API calls can take minutes and
             # the server log otherwise goes silent — which reads as a hang.
+            if pct >= 100:
+                # Say what the page cost, in the app and not just the log —
+                # a bill you can see while choosing the model is the only one
+                # you can do anything about.
+                usage.report_page(os.path.basename(image_path))
+                note = usage.short_note()
+                if note:
+                    msg = f"{msg}  ({note})"
             print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
@@ -1169,10 +1180,14 @@ class TranslationPipeline:
         The overlap guarantees no balloon is sliced in half at a band edge:
         anything cut by a boundary is fully inside the neighbouring band. Items
         found twice in the shared zone are deduped by position + text."""
+        usage.start_page()
+
         def update(step, msg, pct):
             print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
+            if pct >= 100:
+                usage.report_page(os.path.basename(image_path) + " (strip)")
 
         image = cv2.imread(image_path)
         if image is None:
@@ -1301,10 +1316,14 @@ class TranslationPipeline:
         polygons; a lasso is an n-point polygon. Anything with text that no
         region covers is translated as a final 'rest of page' piece when
         translate_all is on, so nothing is missed."""
+        usage.start_page()
+
         def update(step, msg, pct):
             print(f"[pipeline] {pct:3d}%  {msg}", flush=True)
             if progress_cb:
                 progress_cb({"step": step, "message": msg, "progress": pct})
+            if pct >= 100:
+                usage.report_page(os.path.basename(image_path) + " (pieces)")
 
         image = cv2.imread(image_path)
         if image is None:

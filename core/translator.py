@@ -9,7 +9,7 @@ import numpy as np
 import httpx
 from typing import Dict, List
 
-from . import prompts
+from . import prompts, usage
 
 
 @contextlib.contextmanager
@@ -147,6 +147,11 @@ class ClaudeTranslator:
         el = time.time() - t0
         if el >= 5:
             print(f"[claude] {self.model}: {el:.1f}s", flush=True)
+        try:
+            u = usage.record(usage.from_claude(self.model, response))
+            print(f"[cost] {u.line(self.model + ':')}", flush=True)
+        except Exception:
+            pass                    # accounting must never break a translation
         return response.content[0].text
 
     def translate_regions(
@@ -213,6 +218,33 @@ class GeminiTranslator:
 
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
+    # How to ask each model family to keep its thinking short, cheapest first.
+    #
+    # This ladder is the single biggest lever on what a chapter costs. Thinking
+    # is billed at the output rate, so an uncapped reasoning model can spend
+    # ten times more on deliberation than on the translation it returns.
+    #
+    # The families disagree about how to be told:
+    #   - 2.5 flash / flash-lite accept `thinkingBudget: 0` — thinking off.
+    #   - Gemini 3 rejects `thinkingBudget` outright and wants `thinkingLevel`.
+    #   - 2.5 pro always thinks, but accepts a small positive budget.
+    # Each rung is tried until one is accepted. The old ladder had no
+    # `thinkingLevel` rung at all, so Gemini 3 models fell all the way through
+    # to "send no thinking config" — i.e. the model's default, which is to
+    # think as much as it wants, on the most expensive model in the list.
+    THINK_LADDER = (
+        {"thinkingBudget": 0},          # 2.5 flash / flash-lite: off entirely
+        {"thinkingLevel": "low"},       # Gemini 3: the shortest it will go
+        {"thinkingBudget": 128},        # 2.5 pro: the smallest cap it allows
+        {"thinkingBudget": 1024},
+        None,                           # last resort: whatever the model does
+    )
+
+    # Learned once per model id and reused for the rest of the run. Without
+    # this, EVERY call re-walks the ladder and pays the rejected round trips
+    # again — three requests per translate instead of one.
+    _think_rung: Dict[str, int] = {}
+
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash-lite",
                  timeout: float = 180.0, style: str = "",
                  source_lang: str = "Japanese", translate_sfx: bool = False,
@@ -230,6 +262,57 @@ class GeminiTranslator:
         # so the UI can show live elapsed time instead of freezing.
         self.on_wait = None
 
+    @staticmethod
+    def _is_thinking_complaint(resp) -> bool:
+        """Is this 400 about the thinking config, or a real problem?
+
+        Worth telling apart: a bad key or a retired model id also returns 400,
+        and walking the whole ladder on those just fires four doomed requests
+        and reports the last, least relevant error. Newer models reject the
+        thinking config with a bare "invalid argument" and no detail, so that
+        generic wording has to count as a maybe.
+        """
+        try:
+            msg = str(resp.json().get("error", {}).get("message", "")).lower()
+        except Exception:
+            return True                       # unparseable — give it a go
+        if any(k in msg for k in ("thinking", "thought", "budget", "level")):
+            return True
+        # A clear, specific complaint: stop, and let the caller report it.
+        if any(k in msg for k in ("api key", "api_key", "permission", "quota",
+                                  "not found", "no longer available",
+                                  "unsupported", "billing")):
+            return False
+        return "invalid" in msg or not msg
+
+    def _post_with_thinking(self, client, url, headers, body_for):
+        """Send the request, capping the model's thinking as tightly as it
+        allows. The working setting is remembered, so this costs extra round
+        trips only on the first call of a run."""
+        start = self._think_rung.get(self.model, 0)
+        resp = None
+        for i in range(start, len(self.THINK_LADDER)):
+            resp = client.post(url, headers=headers,
+                               json=body_for(self.THINK_LADDER[i]))
+            if resp.status_code != 400 or not self._is_thinking_complaint(resp):
+                break
+            if i + 1 < len(self.THINK_LADDER):
+                nxt = self.THINK_LADDER[i + 1]
+                print(f"[gemini] {self.model} rejected "
+                      f"{self.THINK_LADDER[i]}; trying {nxt or 'model default'}",
+                      flush=True)
+        else:
+            i = len(self.THINK_LADDER) - 1
+        if resp is not None and resp.status_code == 200:
+            if self._think_rung.get(self.model) != i:
+                self._think_rung[self.model] = i
+                setting = self.THINK_LADDER[i]
+                note = ("UNCAPPED — this model would not accept any limit, so "
+                        "it will think as long as it likes and bill it as "
+                        "output" if setting is None else str(setting))
+                print(f"[gemini] {self.model} thinking: {note}", flush=True)
+        return resp
+
     def _image_part(self, image: np.ndarray) -> dict:
         # Send the page big enough that Gemini can READ it rather than relying
         # on the OCR text we also pass.
@@ -238,22 +321,21 @@ class GeminiTranslator:
                                    image, max_edge=GEMINI_MAX_IMAGE_EDGE)}}
 
     def _ask(self, parts: list) -> str:
-        def _body(budget) -> dict:
+        def _body(think) -> dict:
             # Full output headroom on EVERY attempt: a busy page's detection
             # JSON alone can overrun 16k and arrive truncated mid-array (and
             # thinking models additionally spend reasoning tokens from this
             # same budget). Tokens are billed as used, so the high cap only
             # costs anything when a page genuinely needs it.
             gc = {"temperature": 0.2, "maxOutputTokens": 65536}
-            if budget is not None:
-                # Gemini 2.5 flash/flash-lite spend "thinking" tokens from the
-                # SAME output budget — a busy page can burn it all and return no
-                # text (finishReason=MAX_TOKENS). Budget 0 turns thinking off
-                # (cheapest); a small positive budget caps it on thinking-only
-                # models that reject 0 — WITHOUT a cap they can grind for
-                # minutes on a full-page smart-detect call, which reads as the
-                # whole app being frozen.
-                gc["thinkingConfig"] = {"thinkingBudget": int(budget)}
+            if think is not None:
+                # Thinking tokens are billed at the OUTPUT rate — the expensive
+                # one — and a model left to think as long as it likes will
+                # happily spend more deliberating about a speech bubble than
+                # translating it. They also come out of the SAME output budget,
+                # so a busy page can burn the lot and return no text at all
+                # (finishReason=MAX_TOKENS). Cap it on every model that lets us.
+                gc["thinkingConfig"] = dict(think)
             return {
                 "contents": [{"parts": parts}],
                 "generationConfig": gc,
@@ -279,18 +361,7 @@ class GeminiTranslator:
         try:
             with _heartbeat(self.model, getattr(self, "on_wait", None)), \
                     httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(url, headers=headers, json=_body(0))
-                # Thinking-only models (gemini-2.5-pro, Gemini 3, and the
-                # -latest aliases that point at them) reject thinkingBudget:0
-                # — sometimes with a specific "thinking budget" message, on
-                # newer models just a generic 400 "invalid argument". Retry
-                # with a SMALL budget first (keeps the answer fast); only if
-                # that is also rejected fall back to no thinkingConfig at all
-                # (model default — unbounded thinking, the slowest path).
-                if resp.status_code == 400:
-                    resp = client.post(url, headers=headers, json=_body(1024))
-                if resp.status_code == 400:
-                    resp = client.post(url, headers=headers, json=_body(None))
+                resp = self._post_with_thinking(client, url, headers, _body)
         except httpx.TimeoutException:
             print(f"[gemini] {self.model}: TIMED OUT after "
                   f"{time.time() - t0:.0f}s", flush=True)
@@ -316,6 +387,12 @@ class GeminiTranslator:
             raise RuntimeError(self._err(resp))
 
         data = resp.json()
+        # Say what that call cost while the reason for it is still on screen.
+        try:
+            u = usage.record(usage.from_gemini(self.model, data))
+            print(f"[cost] {u.line(self.model + ':')}", flush=True)
+        except Exception:
+            pass                    # accounting must never break a translation
         cands = data.get("candidates", [])
         if not cands:
             fb = data.get("promptFeedback")
