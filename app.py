@@ -39,7 +39,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from core.pipeline import (TranslationPipeline, scan_cleanup, compress_upload,
-                           preserve_dark_regions, probe_components)
+                           preserve_dark_regions, probe_components,
+                           apply_finish)
 from core.compositor import Compositor
 from core.effects import raw_scan
 from core.enhancer import ImageEnhancer
@@ -1910,8 +1911,7 @@ async def rerender(task_id: str, request: Request):
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the
         # original pixels untouched. No generative repaint, ever.
-        if t.get("finish", "clean") in ("clean", "api"):
-            out = scan_finish(out)
+        out = apply_finish(out, t.get("finish", "clean"))
         if keep_polys:
             h, w = out.shape[:2]
             mask = np.zeros((h, w), np.uint8)
@@ -1938,7 +1938,7 @@ async def rerender(task_id: str, request: Request):
                 src0 = cv2.imread(orig_p0) if orig_p0 and os.path.exists(orig_p0) else base_img
                 if src0.shape[:2] != (h, w):
                     src0 = cv2.resize(src0, (w, h), interpolation=cv2.INTER_AREA)
-                cmp_src = scan_finish(src0) if t.get("finish", "clean") in ("clean", "api") else src0
+                cmp_src = apply_finish(src0, t.get("finish", "clean"))
                 diff = (np.abs(out.astype(np.int16) - cmp_src.astype(np.int16))
                         .max(axis=2) > 14).astype(np.uint8)
                 diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE,
@@ -1967,8 +1967,7 @@ async def rerender(task_id: str, request: Request):
                     src = base_img
                 if src.shape[:2] != (h, w):
                     src = cv2.resize(src, (w, h), interpolation=cv2.INTER_AREA)
-                if t.get("finish", "clean") in ("clean", "api"):
-                    src = scan_finish(src)
+                src = apply_finish(src, t.get("finish", "clean"))
                 rm = rmask > 0
                 out[rm] = src[rm]
         if raw_effect:

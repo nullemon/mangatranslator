@@ -421,6 +421,22 @@ def scan_finish(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+
+def apply_finish(image: np.ndarray, finish: str) -> np.ndarray:
+    """The page's final look.
+
+    "restore" is for raws that arrived rough — photographed off a magazine, or
+    a poor scan. It flattens the lighting and lifts the paper back to white
+    BEFORE the levels are stretched, which is the part the plain clean finish
+    cannot do: stretching an unevenly lit page just burns out the bright side.
+    """
+    if finish == "restore":
+        from .effects import restore_scan
+        return restore_scan(image)
+    if finish in ("clean", "api"):
+        return scan_finish(image)
+    return image
+
 def preserve_dark_regions(enhanced: np.ndarray, original: np.ndarray) -> np.ndarray:
     """A generative "scan" (Grok/Gemini) bleaches solid-black art — black
     panels, gutters, white-on-black title text — to white, inverting the page.
@@ -1116,9 +1132,10 @@ class TranslationPipeline:
             if self.credit:
                 items.append(self._credit_item(image.shape[1], image.shape[0], 1))
             out = self.compositor.compose(cleaned, items, {}) if items else cleaned
-            if self.finish in ("clean", "api"):
-                update(4, "Applying clean-scan finish...", 90)
-                out = scan_finish(out)
+            if self.finish != "off":
+                update(4, "Applying page finish..." if self.finish != "restore"
+                       else "Restoring the rough raw...", 90)
+                out = apply_finish(out, self.finish)
             cv2.imwrite(output_path, out)
             update(5, "Cleaned!", 100)
             res = self._result(output_path, base_path, items, "")
@@ -1148,7 +1165,7 @@ class TranslationPipeline:
             items.append(self._credit_item(image.shape[1], image.shape[0], nid))
 
         if not items:
-            out = scan_finish(image) if self.finish in ("clean", "api") else image
+            out = apply_finish(image, self.finish)
             cv2.imwrite(output_path, out)
             update(5, "No text regions found.", 100)
             return self._result(output_path, base_path, [], ann_path)
@@ -1156,9 +1173,10 @@ class TranslationPipeline:
         update(3, "Erasing original text...", 60)
         update(4, "Fitting translations into balloons...", 80)
         result = self.compositor.compose(image, items, masks)
-        if self.finish in ("clean", "api"):
-            update(4, "Applying clean-scan finish...", 92)
-            result = scan_finish(result)
+        if self.finish != "off":
+            update(4, "Applying page finish..." if self.finish != "restore"
+                   else "Restoring the rough raw...", 92)
+            result = apply_finish(result, self.finish)
         cv2.imwrite(output_path, result)
         update(5, "Complete!", 100)
 
@@ -1296,8 +1314,7 @@ class TranslationPipeline:
 
         update(4, f"Composing the full strip ({len(all_items)} translations)...", 88)
         result = self.compositor.compose(image.copy(), all_items, all_masks)
-        if self.finish in ("clean", "api"):
-            result = scan_finish(result)
+        result = apply_finish(result, self.finish)
         cv2.imwrite(output_path, result)
         self.last_masks = all_masks
         update(5, f"Done — {len(all_items)} translations down a "
@@ -1437,8 +1454,7 @@ class TranslationPipeline:
 
         update(4, "Merging translated pieces...", 92)
         result = self.compositor.compose(image.copy(), all_items, all_masks)
-        if self.finish in ("clean", "api"):
-            result = scan_finish(result)
+        result = apply_finish(result, self.finish)
         cv2.imwrite(output_path, result)
         self.last_masks = all_masks
         update(5, f"Done — {len(all_items)} translations across "
