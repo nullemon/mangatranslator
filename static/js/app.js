@@ -1869,8 +1869,46 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   applyBtn.addEventListener("click", () => applyChanges());
-  async function applyChanges(btn, pageArg) {
+
+  // Only ever ONE re-render in flight per page.
+  //
+  // Every re-render posts the page's COMPLETE state and then replaces
+  // page.items with what comes back. Two of them overlapping is therefore a
+  // lost update: the slower request answers last, and its reply — which knows
+  // nothing about the edit made after it was sent — overwrites the newer one.
+  // The text vanishes from the editor, and because the client is now holding
+  // stale state, pressing Apply again puts the old version back, which is why
+  // it could not be fixed by trying again.
+  //
+  // It was easy to hit: nine different things call this, several without
+  // waiting, and each only disables its own button. Clicking a tool while a
+  // re-render was still running was enough.
+  //
+  // Requests are queued here rather than dropped. If changes arrive while one
+  // is running, a single further pass runs afterwards with the latest state —
+  // collapsed into one, since each pass sends everything anyway.
+  function applyChanges(btn, pageArg) {
     const page = pageArg || getActive();
+    if (!page || !page.taskId) return Promise.resolve();
+    if (page._applying) {          // one is running — fold this into it
+      page._applyAgain = true;
+      return page._applying;
+    }
+    page._applying = (async () => {
+      try {
+        do {
+          page._applyAgain = false;
+          await runApply(btn, pageArg, page);
+        } while (page._applyAgain);
+      } finally {
+        page._applying = null;
+      }
+    })();
+    return page._applying;
+  }
+
+  async function runApply(btn, pageArg, pageIn) {
+    const page = pageIn || pageArg || getActive();
     if (!page || !page.taskId) return;
     // Only harvest the on-screen textareas when they actually belong to this
     // page — a batch re-render (find & replace) walks pages that aren't
@@ -1903,7 +1941,21 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const data = await res.json();
-      page.items = data.items;
+      // Anything typed WHILE this request was in flight exists only in the
+      // textareas — the server is echoing back the text as it was when the
+      // request left. Harvest it before its items replace ours, or the
+      // keystrokes are thrown away.
+      const live = {};
+      if (!pageArg || pageArg.uid === activeUid) {
+        document.querySelectorAll(".tl-edit").forEach(t => {
+          if (!t.classList.contains("add-edit")) live[t.dataset.id] = t.value;
+        });
+      }
+      page.items = (data.items || []).map(it => {
+        const v = live[String(it.id)];
+        return (v !== undefined && v !== it.translation)
+          ? Object.assign({}, it, { translation: v }) : it;
+      });
       if (data.added) {
         page.added = (page.added || []).map(a => {
           const m = data.added.find(d => String(d.id) === String(a.id));
