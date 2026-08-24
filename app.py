@@ -417,11 +417,20 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         return (25, 25, 25, alpha), (255, 255, 255, alpha)
 
     if style == "tile":
-        font = _font(max(14, int(w * 0.022)))
+        # Size follows the Size dropdown like every other style. It used to be
+        # hardwired to 2.2% of the page width, so "Small" was not small and the
+        # control did nothing.
+        font = _font(max(12, int(fs * 0.62)))
         bb, tw, th = _measure(font)
-        for yy in range(-h, h * 2, th * 4 + 40):
-            for xx in range(-w, w * 2, tw + max(80, tw)):
-                draw.text((xx, yy), text, fill=(128, 128, 128, alpha), font=font)
+        # Gaps proportional to the text, not a second copy of its width. The
+        # old horizontal step was tw + max(80, tw) — i.e. double the width — so
+        # a short handle tiled densely while a long one like a full URL spread
+        # into a handful of widely separated columns.
+        xstep = max(40, int(tw * 1.35) + 24)
+        ystep = max(24, int(th * 3.2) + 12)
+        for yy in range(-h, h * 2, ystep):
+            for xx in range(-w, w * 2, xstep):
+                draw.text((xx, yy), text, fill=(255, 255, 255, alpha), font=font)
         overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
 
     elif style == "ghost":
@@ -484,6 +493,17 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
                   stroke_width=max(1, font.size // 16), stroke_fill=stroke)
 
     if style in ("tile", "ghost"):
+        # Colour the mark against whatever it is lying on. Both of these used
+        # to be painted a fixed mid-grey, which reads on paper and disappears
+        # completely over inked artwork — so on a page with heavy shading the
+        # watermark looked like it had only been applied in patches, when in
+        # fact it was there all along and invisible over the dark half.
+        lum = cv2.blur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (33, 33))
+        shade = np.where(lum[..., None] < 118, 238, 48).astype(np.uint8)
+        rgb = np.repeat(shade, 3, axis=2)
+        a0 = np.array(overlay.split()[-1])
+        overlay = Image.fromarray(np.dstack([rgb, a0]), "RGBA")
+
         # These two cover the whole page by design, so there is nowhere to
         # move them to. Instead the mark is cut away wherever it would cross
         # lettering, which reads as the watermark passing BEHIND the text —
