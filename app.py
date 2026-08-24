@@ -4,6 +4,7 @@ import io
 import os
 import time
 import re
+import shutil
 import uuid
 import random
 import zipfile
@@ -135,7 +136,6 @@ def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
                 pass
         return
     try:
-        import shutil
         shutil.copyfile(output_path, twin)
     except Exception as e:
         # Not fatal: the page still gets its watermark, the user just cannot
@@ -2638,32 +2638,99 @@ async def make_zip(request: Request):
     )
 
 
+UNZIP_DIR = "uploads/_zip"
+
+
+def _sweep_unzips(keep: int = 3):
+    """Drop all but the newest few extractions. A chapter of raws is hundreds
+    of megabytes and there is no reason to keep yesterday's on disk."""
+    try:
+        dirs = sorted((os.path.join(UNZIP_DIR, d) for d in os.listdir(UNZIP_DIR)),
+                      key=os.path.getmtime, reverse=True)
+        for d in dirs[keep:]:
+            shutil.rmtree(d, ignore_errors=True)
+    except OSError:
+        pass
+
+
 @app.post("/api/unzip")
 async def unzip(file: UploadFile = File(...)):
-    """Expand an uploaded ZIP of manga pages into individual images so the drop
-    zone can accept a whole chapter as a .zip. Returns base64 images in name
-    order; the frontend turns them back into files and queues them."""
-    import base64 as _b64
-    data = await file.read()
-    images = []
+    """Expand an uploaded ZIP of manga pages so the drop zone can take a whole
+    chapter at once.
+
+    The zip is streamed to disk and its members are written out one at a time;
+    the reply is just names and URLs, and the browser fetches each page as a
+    blob. It used to base64 every image into a single JSON reply instead, which
+    is why a big chapter brought everything to a halt: a 500MB zip became about
+    670MB of base64, held in memory on the server while it was serialised, sent
+    in one response, and parsed back into a 670MB JavaScript string — well over
+    a gigabyte in flight before a single page had been looked at. The browser
+    then walked it BYTE BY BYTE through a callback to rebuild the files.
+
+    Nothing here holds more than one page at a time.
+    """
+    os.makedirs(UNZIP_DIR, exist_ok=True)
+    _sweep_unzips()
+    token = uuid.uuid4().hex
+    out_dir = os.path.join(UNZIP_DIR, token)
+    os.makedirs(out_dir, exist_ok=True)
+
+    tmp_zip = os.path.join(out_dir, "_chapter.zip")
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        # Straight to disk in chunks — never the whole archive in memory.
+        with open(tmp_zip, "wb") as fh:
+            shutil.copyfileobj(file.file, fh, 1024 * 1024)
+
+        images = []
+        with zipfile.ZipFile(tmp_zip) as zf:
             for zi in sorted(zf.namelist()):
                 if zi.endswith("/") or "__MACOSX" in zi:
                     continue
                 low = zi.lower()
-                if low.endswith(_IMG_EXT):
-                    ext = low.rsplit(".", 1)[-1].replace("jpg", "jpeg")
-                    images.append({
-                        "name": os.path.basename(zi),
-                        "type": f"image/{ext}",
-                        "b64": _b64.b64encode(zf.read(zi)).decode(),
-                    })
-    except Exception as e:
+                if not low.endswith(_IMG_EXT):
+                    continue
+                ext = low.rsplit(".", 1)[-1].replace("jpg", "jpeg")
+                idx = len(images)
+                dest = os.path.join(out_dir, f"{idx:04d}.{ext}")
+                with zf.open(zi) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                images.append({
+                    "name": os.path.basename(zi),
+                    "type": f"image/{ext}",
+                    "url": f"/api/unzipped/{token}/{idx:04d}.{ext}",
+                })
+    except zipfile.BadZipFile as e:
+        shutil.rmtree(out_dir, ignore_errors=True)
         raise HTTPException(400, f"Could not read ZIP: {e}")
+    except Exception as e:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise HTTPException(400, f"Could not read ZIP: {e}")
+    finally:
+        try:
+            os.remove(tmp_zip)
+        except OSError:
+            pass
+
     if not images:
+        shutil.rmtree(out_dir, ignore_errors=True)
         raise HTTPException(400, "No images found in the ZIP")
     return {"images": images}
+
+
+@app.get("/api/unzipped/{token}/{name}")
+async def unzipped(token: str, name: str):
+    """Serve one page out of an expanded ZIP."""
+    # Names are generated above, never echoed from the archive, but the path is
+    # still pinned inside the extraction directory so a crafted request cannot
+    # walk out of it.
+    if not re.fullmatch(r"[0-9a-f]{32}", token or "") or \
+            not re.fullmatch(r"\d{4}\.[a-z]{3,4}", name or ""):
+        raise HTTPException(404)
+    p = os.path.join(UNZIP_DIR, token, name)
+    if not os.path.exists(p):
+        raise HTTPException(404)
+    ext = name.rsplit(".", 1)[-1]
+    return FileResponse(p, media_type=f"image/{ext}")
 
 
 @app.get("/api/enhanced/{task_id}")

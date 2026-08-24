@@ -594,10 +594,10 @@ document.addEventListener("DOMContentLoaded", () => {
   dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
   dropZone.addEventListener("drop", async e => {
     e.preventDefault(); dropZone.classList.remove("drag-over");
-    if (e.dataTransfer.files.length) addFiles(await expandFiles(e.dataTransfer.files));
+    if (e.dataTransfer.files.length) await addFiles(await expandFiles(e.dataTransfer.files));
   });
   fileInput.addEventListener("change", async () => {
-    if (fileInput.files.length) addFiles(await expandFiles(fileInput.files));
+    if (fileInput.files.length) await addFiles(await expandFiles(fileInput.files));
     fileInput.value = "";
   });
 
@@ -635,10 +635,18 @@ document.addEventListener("DOMContentLoaded", () => {
           const res = await fetch("/api/unzip", { method: "POST", body: fd });
           if (!res.ok) { let m = res.statusText; try { m = (await res.json()).detail || m; } catch (_) {} throw new Error(m); }
           const data = await res.json();
-          for (const im of (data.images || [])) {
-            const bin = Uint8Array.from(atob(im.b64), c => c.charCodeAt(0));
-            out.push(new File([bin], im.name, { type: im.type || "image/png" }));
+          // Fetch each page as a blob. The reply used to carry every image
+          // base64-encoded in one JSON body, and rebuilding the files from it
+          // ran a callback PER BYTE — hundreds of millions of calls for a
+          // chapter of raws, which is most of why a big zip locked the page up.
+          const list = data.images || [];
+          for (let i = 0; i < list.length; i++) {
+            const im = list[i];
+            setUploadNote(`Unpacking ${i + 1} / ${list.length}…`);
+            const b = await (await fetch(im.url)).blob();
+            out.push(new File([b], im.name, { type: im.type || b.type || "image/png" }));
           }
+          setUploadNote("");
         } catch (e) {
           showError(`Couldn't read "${f.name}": ${e.message}`);
         }
@@ -649,22 +657,62 @@ document.addEventListener("DOMContentLoaded", () => {
     return out;
   }
 
-  function addFiles(fileList) {
+  // A small stand-in image for the page strip and the upload preview.
+  //
+  // These used to point straight at the uploaded file, which means the browser
+  // decodes the page at full resolution to show a 100px chip. A 4000x6000 raw
+  // is 96MB once decoded, so twenty of them is closer to two gigabytes of
+  // bitmap held at once purely to draw the strip — which is what made a big
+  // chapter crawl. One page is decoded at a time here and released straight
+  // after, and what is kept is a fraction of the size.
+  //
+  // p.file is untouched: the full-quality original is still what gets
+  // uploaded and translated.
+  async function makeThumb(file, maxEdge = 1100) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      if (scale >= 1) { bmp.close && bmp.close(); return URL.createObjectURL(file); }
+      const cw = Math.max(1, Math.round(bmp.width * scale));
+      const chh = Math.max(1, Math.round(bmp.height * scale));
+      const c = document.createElement("canvas");
+      c.width = cw; c.height = chh;
+      c.getContext("2d").drawImage(bmp, 0, 0, cw, chh);
+      bmp.close && bmp.close();
+      const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.86));
+      c.width = c.height = 0;                 // let the canvas go straight away
+      return URL.createObjectURL(blob || file);
+    } catch (_) {
+      return URL.createObjectURL(file);       // odd format — fall back
+    }
+  }
+
+  function setUploadNote(msg) {
+    const el = document.getElementById("uploadNote");
+    if (el) { el.textContent = msg || ""; el.style.display = msg ? "" : "none"; }
+  }
+
+  async function addFiles(fileList) {
     const incoming = [...fileList].filter(f => f.type.startsWith("image/"));
     if (!incoming.length) return;
     // natural sort by filename so chapter order is preserved
     incoming.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
     const startedBatch = resultSection.style.display !== "none";
-    for (const file of incoming) {
+    for (let i = 0; i < incoming.length; i++) {
+      const file = incoming[i];
+      if (incoming.length > 3) {
+        setUploadNote(`Preparing ${i + 1} / ${incoming.length}…`);
+      }
       pages.push({
         uid: ++uidCounter, file, name: file.name, size: file.size,
-        thumb: URL.createObjectURL(file), taskId: null, status: "pending",
+        thumb: await makeThumb(file), taskId: null, status: "pending",
         progress: 0, step: 0, message: "", result: null, items: [],
         excluded: new Set(), erased: new Set(), glows: new Set(), fits: new Set(), offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
         cutRegions: [],
       });
     }
+    setUploadNote("");
 
     if (startedBatch) {
       // already running — enqueue & process the new pages
@@ -1107,7 +1155,9 @@ document.addEventListener("DOMContentLoaded", () => {
     p.file = new File([blob], name, { type: "image/png" });
     p.size = blob.size;
     try { URL.revokeObjectURL(p.thumb); } catch (_) {}
-    p.thumb = URL.createObjectURL(blob);
+    // Small stand-in again — turning a whole chapter would otherwise put a
+    // full-resolution bitmap back for every page and undo the saving.
+    p.thumb = await makeThumb(p.file);
     // A result from the old orientation describes a page that no longer
     // exists, so it goes. Back to "pending", NOT "queued": re-running costs
     // real money and that is the user's call, not a side effect of

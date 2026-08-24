@@ -445,6 +445,8 @@
         <p class="drop-sub">drop, click, or <strong>paste (Ctrl/Cmd+V)</strong> &mdash; page, chapter, or <strong>.zip</strong> &middot; PNG, JPG, WebP, ZIP</p>
         <input type="file" id="fileInput" accept="image/*,.zip" multiple hidden>
       </div>
+      <!-- Unpacking a chapter takes a moment; say so rather than looking hung. -->
+      <p class="muted" id="uploadNote" style="display:none;margin:8px 0 0"></p>
       <div class="preview-row" id="previewRow" style="display:none">
         <img id="previewImg" alt="Preview">
         <div class="preview-info">
