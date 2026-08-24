@@ -3568,7 +3568,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   function appendWm(f) {
     // watermark + credit for non-translate outputs, when the master toggle is on
-    if (!(wmAllOut && wmAllOut.checked)) return;
+    //
+    // ...except in the Watermark-only workflow, where stamping IS the job.
+    // Gating it on the "also stamp other outputs" toggle meant the mark was
+    // never sent unless that box happened to be ticked, and the server then
+    // refused the whole run with "there is nothing to stamp".
+    if (!isStampOnly(workflow) && !(wmAllOut && wmAllOut.checked)) return;
     if (watermarkInput && watermarkInput.value.trim()) {
       f.append("watermark", watermarkInput.value.trim());
       if (wmPlace) f.append("wm_place", wmPlace.value);

@@ -158,7 +158,7 @@ def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
         _stamp_watermark(output_path, credit, cplace, 85, "s", "clean")
 
 
-def _text_keepout(img, pad_px: int):
+def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
     """Where the watermark must NOT go: the page's lettering, fattened.
 
     A watermark dropped on top of dialogue ruins both — the mark is unreadable
@@ -198,10 +198,12 @@ def _text_keepout(img, pad_px: int):
         keep[lab == i] = 255
 
     glyphs = keep.copy()          # before any growing — used to find balloons
+    gap = max(3, int(h * 0.012))
+    near = cv2.dilate(glyphs, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (gap * 4 + 1, gap * 4 + 1)))
     if cv2.countNonZero(keep):
         # Join the glyphs of a line, then a block, so the gaps inside a word
         # are not read as somewhere the mark could sit.
-        gap = max(3, int(h * 0.012))
         keep = cv2.dilate(keep, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap + 1)))
 
@@ -212,6 +214,13 @@ def _text_keepout(img, pad_px: int):
     # too big to be a letter, so it is dropped and the mark can sit on it. A
     # balloon is where dialogue lives, so the safer rule is that the mark never
     # goes inside one at all, whether or not every glyph was picked out.
+    #
+    # That rule is right when the mark is a single thing being POSITIONED —
+    # it just gets put elsewhere. It is wrong for the full-page styles, which
+    # are cut away rather than moved: barring every balloon punched a hole in
+    # the pattern for each one, and on a dialogue-heavy page that left the
+    # tiled mark looking like it had been eaten. Those styles pass
+    # whole_balloons=False and cut around the lettering itself instead.
     #
     # Balloons are found as bright blobs that CONTAIN lettering. That last part
     # is what makes it safe: the page background and the panel gutters are just
@@ -244,7 +253,15 @@ def _text_keepout(img, pad_px: int):
             cv2.drawContours(filled, [c], -1, 255, -1)
             if not (glyphs[filled > 0] > 0).any():
                 continue                     # bright but empty — not a bubble
-            cv2.rectangle(keep, (x, y), (x + cw, y + ch), 255, -1)
+            if whole_balloons:
+                cv2.rectangle(keep, (x, y), (x + cw, y + ch), 255, -1)
+            else:
+                # Full-page styles: bar only the part of the balloon that is
+                # actually near lettering. That still swallows a character
+                # merged into the outline — its neighbours are right beside it
+                # — while leaving the empty half of a bubble available, so the
+                # pattern stays continuous instead of losing a disc per bubble.
+                keep[(filled > 0) & (near > 0)] = 255
 
     if pad_px > 0 and cv2.countNonZero(keep):
         keep = cv2.dilate(keep, cv2.getStructuringElement(
@@ -472,11 +489,11 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         # lettering, which reads as the watermark passing BEHIND the text —
         # the page stays legible and the mark still covers the art.
         # A generous margin here is deliberate. A mark cut flush to the glyph
-        # edges still crowds them, and it also covers the one case the glyph
-        # pass can miss: a character touching a balloon outline merges with it
-        # and is dropped, so the halo around its neighbours has to reach far
-        # enough to cover it. The margin reads as intentional either way.
-        keep = _text_keepout(img, max(6, int(w * 0.022)))
+        # edges still crowds them, and it also has to cover the one case the
+        # glyph pass can miss: a character touching a balloon outline merges
+        # with it and is dropped, so the halo around its neighbours has to
+        # reach far enough to take it in. The margin reads as intentional.
+        keep = _text_keepout(img, max(6, int(w * 0.022)), whole_balloons=False)
         if cv2.countNonZero(keep):
             a = np.array(overlay.split()[-1])
             a[keep > 0] = 0
