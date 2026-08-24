@@ -1398,7 +1398,11 @@ async def rawify_only(file: UploadFile = File(...),
                       credit: str = Form("")):
     """Scan → Raw: make a clean page look like a rough magazine raw (tan
     paper, grain, vignette, dust). Pure deterministic CV — no models, no
-    translation, art and lettering untouched."""
+    translation, art and lettering untouched.
+
+    style="none" skips the roughing entirely and only stamps the watermark,
+    which is the whole of the Watermark-only workflow: drop a folder of pages
+    in, get them all stamped, no models loaded and nothing charged."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file")
     task_id = str(uuid.uuid4())
@@ -1417,7 +1421,12 @@ async def rawify_only(file: UploadFile = File(...),
         stren = float(strength)
     except (TypeError, ValueError):
         stren = 1.0
-    wstyle = style if style in ("photo", "scan") else "photo"
+    wstyle = style if style in ("photo", "scan", "none") else "photo"
+    if wstyle == "none" and not (watermark.strip() or credit.strip()):
+        # Without one of them this workflow would hand back an exact copy and
+        # look broken. Say what is missing instead.
+        raise HTTPException(400, "Type your watermark (or a credit line) "
+                                 "first — there is nothing to stamp.")
     wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
               wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
               wm_size=wm_size.strip() or "m", credit=credit.strip(),
@@ -1431,14 +1440,17 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
                       strength: float = 1.0, style: str = "photo",
                       wm: dict = None):
     try:
+        stamp_only = style == "none"
         tasks[task_id].update({"step": 1, "progress": 30,
-                               "message": "Roughing the paper..."})
+                               "message": "Stamping..." if stamp_only
+                               else "Roughing the paper..."})
 
         def do_work():
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
-            out = raw_scan(img, strength=strength, style=style)
+            out = img if stamp_only else raw_scan(img, strength=strength,
+                                                  style=style)
             cv2.imwrite(output_path, out)
             return out.shape
 
@@ -1446,10 +1458,11 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
         if wm:
             _stamp_output(output_path, wm["watermark"], wm["wm_place"],
                           wm["wm_opacity"], wm["wm_size"], wm["credit"],
-                       wm.get("wm_style", "clean"))
+                          wm.get("wm_style", "clean"))
         tasks[task_id].update({
             "status": "done", "step": 2, "progress": 100,
-            "message": f"Raw look ready! ({shape[1]}×{shape[0]})",
+            "message": (f"Watermarked! ({shape[1]}×{shape[0]})" if stamp_only
+                        else f"Raw look ready! ({shape[1]}×{shape[0]})"),
             "result": {"output_path": output_path, "translations": {}},
             "output_url": f"/api/result/{task_id}",
             "original_url": f"/api/original/{task_id}",

@@ -357,6 +357,16 @@
           <span class="wf-title">Scan &rarr; Raw</span>
           <span class="wf-desc">Rough magazine-raw look: tan paper, grain, dust</span>
         </label>
+        <!-- Stamp and nothing else: no models load and no key is needed, so a
+             whole folder goes through in seconds. -->
+        <label class="wf-card" data-wf="watermark-only">
+          <input type="radio" name="workflow" value="watermark-only">
+          <div class="wf-icon">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M7.5 16.5l9-9"/><path d="M13 16.5h3.5V13"/></svg>
+          </div>
+          <span class="wf-title">Watermark only</span>
+          <span class="wf-desc">Just stamp the pages — no translating, no key</span>
+        </label>
       </div>
       <div class="size-control" id="rawIntensityPanel" style="display:none; margin-top:10px">
         <select id="rawStyle" style="width:210px" title="Raw style">

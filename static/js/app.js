@@ -317,9 +317,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const getActive = () => pages.find(p => p.uid === activeUid) || null;
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
   const isClean = wf => wf === "clean";
-  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw";
+  const needsTranslate = wf => wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
   const isUpscaleOnly = wf => wf === "upscale-only";
-  const isRawify = wf => wf === "scan-raw";
+  // Both go to /api/rawify; "watermark-only" just passes style "none", so the
+  // page comes back stamped and otherwise untouched.
+  const isRawify = wf => wf === "scan-raw" || wf === "watermark-only";
+  const isStampOnly = wf => wf === "watermark-only";
   const rawStyle = document.getElementById("rawStyle");
   if (rawStyle) {
     rawStyle.value = localStorage.getItem("manga_raw_style") || "photo";
@@ -367,7 +370,11 @@ document.addEventListener("DOMContentLoaded", () => {
     workflow = wf;
     wfCards.forEach(c => c.classList.toggle("active", c.dataset.wf === wf));
     enhancePanel.style.display = needsEnhancePanel() ? "" : "none";
-    if (rawIntensityPanel) rawIntensityPanel.style.display = isRawify(wf) ? "" : "none";
+    // Grain style and strength belong to the raw effect only — watermark-only
+    // applies no effect, so showing them there would just be a dead control.
+    if (rawIntensityPanel)
+      rawIntensityPanel.style.display =
+        (isRawify(wf) && !isStampOnly(wf)) ? "" : "none";
     // Keep the Settings panel always visible (it's collapsible) so the top menu
     // never disappears when switching to Raw → Scan / upscale workflows.
     document.querySelector(".settings-bar").style.display = "";
@@ -375,7 +382,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "scan-translate": "Translate", "raw-scan-translate": "Enhance & Translate",
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
       "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
-      "scan-raw": "Make it Raw",
+      "scan-raw": "Make it Raw", "watermark-only": "Watermark Pages",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
     if (window.updateCutBtn) window.updateCutBtn();
@@ -1243,7 +1250,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
       f.append("strength", rawStrength ? rawStrength.value : "1");
-      f.append("style", rawStyle ? rawStyle.value : "photo");
+      f.append("style", isStampOnly(workflow) ? "none"
+               : (rawStyle ? rawStyle.value : "photo"));
       appendWm(f);
       return { url: "/api/rawify", form: f };
     }
@@ -1492,12 +1500,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const noTranslate = !needsTranslate(workflow);
     const leftLabel = (workflow === "raw-scan" || workflow === "scan-upscale") ? "Rough"
                     : workflow === "scan-raw" ? "Clean" : "Original";
-    const rightLabel = workflow === "upscale-only" ? "Upscaled HD"
+    // (watermark-only falls through to "Original" / "Watermarked" below)
+    const rightLabel = workflow === "watermark-only" ? "Watermarked"
+                     : workflow === "upscale-only" ? "Upscaled HD"
                      : workflow === "scan-upscale" ? "Scan + HD"
                      : workflow === "raw-scan" ? "Manga Scan"
                      : workflow === "scan-raw" ? "Raw feel"
                      : "Translated";
-    const tabLabel = workflow === "raw-scan" ? "Scan"
+    const tabLabel = workflow === "watermark-only" ? "Stamped"
+                   : workflow === "raw-scan" ? "Scan"
                    : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"
                    : workflow === "scan-raw" ? "Raw"
                    : "Translated";
