@@ -1,4 +1,5 @@
 import asyncio
+import math
 import io
 import os
 import time
@@ -158,6 +159,118 @@ def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
         _stamp_watermark(output_path, credit, cplace, 85, "s", "clean")
 
 
+def _bright_regions(gray):
+    """Balloon-shaped bright areas, holes filled.
+
+    Yields (x, y, w, h, filled_mask) for every bright region that could be a
+    speech balloon. Holes are filled because the lettering inside a balloon
+    punches through the bright area, and the mask has to cover it.
+
+    Connected components rather than outer contours, and that matters: when
+    the paper is as bright as the balloons — an ordinary manga page — the
+    whole sheet is ONE outer region with the balloon interiors nested inside
+    it, and a RETR_EXTERNAL scan returns the sheet and nothing else. A
+    balloon's inked outline separates its interior from the paper around it,
+    so components find it whatever else is on the page.
+    """
+    h, w = gray.shape[:2]
+    _, bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+    page_area = float(h * w)
+    for i in range(1, n):
+        x, y, cw, ch, area = stats[i]
+        if area < page_area * 0.004 or area > page_area * 0.30:
+            continue
+        # A region spanning almost the whole sheet is the paper, not a bubble.
+        if cw > w * 0.85 or ch > h * 0.85:
+            continue
+        if area / float(max(1, cw * ch)) < 0.35:
+            continue
+        # Fill the lettering back in, inside the bounding box so a page of
+        # many balloons stays cheap.
+        sub = (lab[y:y + ch, x:x + cw] == i).astype(np.uint8) * 255
+        pad = cv2.copyMakeBorder(sub, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+        ff = pad.copy()
+        cv2.floodFill(ff, np.zeros((ch + 4, cw + 4), np.uint8), (0, 0), 255)
+        filled = np.zeros((h, w), np.uint8)
+        filled[y:y + ch, x:x + cw] = (pad | cv2.bitwise_not(ff))[1:-1, 1:-1]
+        yield x, y, cw, ch, filled
+
+
+def _glyph_mask(gray):
+    """Ink that is shaped like a character.
+
+    Picked out by SHAPE rather than darkness, because manga artwork is just as
+    black as its lettering. A glyph is a small fraction of the page height,
+    neither a solid blob (a filled eye, a spot of black) nor a hairline (a
+    panel border, a speed line), and not wildly elongated.
+
+    It is a permissive test: on a grainy or heavily hatched page a lot of
+    artwork passes it. That is fine where the result POSITIONS a single mark,
+    which simply lands elsewhere — it is why the full-page styles use
+    _dialogue_keepout() instead, which insists on a balloon.
+    """
+    h, w = gray.shape[:2]
+    ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                cv2.THRESH_BINARY_INV, 25, 12)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    out = np.zeros((h, w), np.uint8)
+    lo, hi = max(4, int(h * 0.006)), int(h * 0.09)
+    for i in range(1, n):
+        x, y, cw, ch, area = stats[i]
+        if not (lo <= ch <= hi) or cw > hi * 3:
+            continue
+        if area < 12 or cw < 2:
+            continue
+        fill = area / float(max(1, cw * ch))
+        if fill > 0.92 or fill < 0.05:
+            continue
+        ar = cw / float(max(1, ch))
+        if ar > 8 or ar < 0.06:
+            continue
+        out[lab == i] = 255
+    return out
+
+
+def _dialogue_keepout(img, pad_px: int):
+    """Where the page's DIALOGUE is: lettering that sits inside a balloon.
+
+    Deliberately narrower than _text_keepout(). That one also returns every
+    glyph-shaped speck it can find, which is right when a single mark is being
+    positioned — it just moves elsewhere — but wrong for the full-page styles,
+    which are cut away instead. On a photographed raw, hatching and halftone
+    are glyph-shaped in their thousands, and cutting against all of them
+    shredded the watermark into fragments.
+
+    Requiring a bright, compact, enclosed shape around the lettering is what
+    makes this safe: shading cannot produce one.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    keep = np.zeros((h, w), np.uint8)
+    glyphs = _glyph_mask(gray)
+    if not cv2.countNonZero(glyphs):
+        return keep
+    gap = max(3, int(h * 0.012))
+    near = cv2.dilate(glyphs, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (gap * 4 + 1, gap * 4 + 1)))
+    for x, y, cw, ch, filled in _bright_regions(gray):
+        if not (glyphs[filled > 0] > 0).any():
+            continue                      # bright but empty — not a bubble
+        keep[(filled > 0) & (near > 0)] = 255
+    if pad_px > 0 and cv2.countNonZero(keep):
+        keep = cv2.dilate(keep, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (pad_px * 2 + 1, pad_px * 2 + 1)))
+    # A mask this large is a misdetection, not a page of solid dialogue.
+    # Better a mark crossing some text than a page carrying no mark at all.
+    if cv2.countNonZero(keep) > 0.45 * h * w:
+        print(f"[watermark] dialogue mask covered "
+              f"{100.0 * cv2.countNonZero(keep) / (h * w):.0f}% of the page "
+              "— ignoring it")
+        return np.zeros((h, w), np.uint8)
+    return keep
+
+
 def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
     """Where the watermark must NOT go: the page's lettering, fattened.
 
@@ -174,28 +287,7 @@ def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
-    ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                cv2.THRESH_BINARY_INV, 25, 12)
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
-    keep = np.zeros((h, w), np.uint8)
-    # A glyph is a small fraction of the page height. Below this it is
-    # screentone or dust; above it, artwork.
-    lo, hi = max(4, int(h * 0.006)), int(h * 0.09)
-    for i in range(1, n):
-        x, y, cw, ch, area = stats[i]
-        if not (lo <= ch <= hi) or cw > hi * 3:
-            continue
-        if area < 12 or cw < 2:
-            continue
-        # Solid blobs (a filled eye, a spot of black) and hairline rules (a
-        # panel border, a speed line) are both common and neither is text.
-        fill = area / float(max(1, cw * ch))
-        if fill > 0.92 or fill < 0.05:
-            continue
-        ar = cw / float(max(1, ch))
-        if ar > 8 or ar < 0.06:
-            continue
-        keep[lab == i] = 255
+    keep = _glyph_mask(gray)
 
     glyphs = keep.copy()          # before any growing — used to find balloons
     gap = max(3, int(h * 0.012))
@@ -228,29 +320,7 @@ def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
     # and the whole page does not become out of bounds. All plain OpenCV — no
     # model, no download, a few milliseconds.
     if cv2.countNonZero(glyphs):
-        _, bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-        # Outer contours, filled. The lettering punches holes in a balloon's
-        # bright interior and taking the outer boundary closes them back up.
-        # Deliberately NOT a morphological close: a kernel wide enough to span
-        # the gaps between lines of dialogue also steps straight over the
-        # balloon's own outline, merging it into the panel behind and making
-        # the whole thing too big to recognise.
-        cnts, _h = cv2.findContours(bright, cv2.RETR_EXTERNAL,
-                                    cv2.CHAIN_APPROX_SIMPLE)
-        page_area = float(h * w)
-        for c in cnts:
-            x, y, cw, ch = cv2.boundingRect(c)
-            area = float(cv2.contourArea(c))
-            if area < page_area * 0.004 or area > page_area * 0.30:
-                continue
-            # A blob spanning almost the whole page is the paper, not a bubble.
-            if cw > w * 0.85 or ch > h * 0.85:
-                continue
-            # Balloons are compact; a sprawling bright background is not.
-            if area / float(max(1, cw * ch)) < 0.5:
-                continue
-            filled = np.zeros((h, w), np.uint8)
-            cv2.drawContours(filled, [c], -1, 255, -1)
+        for x, y, cw, ch, filled in _bright_regions(gray):
             if not (glyphs[filled > 0] > 0).any():
                 continue                     # bright but empty — not a bubble
             if whole_balloons:
@@ -428,10 +498,26 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         # into a handful of widely separated columns.
         xstep = max(40, int(tw * 1.35) + 24)
         ystep = max(24, int(th * 3.2) + 12)
-        for yy in range(-h, h * 2, ystep):
-            for xx in range(-w, w * 2, xstep):
-                draw.text((xx, yy), text, fill=(255, 255, 255, alpha), font=font)
-        overlay = overlay.rotate(30, expand=False, center=(w // 2, h // 2))
+        # Tile onto a SQUARE large enough to still cover the page once it has
+        # been turned, then rotate that and cut the page out of the middle.
+        #
+        # The old loop ran from -w to 2w and trusted the rotation to bring the
+        # outer stamps into view, but drawing is clipped to the canvas. On a
+        # 1200x1500 page, of the 480 stamps it asked for, 400 landed entirely
+        # off-canvas and were never drawn, 40 were clipped through the middle
+        # of a word, and only 40 came out whole. The rotation then swung the
+        # clipped ones into view — which is why the page came back covered in
+        # pieces like "on kai" and "om/g/" instead of the whole line.
+        span = int(math.hypot(w, h)) + 2 * max(xstep, ystep)
+        layer = Image.new("RGBA", (span, span), (0, 0, 0, 0))
+        ldraw = ImageDraw.Draw(layer)
+        for yy in range(0, span, ystep):
+            for xx in range(0, span, xstep):
+                ldraw.text((xx, yy), text, fill=(255, 255, 255, alpha),
+                           font=font)
+        layer = layer.rotate(30, expand=False, center=(span // 2, span // 2))
+        ox, oy = (span - w) // 2, (span - h) // 2
+        overlay.alpha_composite(layer.crop((ox, oy, ox + w, oy + h)))
 
     elif style == "ghost":
         font = _font(max(40, int(w * 0.10)))
@@ -505,18 +591,34 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         overlay = Image.fromarray(np.dstack([rgb, a0]), "RGBA")
 
         # These two cover the whole page by design, so there is nowhere to
-        # move them to. Instead the mark is cut away wherever it would cross
-        # lettering, which reads as the watermark passing BEHIND the text —
-        # the page stays legible and the mark still covers the art.
-        # A generous margin here is deliberate. A mark cut flush to the glyph
-        # edges still crowds them, and it also has to cover the one case the
-        # glyph pass can miss: a character touching a balloon outline merges
-        # with it and is dropped, so the halo around its neighbours has to
-        # reach far enough to take it in. The margin reads as intentional.
-        keep = _text_keepout(img, max(6, int(w * 0.022)), whole_balloons=False)
+        # move them to — the mark is kept clear of the lettering instead.
+        #
+        # What it is kept clear OF matters. The glyph detector fires on
+        # hatching, halftone and fine line art as well as on writing, and on a
+        # photographed raw that is most of the page. Only DIALOGUE is protected
+        # here: lettering inside a detected speech balloon, which needs a
+        # bright compact shape around it and so cannot be triggered by shading.
+        keep = _dialogue_keepout(img, max(6, int(w * 0.018)))
         if cv2.countNonZero(keep):
             a = np.array(overlay.split()[-1])
-            a[keep > 0] = 0
+            if style == "tile":
+                # Whole instances, never half of one. Cutting the mark
+                # pixel-by-pixel is the other way to end up with chopped-up
+                # words: a watermark should read as a watermark or not be
+                # there at all. Each instance's letters are merged into one
+                # blob, and any blob touching dialogue is dropped entire.
+                glue = max(3, int(w * 0.012)) | 1
+                merged = cv2.dilate((a > 0).astype(np.uint8),
+                                    cv2.getStructuringElement(
+                                        cv2.MORPH_ELLIPSE, (glue, glue)))
+                _n, lab = cv2.connectedComponents(merged, 8)
+                hit = np.unique(lab[keep > 0])
+                a[np.isin(lab, hit[hit > 0]) & (a > 0)] = 0
+            else:
+                # Ghost is one huge diagonal; dropping it whole would remove
+                # the mark altogether, so it keeps the pixel cut. At 30% alpha
+                # a soft break across a balloon reads as intended.
+                a[keep > 0] = 0
             overlay.putalpha(Image.fromarray(a))
 
     pil = Image.alpha_composite(pil, overlay)
