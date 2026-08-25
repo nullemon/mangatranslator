@@ -671,10 +671,11 @@
        something a measurement can find, so the line is yours to move. -->
   <div class="crop-modal" id="trimModal" style="display:none">
     <div class="crop-toolbar" style="flex-wrap:wrap;gap:8px">
-      <span class="crop-hint" id="trimHint">Drag the line to where you want the cut</span>
+      <span class="crop-hint" id="trimHint">Click on the page where the cut should go</span>
       <span class="muted" id="trimReadout" style="font-size:.78rem"></span>
-      <button class="btn btn-primary btn-sm" id="trimApplyAll">Cut every page</button>
-      <button class="btn btn-ghost btn-sm" id="trimApplyOne">Cut this page only</button>
+      <!-- THIS page only, and nothing is re-run. Every other page is left
+           exactly as it is, mid-batch or not. -->
+      <button class="btn btn-primary btn-sm" id="trimApplyOne">Cut this page</button>
       <button class="btn btn-ghost btn-sm" id="trimCancel">Cancel</button>
     </div>
     <div class="crop-stage" id="trimStage" style="position:relative;cursor:ew-resize">

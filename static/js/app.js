@@ -1357,7 +1357,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (_) {}
     trimFrac = Math.max(0.005, Math.min(0.9, guess));
-    trimHint.textContent = "Drag the line to where you want the cut" + note;
+    trimHint.textContent = "Click on the page where the cut should go" + note;
     trimImg.onload = () => drawTrim();
     // Show the page as it stands: the finished scan when there is one, so the
     // line is placed against what will actually be cut.
@@ -1420,40 +1420,35 @@ document.addEventListener("DOMContentLoaded", () => {
       await cutLocalFile(p, side, frac);
       return d.cut || 0;
     }
-    const cut = await cutLocalFile(p, side, frac);
-    if (cut) { p.status = "pending"; p.progress = 0; p.step = 0; p.message = ""; }
-    return cut;
+    // Deliberately NOT touching p.status. Putting the page back to "pending"
+    // is what let a trim disturb work that was already under way: on a running
+    // chapter it pulled pages out of the queue and pushed them round again,
+    // and on a Raw -> Scan batch that means paying the image API a second time
+    // for every page. Swapping the file is the whole job; whatever the page
+    // was doing, it carries on doing with the trimmed image.
+    return await cutLocalFile(p, side, frac);
   }
 
-  async function applyTrim(all) {
-    const targets = all ? pages.filter(p => p.file)
-                        : [trimPage].filter(p => p && p.file);
-    if (!targets.length) return;
-    const btns = ["trimApplyAll", "trimApplyOne"].map(i => document.getElementById(i));
-    btns.forEach(b => { if (b) b.disabled = true; });
-    const label = btns[0] ? btns[0].textContent : "";
-    let done = 0, px = 0;
+  // ONE page — the one on screen. Never the chapter.
+  async function applyTrim() {
+    const p = trimPage;
+    if (!p || !p.file) return;
+    const btn = document.getElementById("trimApplyOne");
+    if (btn) { btn.disabled = true; btn.textContent = "Cutting…"; }
+    let cut = 0;
     try {
-      // Held as a FRACTION, so a chapter whose pages are not all exactly the
-      // same size still gets the cut in the same place on each.
-      for (let i = 0; i < targets.length; i++) {
-        if (btns[0] && all) btns[0].textContent = `Cutting ${i + 1}/${targets.length}…`;
-        const n = await cutPage(targets[i], trimSide, trimFrac);
-        if (n) { done++; px = Math.max(px, n); }
-      }
+      cut = await cutPage(p, trimSide, trimFrac);
     } catch (e) {
       showError(e.message);
     } finally {
-      btns.forEach(b => { if (b) b.disabled = false; });
-      if (btns[0]) btns[0].textContent = label;
+      if (btn) { btn.disabled = false; btn.textContent = "Cut this page"; }
     }
     trimModal.style.display = "none";
     renderStrip(); updateBatch(); renderActivePage();
-    const act = getActive() || pages[0];
-    if (act && previewImg && pages.length === 1) previewImg.src = act.thumb;
+    if (previewImg && pages.length === 1) previewImg.src = p.thumb;
     if (orientNote) {
-      orientNote.textContent = done
-        ? `Cut ${px}px off the ${trimSide} of ${done} page${done === 1 ? "" : "s"}.`
+      orientNote.textContent = cut
+        ? `Cut ${cut}px off the ${trimSide} of this page.`
         : "Nothing was cut.";
       clearTimeout(orientNote._t);
       orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
@@ -1461,11 +1456,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   {
-    const bAll = document.getElementById("trimApplyAll");
     const bOne = document.getElementById("trimApplyOne");
     const bNo = document.getElementById("trimCancel");
-    if (bAll) bAll.addEventListener("click", () => applyTrim(true));
-    if (bOne) bOne.addEventListener("click", () => applyTrim(false));
+    if (bOne) bOne.addEventListener("click", () => applyTrim());
     if (bNo) bNo.addEventListener("click", () => { trimModal.style.display = "none"; });
   }
 
