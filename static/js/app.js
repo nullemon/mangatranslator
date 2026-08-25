@@ -973,28 +973,34 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!cropRect || cropRect.w < 20 || cropRect.h < 20) return;
     const img = new window.Image();
     img.onload = () => {
+      // The selection is measured on the PREVIEW, which is a scaled-down
+      // stand-in — cropping from it would hand back a small, soft page. Scale
+      // the rectangle up and cut it out of the original file instead.
+      const k = img.naturalWidth / Math.max(1, cropImg.naturalWidth);
+      const rx = Math.round(cropRect.x * k), ry = Math.round(cropRect.y * k);
+      const rw = Math.max(1, Math.round(cropRect.w * k));
+      const rh = Math.max(1, Math.round(cropRect.h * k));
       const canvas = document.createElement("canvas");
-      canvas.width = cropRect.w; canvas.height = cropRect.h;
+      canvas.width = rw; canvas.height = rh;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, cropRect.x, cropRect.y, cropRect.w, cropRect.h,
-                    0, 0, cropRect.w, cropRect.h);
-      canvas.toBlob(blob => {
+      ctx.drawImage(img, rx, ry, rw, rh, 0, 0, rw, rh);
+      canvas.toBlob(async blob => {
         if (!blob) return;
         const page = pages[0];
         if (!page) return;
-        const ext = page.name.match(/\.[^.]+$/) || [".png"];
         const cropped = new File([blob], "cropped_" + page.name, { type: blob.type || "image/png" });
         try { URL.revokeObjectURL(page.thumb); } catch (_) {}
         page.file = cropped;
         page.size = blob.size;
-        page.thumb = URL.createObjectURL(blob);
+        page.thumb = await makeThumb(cropped);
         previewImg.src = page.thumb;
         fileName.textContent = page.name + " (cropped)";
         fileSize.textContent = formatBytes(page.size);
         cropModal.style.display = "none";
       }, "image/png");
     };
-    img.src = pages[0].thumb;
+    // Read the ORIGINAL file, not the preview.
+    img.src = URL.createObjectURL(pages[0].file);
   });
 
   /* ══ START / QUEUE ══ */
@@ -1171,6 +1177,172 @@ document.addEventListener("DOMContentLoaded", () => {
     p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
     return true;
   }
+
+  /* ══ EDGE TRIM ══
+     A scanned book brings its own dark stripe: the binding shadow, the edge of
+     the scanner bed, or a sliver of the facing page. It sits outside the page
+     border, runs the full height, and it is in the SOURCE — nothing downstream
+     removes it, because nothing downstream is willing to delete artwork.
+
+     One click cuts it off. The strip is measured rather than guessed at, so
+     the same button works whether it is 20px or 200px wide. */
+
+  //: never eat more than this much of the page, whatever the measurement says
+  const TRIM_CAP = 0.18;
+
+  async function measureEdge(file, side) {
+    // Measured on a reduced copy — a page is millions of pixels and the strip
+    // only has to be located to within a column.
+    const bmp = await createImageBitmap(file);
+    const long = Math.max(bmp.width, bmp.height);
+    const k = Math.min(1, 900 / long);
+    const w = Math.max(8, Math.round(bmp.width * k));
+    const h = Math.max(8, Math.round(bmp.height * k));
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const full = { w: bmp.width, h: bmp.height };
+    bmp.close && bmp.close();
+    const d = ctx.getImageData(0, 0, w, h).data;
+    c.width = c.height = 0;
+
+    const horizontal = (side === "left" || side === "right");
+    const lines = horizontal ? w : h;
+    const across = horizontal ? h : w;
+    // Brightness of each line, and how much of it is dark.
+    const mean = new Float32Array(lines), darkFrac = new Float32Array(lines);
+    const sd = new Float32Array(lines);
+    for (let i = 0; i < lines; i++) {
+      let sum = 0, sum2 = 0, dark = 0;
+      for (let j = 0; j < across; j++) {
+        const x = horizontal ? i : j, y = horizontal ? j : i;
+        const p = (y * w + x) * 4;
+        const v = (d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114);
+        sum += v; sum2 += v * v;
+        if (v < 140) dark++;
+      }
+      mean[i] = sum / across;
+      sd[i] = Math.sqrt(Math.max(0, sum2 / across - mean[i] * mean[i]));
+      darkFrac[i] = dark / across;
+    }
+    // The page's own paper level, from the brightest lines it has.
+    const sorted = Array.from(mean).sort((a, b) => a - b);
+    const paper = sorted[Math.floor(sorted.length * 0.9)];
+    if (paper < 120) return { trim: 0, why: "this page has no white margin to measure against" };
+
+    const order = (side === "left" || side === "top")
+      ? [...Array(lines).keys()] : [...Array(lines).keys()].reverse();
+    const cap = Math.floor(lines * TRIM_CAP);
+    // A line belongs to the strip while it is clearly darker than paper AND
+    // dark down most of its length — a panel that merely touches the edge
+    // darkens part of a line, a scanner shadow darkens all of it.
+    const bad = i => (mean[i] < paper - 45) && darkFrac[i] > 0.55;
+
+    let n = 0;
+    while (n < order.length && bad(order[n])) n++;
+    if (n === 0) return { trim: 0, why: "no dark strip on that edge" };
+    if (n > cap) {
+      return { trim: 0, why: `that whole edge is dark for ${Math.round(100 * n / lines)}% of the page — looks like artwork, not a scan edge` };
+    }
+    // What separates a scan edge from artwork that simply runs off the page:
+    // STRUCTURE. A binding shadow or the edge of the scanner bed is a
+    // featureless wash — flat tone plus sensor noise. Artwork has drawing in
+    // it, so its lines vary wildly from one end to the other. Without this
+    // check the measurement happily ate 118px off a bleeding panel, which
+    // would be the tool destroying the page.
+    //
+    // The first thing tried instead was "a scan strip is followed by the page
+    // margin". It reads well and it is wrong: the strip is often WIDER than
+    // the margin, so the test refused four real strips out of five.
+    let energy = 0;
+    for (let i = 0; i < n; i++) energy += sd[order[i]];
+    energy /= Math.max(1, n);
+    if (energy > 55) {
+      return { trim: 0, why: `that edge has drawing in it, not a flat scan shadow — nothing trimmed, in case it is a full-bleed panel` };
+    }
+    // Take a little of the page beyond it, so the cut lands past the strip's
+    // ragged inner edge rather than flush against it.
+    let clean = 0;
+    while (clean < 6 && n + clean < order.length &&
+           mean[order[n + clean]] > paper - 25) clean++;
+    const cut = (n + Math.min(clean, 4)) / lines;
+    const px = Math.round(cut * (horizontal ? full.w : full.h));
+    return { trim: px, why: "", full };
+  }
+
+  async function trimPage(p, side) {
+    if (!p || !p.file) return 0;
+    const m = await measureEdge(p.file, side);
+    if (!m.trim) { p._trimWhy = m.why; return 0; }
+    const bmp = await createImageBitmap(p.file);
+    const W0 = bmp.width, H0 = bmp.height;
+    let sx = 0, sy = 0, sw = W0, sh = H0;
+    if (side === "left") { sx = m.trim; sw = W0 - m.trim; }
+    else if (side === "right") { sw = W0 - m.trim; }
+    else if (side === "top") { sy = m.trim; sh = H0 - m.trim; }
+    else { sh = H0 - m.trim; }
+    if (sw < 40 || sh < 40) { bmp.close && bmp.close(); return 0; }
+    const c = document.createElement("canvas");
+    c.width = sw; c.height = sh;
+    c.getContext("2d").drawImage(bmp, sx, sy, sw, sh, 0, 0, sw, sh);
+    bmp.close && bmp.close();
+    const blob = await new Promise(r => c.toBlob(r, "image/png"));
+    c.width = c.height = 0;
+    if (!blob) return 0;
+    p.file = new File([blob], p.name || "page.png", { type: "image/png" });
+    p.size = blob.size;
+    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    p.thumb = await makeThumb(p.file);
+    // A finished result describes a page that no longer exists. Back to
+    // "pending", not "queued": re-running costs money and that is the user's
+    // call, exactly as turning a page over works.
+    if (p.taskId || p.status === "done" || p.status === "error") {
+      p.taskId = null; p.result = null; p.rev = 0; p.error = "";
+      p.items = []; p.excluded = new Set(); p.erased = new Set();
+      p.glows = new Set(); p.fits = new Set();
+      p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+    }
+    p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
+    return m.trim;
+  }
+
+  async function applyTrim(side, btn) {
+    const all = !!(orientAll && orientAll.checked);
+    const targets = all ? pages.filter(p => p.file)
+                        : [getActive() || pages[0]].filter(p => p && p.file);
+    if (!targets.length) { showError("No page loaded to trim."); return; }
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Trimming…"; }
+    let done = 0, px = 0, why = "";
+    try {
+      for (const p of targets) {
+        const n = await trimPage(p, side);
+        if (n) { done++; px = Math.max(px, n); }
+        else if (p._trimWhy) why = p._trimWhy;
+      }
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+    renderStrip(); updateBatch(); renderActivePage();
+    const act = getActive() || pages[0];
+    if (act && previewImg && pages.length === 1) previewImg.src = act.thumb;
+    if (orientNote) {
+      orientNote.textContent = done
+        ? `Trimmed ${px}px off the ${side} of ${done} page${done === 1 ? "" : "s"}.`
+        : (why || "Nothing to trim on that edge.");
+      clearTimeout(orientNote._t);
+      orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
+    }
+  }
+
+  [["trimLeft", "left"], ["trimRight", "right"],
+   ["trimTop", "top"], ["trimBottom", "bottom"]].forEach(([id, side]) => {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener("click", () => applyTrim(side, b));
+  });
 
   async function applyOrient(kind, scope) {
     // scope: "all" / "active", or left out to follow the "every page" box.

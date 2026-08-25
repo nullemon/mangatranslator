@@ -492,7 +492,16 @@
         <button class="btn btn-ghost btn-sm" id="orientMirror" title="Mirror left-to-right — the fix for a scan that reads backwards, as if held up to a mirror">⇋ Mirror</button>
         <button class="btn btn-ghost btn-sm" id="orientLeft" title="Turn 90° anticlockwise — for a page scanned sideways">⟲ 90°</button>
         <button class="btn btn-ghost btn-sm" id="orientRight" title="Turn 90° clockwise — for a page scanned sideways">⟳ 90°</button>
-        <label class="orient-all" title="A chapter scanned upside down is usually upside down on every page"><input type="checkbox" id="orientAll"> every page</label>
+        <!-- A scanned book brings its own dark stripe down one side: the
+             binding shadow, the edge of the scanner bed, or a sliver of the
+             facing page. It is in the source, so nothing downstream will
+             remove it — cutting it off is the fix. -->
+        <span class="orient-label" style="margin-left:14px">Dark strip down an edge?</span>
+        <button class="btn btn-ghost btn-sm" id="trimLeft" title="Measure the dark scan strip on the LEFT edge and cut exactly it off">⇤ Trim left</button>
+        <button class="btn btn-ghost btn-sm" id="trimRight" title="Same for the right edge">Trim right ⇥</button>
+        <button class="btn btn-ghost btn-sm" id="trimTop" title="Same for the top edge">⇡ Top</button>
+        <button class="btn btn-ghost btn-sm" id="trimBottom" title="Same for the bottom edge">⇣ Bottom</button>
+        <label class="orient-all" title="Applies to the turn and trim buttons alike — a chapter scanned badly is usually scanned that way on every page"><input type="checkbox" id="orientAll"> every page</label>
         <span class="orient-note" id="orientNote"></span>
       </div>
 
