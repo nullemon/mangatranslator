@@ -194,8 +194,30 @@ class ImageEnhancer:
         bad = (gs >= thr) & (go < thr - 55)
         if not bad.any():
             return out
-        m = cv2.morphologyEx((bad.astype(np.uint8) * 255), cv2.MORPH_OPEN,
-                             np.ones((5, 5), np.uint8))
+        # Whole blobs, by area — NOT a morphological opening. A torn edge is
+        # drawn as a sawtooth, and an opening files the spikes off the mask, so
+        # they were left behind on the page while the body of the band was
+        # repaired. Taking whole connected blobs keeps the fine teeth with it.
+        #
+        # Note there is deliberately no "ignore ink next to existing ink" rule
+        # here. It sounds right — antialiasing along a stroke is the one
+        # legitimate way ink lands on blank paper — but panels very often run
+        # to the page edge, and it would have switched the repair off for
+        # exactly the pages that need it. The area filter below covers specks
+        # on its own.
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(
+            bad.astype(np.uint8), 8)
+        m = np.zeros(bad.shape, np.uint8)
+        # Small, because the teeth of a torn edge are small: a 2px hairline
+        # fringe is 12-60px per tooth, and anything stricter left it on the
+        # page. Nothing is lost by being generous here — a blob only reaches
+        # this point if the source was plainly blank AND the result is plainly
+        # dark, and a stray dark speck on a blank margin is not wanted either.
+        # It exists only to ignore single stray pixels.
+        min_area = 8
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                m[lab == i] = 255
         if not m.any():
             return out
         m = cv2.dilate(m, np.ones((3, 3), np.uint8))
