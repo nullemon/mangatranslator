@@ -162,74 +162,6 @@ class ImageEnhancer:
         merged = np.where(take_a[..., None], bandA, bandB)
         return np.concatenate([A[:, :A.shape[1] - band], merged, B[:, band:]], axis=1)
 
-    @staticmethod
-    def _keep_paper(out, src):
-        """Blank paper in the source must not come back inked.
-
-        Each tile is scanned on its own, with no sight of the rest of the page,
-        so each one picks its own idea of where paper sits. On a tile that is
-        mostly dark artwork the model can read the blank margin beside it as
-        part of the art and fill it in — which is why the page border came back
-        black down some tiles and white down others, changing at the seam.
-
-        The rule is one-directional and that is what makes it safe: it only
-        ever puts paper BACK. Artwork the model legitimately darkened is
-        untouched, because this acts solely where the source itself was blank.
-        Isolated pixels are ignored too — a lone dark pixel on white is
-        antialiasing along a stroke; a band of it is the fault.
-        """
-        if out is None or out.size == 0 or src is None or src.size == 0:
-            return out
-        if out.shape[:2] != src.shape[:2]:
-            src = cv2.resize(src, (out.shape[1], out.shape[0]),
-                             interpolation=cv2.INTER_AREA)
-        gs = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
-        go = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        # Where the paper of THIS page sits, rather than a fixed number: a
-        # photographed raw's blank margin is nearer 230 than 255.
-        paper = float(np.percentile(gs, 92))
-        if paper < 150:
-            return out                     # a genuinely dark tile — nothing to do
-        thr = max(170.0, paper - 14.0)
-        bad = (gs >= thr) & (go < thr - 55)
-        if not bad.any():
-            return out
-        # Whole blobs, by area — NOT a morphological opening. A torn edge is
-        # drawn as a sawtooth, and an opening files the spikes off the mask, so
-        # they were left behind on the page while the body of the band was
-        # repaired. Taking whole connected blobs keeps the fine teeth with it.
-        #
-        # Note there is deliberately no "ignore ink next to existing ink" rule
-        # here. It sounds right — antialiasing along a stroke is the one
-        # legitimate way ink lands on blank paper — but panels very often run
-        # to the page edge, and it would have switched the repair off for
-        # exactly the pages that need it. The area filter below covers specks
-        # on its own.
-        n, lab, stats, _ = cv2.connectedComponentsWithStats(
-            bad.astype(np.uint8), 8)
-        m = np.zeros(bad.shape, np.uint8)
-        # Small, because the teeth of a torn edge are small: a 2px hairline
-        # fringe is 12-60px per tooth, and anything stricter left it on the
-        # page. Nothing is lost by being generous here — a blob only reaches
-        # this point if the source was plainly blank AND the result is plainly
-        # dark, and a stray dark speck on a blank margin is not wanted either.
-        # It exists only to ignore single stray pixels.
-        min_area = 8
-        for i in range(1, n):
-            if stats[i, cv2.CC_STAT_AREA] >= min_area:
-                m[lab == i] = 255
-        if not m.any():
-            return out
-        m = cv2.dilate(m, np.ones((3, 3), np.uint8))
-        # Fill with the brightness the model gave to paper it DID handle
-        # properly, rather than a flat 255, so the repair sits at the same tone
-        # as the margin either side of it instead of leaving a brighter patch.
-        ok = go[(gs >= thr) & (go >= thr - 55)]
-        fill = float(np.percentile(ok, 60)) if ok.size > 200 else 255.0
-        out = out.copy()
-        out[m > 0] = int(round(min(255.0, max(200.0, fill))))
-        return out
-
     def enhance_tiled(self, image, prompt, provider, api_key, model,
                       tiles: int = 2, out_scale: float = 2.0,
                       progress=None) -> np.ndarray:
@@ -337,13 +269,8 @@ class ImageEnhancer:
                 interp = cv2.INTER_AREA if enh.shape[0] > ph else cv2.INTER_CUBIC
                 enh = cv2.resize(enh, (pw, ph), interpolation=interp)
                 # Drop the padding → exactly the strip's true region, 1:1.
-                piece = np.ascontiguousarray(enh[:(ey1 - ey0) * S,
-                                                 :(ex1 - ex0) * S])
-                # Before the seam is traced, not after: a black band across a
-                # tile's margin is exactly the kind of strong edge the seam
-                # finder would otherwise route around and blend in.
-                piece = self._keep_paper(piece, image[ey0:ey1, ex0:ex1])
-                pieces.append(piece)
+                pieces.append(np.ascontiguousarray(enh[:(ey1 - ey0) * S,
+                                                       :(ex1 - ex0) * S]))
             strip = pieces[0]
             for c in range(1, cols):
                 shared = (min(w, xs[c] + ov) - max(0, xs[c] - ov)) * S
@@ -365,9 +292,6 @@ class ImageEnhancer:
         if skipped:
             print(f"[enhance] {len(skipped)}/{total} tile(s) refused; the rest "
                   f"of the page was scanned normally", flush=True)
-        # Once more over the whole page: the blend across a seam can drag a
-        # neighbour's dark margin a little way into a clean one.
-        out = self._keep_paper(out, image)
         return np.ascontiguousarray(out)
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
