@@ -1271,17 +1271,110 @@ document.addEventListener("DOMContentLoaded", () => {
     return { trim: px, why: "", full };
   }
 
-  async function trimPage(p, side) {
-    if (!p || !p.file) return 0;
-    const m = await measureEdge(p.file, side);
-    if (!m.trim) { p._trimWhy = m.why; return 0; }
+  /* ── the trim dialog: drag one line, see what goes, then cut ──
+     The automatic measurement is only the STARTING position for the line. It
+     reads a clean scanner shadow well, but real scans have gradients, torn
+     edges and slivers of the facing page, and it put the cut in the wrong
+     place often enough to be no use on its own. Where the cut falls is the
+     user's decision; the measurement only saves them a drag. */
+  const trimModal = document.getElementById("trimModal");
+  const trimStage = document.getElementById("trimStage");
+  const trimImg = document.getElementById("trimImg");
+  const trimLine = document.getElementById("trimLine");
+  const trimShade = document.getElementById("trimShade");
+  const trimHint = document.getElementById("trimHint");
+  const trimReadout = document.getElementById("trimReadout");
+  let trimSide = "left", trimFrac = 0.05, trimPage = null;
+
+  const trimVertical = () => trimSide === "left" || trimSide === "right";
+
+  function drawTrim() {
+    if (!trimImg.clientWidth) return;
+    const w = trimImg.clientWidth, h = trimImg.clientHeight;
+    const ox = trimImg.offsetLeft, oy = trimImg.offsetTop;
+    const f = Math.max(0, Math.min(0.9, trimFrac));
+    if (trimVertical()) {
+      const x = trimSide === "left" ? f * w : (1 - f) * w;
+      Object.assign(trimLine.style, { left: (ox + x - 1) + "px", top: oy + "px",
+                                      width: "3px", height: h + "px" });
+      Object.assign(trimShade.style, { top: oy + "px", height: h + "px",
+        left: (trimSide === "left" ? ox : ox + x) + "px",
+        width: (trimSide === "left" ? x : w - x) + "px" });
+    } else {
+      const y = trimSide === "top" ? f * h : (1 - f) * h;
+      Object.assign(trimLine.style, { top: (oy + y - 1) + "px", left: ox + "px",
+                                      height: "3px", width: w + "px" });
+      Object.assign(trimShade.style, { left: ox + "px", width: w + "px",
+        top: (trimSide === "top" ? oy : oy + y) + "px",
+        height: (trimSide === "top" ? y : h - y) + "px" });
+    }
+    const nat = trimVertical() ? trimImg.naturalWidth : trimImg.naturalHeight;
+    trimReadout.textContent =
+      `cutting ${Math.round(f * nat)}px off the ${trimSide} (${(f * 100).toFixed(1)}%)`;
+  }
+
+  function trimFromEvent(e) {
+    const r = trimImg.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    let f;
+    if (trimVertical()) {
+      const x = Math.max(0, Math.min(r.width, e.clientX - r.left));
+      f = trimSide === "left" ? x / r.width : 1 - x / r.width;
+    } else {
+      const y = Math.max(0, Math.min(r.height, e.clientY - r.top));
+      f = trimSide === "top" ? y / r.height : 1 - y / r.height;
+    }
+    trimFrac = Math.max(0, Math.min(0.9, f));
+    drawTrim();
+  }
+
+  if (trimStage) {
+    let dragging = false;
+    trimStage.addEventListener("pointerdown", e => {
+      dragging = true;
+      try { trimStage.setPointerCapture(e.pointerId); } catch (_) {}
+      trimFromEvent(e);
+    });
+    trimStage.addEventListener("pointermove", e => { if (dragging) trimFromEvent(e); });
+    trimStage.addEventListener("pointerup", () => { dragging = false; });
+    window.addEventListener("resize", () => {
+      if (trimModal && trimModal.style.display !== "none") drawTrim();
+    });
+  }
+
+  async function openTrim(side) {
+    const p = getActive() || pages[0];
+    if (!p || !p.file) { showError("No page loaded to trim."); return; }
+    trimSide = side; trimPage = p;
+    trimStage.style.cursor = trimVertical() ? "ew-resize" : "ns-resize";
+    let guess = 0.05, note = "";
+    try {
+      const m = await measureEdge(p.file, side);
+      if (m.trim && m.full) {
+        guess = m.trim / (trimVertical() ? m.full.w : m.full.h);
+      } else if (m.why) {
+        note = " — nothing found automatically, so set it yourself";
+      }
+    } catch (_) {}
+    trimFrac = Math.max(0.005, Math.min(0.9, guess));
+    trimHint.textContent = "Drag the line to where you want the cut" + note;
+    trimImg.onload = () => drawTrim();
+    // Show the page as it stands: the finished scan when there is one, so the
+    // line is placed against what will actually be cut.
+    trimImg.src = (p.status === "done" && p.taskId)
+      ? `/api/result/${p.taskId}?t=${p.rev || 0}` : p.thumb;
+    trimModal.style.display = "flex";
+    if (trimImg.complete) drawTrim();
+  }
+
+  async function cutLocalFile(p, side, frac) {
     const bmp = await createImageBitmap(p.file);
     const W0 = bmp.width, H0 = bmp.height;
-    let sx = 0, sy = 0, sw = W0, sh = H0;
-    if (side === "left") { sx = m.trim; sw = W0 - m.trim; }
-    else if (side === "right") { sw = W0 - m.trim; }
-    else if (side === "top") { sy = m.trim; sh = H0 - m.trim; }
-    else { sh = H0 - m.trim; }
+    let sx = 0, sy = 0, sw = W0, sh = H0, cut = 0;
+    if (side === "left") { cut = Math.round(frac * W0); sx = cut; sw = W0 - cut; }
+    else if (side === "right") { cut = Math.round(frac * W0); sw = W0 - cut; }
+    else if (side === "top") { cut = Math.round(frac * H0); sy = cut; sh = H0 - cut; }
+    else { cut = Math.round(frac * H0); sh = H0 - cut; }
     if (sw < 40 || sh < 40) { bmp.close && bmp.close(); return 0; }
     const c = document.createElement("canvas");
     c.width = sw; c.height = sh;
@@ -1294,54 +1387,92 @@ document.addEventListener("DOMContentLoaded", () => {
     p.size = blob.size;
     try { URL.revokeObjectURL(p.thumb); } catch (_) {}
     p.thumb = await makeThumb(p.file);
-    // A finished result describes a page that no longer exists. Back to
-    // "pending", not "queued": re-running costs money and that is the user's
-    // call, exactly as turning a page over works.
-    if (p.taskId || p.status === "done" || p.status === "error") {
-      p.taskId = null; p.result = null; p.rev = 0; p.error = "";
-      p.items = []; p.excluded = new Set(); p.erased = new Set();
-      p.glows = new Set(); p.fits = new Set();
-      p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
-    }
-    p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
-    return m.trim;
+    return cut;
   }
 
-  async function applyTrim(side, btn) {
-    const all = !!(orientAll && orientAll.checked);
+  async function cutPage(p, side, frac) {
+    if (!p || !p.file || frac <= 0) return 0;
+    // A page that is already translated is trimmed WHERE IT STANDS, on the
+    // server, keeping its scan and its typesetting. Cutting the upload and
+    // sending the page round again would throw away a finished result and
+    // charge for it a second time, which is what it used to do.
+    if (p.status === "done" && p.taskId) {
+      const res = await fetch(`/api/trim/${p.taskId}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ side, frac }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      const d = await res.json();
+      if (d.items) p.items = d.items;
+      // The page moved under the editor's own overrides, so they move with it.
+      const dx = d.dx || 0, dy = d.dy || 0;
+      if (dx || dy) {
+        for (const k of Object.keys(p.boxes || {})) {
+          const b = p.boxes[k];
+          if (b && b.length === 4) { b[0] -= dx; b[1] -= dy; }
+        }
+        (p.covers || []).forEach(c => {
+          if (c && c.length >= 4) { c[0] -= dx; c[1] -= dy; }
+        });
+      }
+      p.rev = (p.rev || 0) + 1;
+      // Keep the local copy in step so a later re-upload or crop matches.
+      await cutLocalFile(p, side, frac);
+      return d.cut || 0;
+    }
+    const cut = await cutLocalFile(p, side, frac);
+    if (cut) { p.status = "pending"; p.progress = 0; p.step = 0; p.message = ""; }
+    return cut;
+  }
+
+  async function applyTrim(all) {
     const targets = all ? pages.filter(p => p.file)
-                        : [getActive() || pages[0]].filter(p => p && p.file);
-    if (!targets.length) { showError("No page loaded to trim."); return; }
-    const label = btn ? btn.textContent : "";
-    if (btn) { btn.disabled = true; btn.textContent = "Trimming…"; }
-    let done = 0, px = 0, why = "";
+                        : [trimPage].filter(p => p && p.file);
+    if (!targets.length) return;
+    const btns = ["trimApplyAll", "trimApplyOne"].map(i => document.getElementById(i));
+    btns.forEach(b => { if (b) b.disabled = true; });
+    const label = btns[0] ? btns[0].textContent : "";
+    let done = 0, px = 0;
     try {
-      for (const p of targets) {
-        const n = await trimPage(p, side);
+      // Held as a FRACTION, so a chapter whose pages are not all exactly the
+      // same size still gets the cut in the same place on each.
+      for (let i = 0; i < targets.length; i++) {
+        if (btns[0] && all) btns[0].textContent = `Cutting ${i + 1}/${targets.length}…`;
+        const n = await cutPage(targets[i], trimSide, trimFrac);
         if (n) { done++; px = Math.max(px, n); }
-        else if (p._trimWhy) why = p._trimWhy;
       }
     } catch (e) {
       showError(e.message);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = label; }
+      btns.forEach(b => { if (b) b.disabled = false; });
+      if (btns[0]) btns[0].textContent = label;
     }
+    trimModal.style.display = "none";
     renderStrip(); updateBatch(); renderActivePage();
     const act = getActive() || pages[0];
     if (act && previewImg && pages.length === 1) previewImg.src = act.thumb;
     if (orientNote) {
       orientNote.textContent = done
-        ? `Trimmed ${px}px off the ${side} of ${done} page${done === 1 ? "" : "s"}.`
-        : (why || "Nothing to trim on that edge.");
+        ? `Cut ${px}px off the ${trimSide} of ${done} page${done === 1 ? "" : "s"}.`
+        : "Nothing was cut.";
       clearTimeout(orientNote._t);
       orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
     }
   }
 
+  {
+    const bAll = document.getElementById("trimApplyAll");
+    const bOne = document.getElementById("trimApplyOne");
+    const bNo = document.getElementById("trimCancel");
+    if (bAll) bAll.addEventListener("click", () => applyTrim(true));
+    if (bOne) bOne.addEventListener("click", () => applyTrim(false));
+    if (bNo) bNo.addEventListener("click", () => { trimModal.style.display = "none"; });
+  }
+
   [["trimLeft", "left"], ["trimRight", "right"],
    ["trimTop", "top"], ["trimBottom", "bottom"]].forEach(([id, side]) => {
     const b = document.getElementById(id);
-    if (b) b.addEventListener("click", () => applyTrim(side, b));
+    if (b) b.addEventListener("click", () => openTrim(side));
   });
 
   async function applyOrient(kind, scope) {

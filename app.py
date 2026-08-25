@@ -2198,6 +2198,113 @@ async def rerender(task_id: str, request: Request):
     return {"items": r["items"], "added": r["added"], "ts": time.time()}
 
 
+@app.post("/api/trim/{task_id}")
+async def trim_page(task_id: str, request: Request):
+    _note_activity()
+    """Cut a strip off one edge of a page that is ALREADY finished.
+
+    Trimming used to work only on the upload, which meant a translated page
+    was thrown back to the start and run through detection, OCR and the API
+    all over again — losing the scan, losing the typesetting, and charging for
+    it a second time. A scan edge is a crop, not a reason to redo the work.
+
+    So every image the page owns is cut to the same rectangle and every stored
+    coordinate is shifted to match, which keeps re-render, erase and the box
+    editor working on the trimmed page exactly as they did before.
+    """
+    if task_id not in tasks:
+        raise HTTPException(404, "Task not found")
+    t = tasks[task_id]
+    r = t.get("result") or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    side = str(payload.get("side") or "left").lower()
+    if side not in ("left", "right", "top", "bottom"):
+        raise HTTPException(400, "side must be left, right, top or bottom")
+    try:
+        frac = float(payload.get("frac") or 0.0)
+    except (TypeError, ValueError):
+        frac = 0.0
+    if not (0.0 < frac < 0.9):
+        raise HTTPException(400, "Nothing to cut")
+
+    main = r.get("output_path", "")
+    if not main or not os.path.exists(main):
+        raise HTTPException(400, "This page has no output to trim")
+    probe = cv2.imread(main)
+    if probe is None:
+        raise HTTPException(400, "Could not read the page")
+    H0, W0 = probe.shape[:2]
+    dx = dy = 0
+    if side == "left":
+        dx = int(round(frac * W0))
+    elif side == "right":
+        W0 = W0 - int(round(frac * W0))
+    elif side == "top":
+        dy = int(round(frac * H0))
+    else:
+        H0 = H0 - int(round(frac * H0))
+    x0, y0 = dx, dy
+    x1 = W0 if side != "left" else probe.shape[1]
+    y1 = H0 if side != "top" else probe.shape[0]
+    if x1 - x0 < 40 or y1 - y0 < 40:
+        raise HTTPException(400, "That would leave almost nothing of the page")
+
+    def crop_file(path):
+        if not path or not os.path.exists(path):
+            return
+        im = cv2.imread(path)
+        if im is None:
+            return
+        h, w = im.shape[:2]
+        # Every image of this page is the same size, but be safe on any that
+        # were stored at a different scale.
+        sx0 = int(round(x0 * w / probe.shape[1]))
+        sy0 = int(round(y0 * h / probe.shape[0]))
+        sx1 = int(round(x1 * w / probe.shape[1]))
+        sy1 = int(round(y1 * h / probe.shape[0]))
+        sub = im[max(0, sy0):min(h, sy1), max(0, sx0):min(w, sx1)]
+        if sub.size:
+            _write_atomic(path, sub)
+
+    def work():
+        for key in ("output_path", "base_path", "clean_base_path",
+                    "annotated_path"):
+            crop_file(r.get(key, ""))
+        crop_file(clean_master(r.get("output_path", "")))
+        # The balloon masks are full-page arrays; drop them rather than crop
+        # them, and a re-render rebuilds them from the boxes.
+        MASKS.pop(task_id, None)
+
+    async with _task_lock(task_id):
+        await asyncio.get_event_loop().run_in_executor(None, work)
+
+    def shift(items):
+        for it in items or []:
+            b = it.get("bbox")
+            if b and len(b) == 4:
+                it["bbox"] = [b[0] - dx, b[1] - dy, b[2], b[3]]
+            sr = it.get("src_rect")
+            if sr and len(sr) == 4:
+                it["src_rect"] = [sr[0] - dx, sr[1] - dy, sr[2], sr[3]]
+        return items
+
+    r["items"] = shift(r.get("items"))
+    r["added"] = shift(r.get("added"))
+    for c in (r.get("covers") or []):
+        if isinstance(c, list) and len(c) >= 4:
+            c[0] -= dx
+            c[1] -= dy
+    cut = int(round(frac * (probe.shape[1] if side in ("left", "right")
+                            else probe.shape[0])))
+    print(f"[trim] {task_id[:8]} cut {cut}px off the {side} "
+          f"(kept the finished page — no re-run)", flush=True)
+    return {"ok": True, "cut": cut, "dx": dx, "dy": dy,
+            "items": r.get("items", []), "ts": time.time()}
+
+
 @app.post("/api/rescan/{task_id}")
 async def rescan(task_id: str, request: Request):
     _note_activity()   # a re-scan runs the detectors — keep them loaded
