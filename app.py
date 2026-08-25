@@ -1144,12 +1144,26 @@ async def _run(
                     # user sees why the page wasn't AI-scanned — not a vague
                     # "failed" that looks like the local result is the AI one.
                     reason = str(e).strip() or type(e).__name__
+                    from core.enhancer import is_moderation
+                    if is_moderation(reason):
+                        # Not a fault to retry — the provider looked at the
+                        # artwork and said no. Manga hits this constantly: a
+                        # fight scene reads to an image model like the violence
+                        # its filters exist to turn down. Say that plainly and
+                        # point at what actually helps.
+                        note = (f"⚠ {enhance_provider.title()} refused this page "
+                                f"(content moderation — bloody or violent panels "
+                                f"usually trip it). Cleaned locally instead; try "
+                                f"the 'Restore rough raw' finish, or another "
+                                f"provider.")
+                    else:
+                        note = (f"⚠ {enhance_provider.title()} scan FAILED — "
+                                f"{reason[:160]} — fell back to local cleanup "
+                                f"(not the AI scan you asked for).")
                     tasks[task_id].update(
                         {"progress": 35,
                          "enhance_error": reason[:300],
-                         "message": f"⚠ {enhance_provider.title()} scan FAILED — "
-                                    f"{reason[:160]} — fell back to local cleanup "
-                                    f"(not the AI scan you asked for)."}
+                         "message": note}
                     )
                     out = scan_cleanup(img)
                 # Snap the AI result back to the EXACT source geometry so nothing
@@ -1410,7 +1424,14 @@ async def _run_enhance(
                              "message": f"AI scanning tile {n + 1}/{total} (Beta {tiles})..."})
                     out = enhancer.enhance_tiled(img, prompt, provider, api_key, model,
                                                  tiles=tiles, progress=_tp)
-                    tasks[task_id].update({"progress": 70, "message": "AI enhancement complete!"})
+                    # A page can come back mostly scanned with a panel or two
+                    # left as drawn, where the provider refused those tiles.
+                    # Say so rather than calling it complete.
+                    nskip = getattr(enhancer, "last_skipped", 0)
+                    done_msg = "AI enhancement complete!" if not nskip else (
+                        f"AI scan done — {nskip} panel(s) refused by "
+                        f"{provider.title()} and left as drawn.")
+                    tasks[task_id].update({"progress": 70, "message": done_msg})
                 else:
                     # Send the RAW page to the AI scanner — like pasting it into Grok.
                     out = enhancer.enhance(img, prompt, provider, api_key, model)
@@ -1418,10 +1439,17 @@ async def _run_enhance(
                 ai_ok = True
             except Exception as e:
                 print(f"[enhance] AI step failed, using local scan cleanup: {e}")
-                tasks[task_id].update(
-                    {"progress": 70,
-                     "message": f"AI failed ({type(e).__name__}); used local clean scan"}
-                )
+                from core.enhancer import is_moderation
+                reason = str(e).strip() or type(e).__name__
+                if is_moderation(reason):
+                    msg = (f"⚠ {provider.title()} refused this page (content "
+                           f"moderation — bloody or violent panels usually trip "
+                           f"it). Cleaned locally instead.")
+                else:
+                    msg = (f"AI failed ({type(e).__name__}); used local clean "
+                           f"scan")
+                tasks[task_id].update({"progress": 70, "message": msg,
+                                       "enhance_error": reason[:300]})
                 out = scan_cleanup(img)
             if ai_ok:
                 # Grok caps at ~1-2K and returns generative grain / a colour tint,

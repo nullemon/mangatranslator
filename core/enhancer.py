@@ -26,6 +26,21 @@ def _post_with_retry(client, url, *, headers, json=None, data=None, files=None,
     return resp
 
 
+def is_moderation(msg: str) -> bool:
+    """Did the provider refuse the artwork rather than fail on it?
+
+    Worth telling apart from a bad key or a quota: retrying achieves nothing,
+    and the fix is a different provider or the local restore, not a fix to the
+    request. Manga runs into it constantly — a fight scene reads to an image
+    model exactly like the violence its filters are built to turn down.
+    """
+    m = (msg or "").lower()
+    return any(k in m for k in (
+        "content moderation", "moderation", "safety system", "safety_",
+        "content_policy", "content policy", "rejected by", "flagged",
+        "prohibited_content", "responsible ai"))
+
+
 class ImageEnhancer:
     """Convert a rough/sketch manga page into a clean 'scanned' page using
     an external image-to-image model (OpenAI gpt-image-1 or Google Gemini)."""
@@ -207,6 +222,7 @@ class ImageEnhancer:
                     for c in range(1, cols)] + [w]
 
         n, total = 0, rows * cols
+        skipped = []            # reasons, one per tile the provider refused
         strips = []
         for r in range(rows):
             ey0 = max(0, ys[r] - ov) if r > 0 else 0
@@ -232,7 +248,23 @@ class ImageEnhancer:
                                               int(np.ceil(ch / 1.9)) - cw,
                                               cv2.BORDER_CONSTANT,
                                               value=(255, 255, 255))
-                enh = self.enhance(crop, tile_prompt, provider, api_key, model)
+                try:
+                    enh = self.enhance(crop, tile_prompt, provider, api_key,
+                                       model)
+                except Exception as e:
+                    # One refused tile must not cost the whole page.
+                    #
+                    # A violent panel gets turned down by the provider's
+                    # moderation, and this used to throw straight out of the
+                    # loop — so every tile that had already come back fine was
+                    # binned and the entire page dropped to the local fallback.
+                    # The original pixels stand in for the refused tile
+                    # instead, and the rest of the page keeps its AI scan.
+                    skipped.append(str(e))
+                    print(f"[enhance] tile {n}/{total} refused "
+                          f"({str(e)[:120]}) — keeping the original artwork "
+                          f"for it and carrying on", flush=True)
+                    enh = crop
                 pw, ph = crop.shape[1] * S, crop.shape[0] * S
                 interp = cv2.INTER_AREA if enh.shape[0] > ph else cv2.INTER_CUBIC
                 enh = cv2.resize(enh, (pw, ph), interpolation=interp)
@@ -248,6 +280,18 @@ class ImageEnhancer:
         for r in range(1, rows):
             shared = (min(h, ys[r] + ov) - max(0, ys[r] - ov)) * S
             out = self._stitch(out, strips[r], shared, axis=0)
+
+        # Every tile refused is not a partial result — it is the page coming
+        # back as it went in, only bigger. Raise, so the caller reports an
+        # honest failure and runs its own cleanup instead of handing back an
+        # upscaled original dressed up as an AI scan.
+        self.last_skipped = len(skipped)
+        self.last_skip_reason = skipped[0] if skipped else ""
+        if skipped and len(skipped) == total:
+            raise RuntimeError(skipped[0])
+        if skipped:
+            print(f"[enhance] {len(skipped)}/{total} tile(s) refused; the rest "
+                  f"of the page was scanned normally", flush=True)
         return np.ascontiguousarray(out)
 
     # ── OpenAI (ChatGPT) gpt-image-1 ──
