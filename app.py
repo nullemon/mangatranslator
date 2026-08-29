@@ -938,6 +938,7 @@ async def translate(
     gpu_cap: str = Form("100"),
     cut_regions: str = Form(""),
     one_by_one: str = Form("false"),
+    style_fonts: str = Form("false"),
     webtoon: str = Form("false"),
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -999,6 +1000,7 @@ async def translate(
         "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
         "wm_size": wm_size.strip() or "m",
         "text_case": text_case,
+        "style_fonts": style_fonts == "true",
         "finish": finish,
         "enhance_provider": enhance_provider,
         "enhance_key": enhance_key,
@@ -1041,6 +1043,7 @@ async def translate(
             credit=credit.strip(),
             cut_regions=cut_regions,
             one_by_one=(one_by_one == "true"),
+            style_fonts=(style_fonts == "true"),
             webtoon=(webtoon == "true"),
         )
     )
@@ -1083,6 +1086,7 @@ async def _run(
     credit: str = "",
     cut_regions: str = "",
     one_by_one: bool = False,
+    style_fonts: bool = False,
     webtoon: bool = False,
 ):
     try:
@@ -1217,6 +1221,7 @@ async def _run(
             isolate_page=isolate_page,
             credit=credit,
             one_by_one=one_by_one,
+            style_fonts=style_fonts,
             webtoon=webtoon,
         )
 
@@ -2086,7 +2091,8 @@ async def rerender(task_id: str, request: Request):
                           uppercase=(t.get("text_case", "upper") != "keep"),
                           translate_sfx=bool(t.get("translate_sfx", False)),
                           replace_watermark=bool(t.get("replace_watermark", False)),
-                          watermark_text=t.get("watermark", ""))
+                          watermark_text=t.get("watermark", ""),
+                          style_fonts=bool(t.get("style_fonts", False)))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, erase_covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the

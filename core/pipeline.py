@@ -868,6 +868,7 @@ class TranslationPipeline:
         watermark_text: str = "",
         clean_only: bool = False,
         one_by_one: bool = False,
+        style_fonts: bool = False,
         isolate_page: bool = False,
         credit: str = "",
         webtoon: bool = False,
@@ -881,6 +882,8 @@ class TranslationPipeline:
         # Clean-only: just erase ALL text (no translation), for a usable raw.
         self.clean_only = bool(clean_only)
         self.one_by_one = bool(one_by_one)
+        # Give each line a typeface that matches how it is said.
+        self.style_fonts = bool(style_fonts)
         # Isolate page (beta): white-out + crop the background around a photo.
         self.isolate_page = bool(isolate_page)
         # Credit / TL name dropped in the margin (movable per page in the editor).
@@ -905,7 +908,8 @@ class TranslationPipeline:
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
                                      translate_sfx=self.translate_sfx,
                                      replace_watermark=self.replace_watermark,
-                                     watermark_text=self.watermark_text)
+                                     watermark_text=self.watermark_text,
+                                     style_fonts=self.style_fonts)
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}

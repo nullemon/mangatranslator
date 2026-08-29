@@ -127,6 +127,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // pages) and surfaces the transcript.
   const oneByOne = document.getElementById("oneByOne");
   const webtoonMode = document.getElementById("webtoonMode");
+  const styleFonts = document.getElementById("styleFonts");
+  if (styleFonts) {
+    styleFonts.checked = localStorage.getItem("manga_style_fonts") === "1";
+    styleFonts.addEventListener("change", () =>
+      localStorage.setItem("manga_style_fonts", styleFonts.checked ? "1" : "0"));
+  }
   if (oneByOne) {
     oneByOne.checked = localStorage.getItem("manga_one_by_one") === "1";
     oneByOne.addEventListener("change", () =>
@@ -1588,6 +1594,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("smart_mode", (smartMode.checked || (sbsMode && sbsMode.checked)) ? "true" : "false");
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("one_by_one", oneByOne && oneByOne.checked ? "true" : "false");
+      const sf = document.getElementById("styleFonts");
+      f.append("style_fonts", sf && sf.checked ? "true" : "false");
       f.append("webtoon", webtoonMode && webtoonMode.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");

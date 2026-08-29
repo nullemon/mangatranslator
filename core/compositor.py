@@ -6,6 +6,7 @@ from PIL import Image
 from typing import List, Optional, Dict
 
 from .renderer import TextRenderer
+from . import lettering
 
 SFX_TYPES = {"sfx", "sound", "sound_effect", "soundeffect", "onomatopoeia"}
 
@@ -31,9 +32,19 @@ class Compositor:
     def __init__(self, font_path: Optional[str] = None, font_scale: float = 1.0,
                  use_lama: bool = True, uppercase: bool = True,
                  translate_sfx: bool = False, replace_watermark: bool = False,
-                 watermark_text: str = ""):
+                 watermark_text: str = "", style_fonts: bool = False,
+                 font_roles: Optional[dict] = None):
         self.renderer = TextRenderer(font_path, font_scale=font_scale,
                                      uppercase=uppercase)
+        # A letterer does not set a whole page in one typeface: a scream is
+        # heavy, a thought is soft, a narration box is a different voice again.
+        # Setting everything in the dialogue font is the clearest giveaway of a
+        # machine-lettered page, so each line is given a face to match how it
+        # is said. Off by default — it changes how every page looks, and that
+        # should be the user's decision, not a surprise.
+        self.style_fonts = bool(style_fonts)
+        self.font_map = lettering.build_map(self.renderer.font_path,
+                                            overrides=font_roles or {})
         # Background SFX (out-of-bubble onomatopoeia) are left in the artwork
         # unless the user opts in to translating + typesetting them.
         self.translate_sfx = bool(translate_sfx)
@@ -244,7 +255,7 @@ class Compositor:
                         color = (255, 255, 255) if dark else (0, 0, 0)
                         placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
                                            color, False, 0, self._item_scale(it),
-                                           False, False, None))
+                                           False, False, None, ""))
                         it["placed"] = True
                 continue
 
@@ -278,7 +289,7 @@ class Compositor:
                             placements.append(((wx_, wy_, ww_, whh_),
                                                " ".join(self.watermark_text.split()),
                                                self._pick_color(dark, it), False, 0, 1.0,
-                                               True, False, None))
+                                               True, False, None, ""))
                             used_boxes.append((int(wx_), int(wy_), int(ww_), int(whh_)))
                         it["placed"] = True
                 continue
@@ -290,6 +301,12 @@ class Compositor:
                     and not self.translate_sfx and not it.get("manual_box")):
                 continue
             ital = _is_expressive(text, it)
+            # The voice this line is spoken in, and the face that suits it.
+            role_font, role_ital, role_scale = "", False, 1.0
+            if self.style_fonts:
+                role_font, role_ital, role_scale, _role = lettering.style_for(
+                    it, self.font_map, self.renderer.font_path)
+                ital = ital or role_ital
             bbox = it.get("bbox")
             if not bbox:
                 continue
@@ -344,7 +361,8 @@ class Compositor:
                 mglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), mglow, bool(it.get("fit_box")), None))
+                               self._item_scale(it) * role_scale, mglow,
+                               bool(it.get("fit_box")), None, role_font))
                 it["placed"] = True
                 continue
 
@@ -379,8 +397,8 @@ class Compositor:
                              or (cap is not None and cap[4]))
                     placements.append((offset_rect(it, rect),
                                        " ".join(text.split()), color, ital, 0,
-                                       self._item_scale(it), tglow,
-                                       bool(it.get("fit_box")), None))
+                                       self._item_scale(it) * role_scale, tglow,
+                                       bool(it.get("fit_box")), None, role_font))
                     it["placed"] = True
                     continue
                 # Better tilt logic: when the detector called this horizontal
@@ -473,7 +491,8 @@ class Compositor:
                 fglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
-                               self._item_scale(it), fglow, bool(it.get("fit_box")), None))
+                               self._item_scale(it) * role_scale, fglow,
+                               bool(it.get("fit_box")), None, role_font))
                 it["placed"] = True
                 continue
 
@@ -605,29 +624,37 @@ class Compositor:
             color = self._pick_color(dark, it)
             placements.append((offset_rect(it, rect), text, color, ital,
                                rotation if it.get("manual_rot") else 0,
-                               self._item_scale(it), fglow or self._item_glow(it),
-                               bool(it.get("fit_box")), it.get("_shape")))
+                               self._item_scale(it) * role_scale,
+                               fglow or self._item_glow(it),
+                               bool(it.get("fit_box")), it.get("_shape"),
+                               role_font))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
         # AI box can push one past the edge, which is how text ended up out of
         # bounds. Clamp every rect to the page before anything is drawn.
         placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh)
-            for r, t, c, i, ro, fs, gl, fb, sh in placements
+            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft)
+            for r, t, c, i, ro, fs, gl, fb, sh, ft in placements
         ]
         placements = [p for p in placements if p[0] is not None]
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale, glow, fit, shp in placements:
+            for rect, text, color, ital, rot, fscale, glow, fit, shp, ft in placements:
                 self.renderer._shape_mask = shp
+                # Swap the face for this line only, then put it back — the
+                # renderer caches by path, so switching costs nothing.
+                was = self.renderer.font_path
+                if ft:
+                    self.renderer.font_path = ft
                 try:
                     self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
                                                rotation=rot, scale=fscale,
                                                glow=glow, fit_box=fit)
                 finally:
                     self.renderer._shape_mask = None
+                    self.renderer.font_path = was
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
         # Hard guarantee: only the exact regions we edited may differ from the
@@ -635,7 +662,7 @@ class Compositor:
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
         placement_rects = []
-        for rect, text, color, ital, rot, fscale, glow, fit, shp in placements:
+        for rect, text, color, ital, rot, fscale, glow, fit, shp, ft in placements:
             placement_rects.append(self._rotated_aabb(rect, rot))
 
         edited = np.zeros((h, w), np.uint8)

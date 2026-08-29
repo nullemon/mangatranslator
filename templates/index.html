@@ -140,6 +140,15 @@
             <option value="keep">Keep as written</option>
           </select>
         </div>
+        <!-- A letterer does not set a whole page in one typeface. Off by
+             default: it changes how every page looks, which should be a
+             choice rather than a surprise. -->
+        <div class="setting-group">
+          <div class="opt" title="Give each line a typeface that matches how it is said — a heavy face for shouts, a softer italic for thoughts, a serif for narration boxes, a display face for titles and SFX. Uses the fonts in your fonts/ folder.">
+            <label class="toggle"><input type="checkbox" id="styleFonts"><span class="toggle-slider"></span></label>
+            <span>Font per mood <span class="muted">(shouts, thoughts, narration and SFX get their own face)</span></span>
+          </div>
+        </div>
         <div class="setting-group">
           <label for="pageFinish">Page Finish</label>
           <select id="pageFinish">

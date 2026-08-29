@@ -90,8 +90,8 @@ There are {num_regions} numbered regions. For each one that contains {src}
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
-  {{"id": 1, "original": "original text here", "translation": "{target_lang.upper()} TEXT HERE", "type": "dialogue"}},
-  {{"id": 2, "original": "original narration", "translation": "NARRATION", "type": "narration"}}
+  {{"id": 1, "original": "original text here", "translation": "{target_lang.upper()} TEXT HERE", "type": "dialogue", "tone": "dialogue"}},
+  {{"id": 2, "original": "original narration", "translation": "NARRATION", "type": "narration", "tone": "narration"}}
 ]
 
 Rules:
@@ -105,6 +105,12 @@ Rules:
 - Use UPPERCASE for dialogue and narration (standard manga typesetting).
 - Keep translations concise — they must fit inside small speech bubbles.
 - "type" must be one of: "dialogue", "narration", "sfx", "title".
+- "tone" is HOW the line is said, for choosing a typeface: "shout" (angry,
+  yelled, a spiky balloon or huge lettering), "whisper" (small or trailing
+  off), "thought" (inner voice, a cloud balloon), "narration" (a caption
+  box), "title", "sfx", or "dialogue" for ordinary speech. You can see the
+  panel, so judge it from the face, the balloon shape and the size of the
+  original lettering — not from punctuation alone.
 - Skip regions with no readable text or already in {target_lang}.
 - Return ONLY the JSON array.{_style_block(style)}"""
 
@@ -279,7 +285,7 @@ The ids are in reading order; treat them as one flowing conversation.
 
 Return ONLY a JSON array — no markdown fences, no commentary:
 [
-  {{"id": 1, "original": "<the original text>", "translation": "{target_lang.upper()} TEXT", "type": "dialogue"}}
+  {{"id": 1, "original": "<the original text>", "translation": "{target_lang.upper()} TEXT", "type": "dialogue", "tone": "shout"}}
 ]
 
 Rules:
@@ -294,6 +300,9 @@ Rules:
   than translating them away.
 - Use UPPERCASE (standard manga lettering). Keep it concise to fit the bubble.
 - "type" is one of: "dialogue", "narration", "sfx".
+- "tone" is HOW it is said, for choosing a typeface: "shout", "whisper",
+  "thought", "narration", "title", "sfx", or "dialogue". Judge it from the
+  panel — the face, the balloon shape, the size of the original lettering.
 - Small expression sounds in speech bubbles (にっ = *GRIN*, ハッ = *GASP*,
   フッ = *SMIRK*, etc.) are "dialogue" — translate them into an expressive
   English word wrapped in asterisks (e.g. *GRIN*). Only mark loud dramatic
