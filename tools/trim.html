@@ -96,6 +96,13 @@
       <button data-edge="bottom">◒ Bottom</button>
       <span class="muted">then click on the page</span>
       <span class="sep"></span>
+      <span class="muted">Turn:</span>
+      <button id="rotL" title="90° anticlockwise">⟲ 90°</button>
+      <button id="rotR" title="90° clockwise">⟳ 90°</button>
+      <button id="rot180" title="Upside down">⟳ 180°</button>
+      <button id="rot0" title="Back to how it came in">360° / reset</button>
+      <button id="rotAll">Turn every page</button>
+      <span class="sep"></span>
       <span id="readout" class="muted"></span>
       <span style="flex:1"></span>
       <button id="applyAll">Same cuts on every page</button>
@@ -105,7 +112,7 @@
     <div class="muted" style="padding:0 4px">
       Click to place the cut · <kbd>←</kbd><kbd>→</kbd> nudge by 1px,
       hold <kbd>Shift</kbd> for 10 · <kbd>1</kbd>–<kbd>4</kbd> pick an edge ·
-      the shaded part is what gets removed
+      the shaded part is what gets removed · <kbd>R</kbd> turns the page
     </div>
   </div>
 </main>
@@ -226,7 +233,13 @@ function writeZip(files) {         // [{name, u8}]
 }
 
 /* ─── state ─────────────────────────────────────────────────────────────── */
-const pages = [];        // {name, blob, bmp, w, h, cut:{left,right,top,bottom}}
+// {name, blob, bmp, w, h, rot, cut:{left,right,top,bottom}}
+//
+// Nothing here is destructive. A page holds an angle and four numbers; the
+// image is only really turned and cut on export, so any of it can be undone.
+// The turn is applied FIRST and the cuts are measured on the turned page,
+// which is the order that matches what you see while you work.
+const pages = [];
 let sel = 0, edge = "left";
 
 const $ = id => document.getElementById(id);
@@ -234,7 +247,34 @@ const stage = $("stage"), cv = $("cv"), ctx = cv.getContext("2d");
 
 function pct(p) {
   const c = p.cut;
-  return c.left + c.right + c.top + c.bottom > 0;
+  return c.left + c.right + c.top + c.bottom > 0 || (p.rot % 360) !== 0;
+}
+
+// The page as it stands, turned but not yet cut.
+const pageW = p => (p.rot % 180) ? p.h : p.w;
+const pageH = p => (p.rot % 180) ? p.w : p.h;
+
+// Full-resolution turned copy, cached for the page being worked on. Quarter
+// turns move whole pixels to whole pixels, so this is exact — nothing is
+// resampled and no detail is lost however many times you turn it.
+let rcFor = null, rcCanvas = null;
+function rotated(p) {
+  if (!(p.rot % 360)) return p.bmp;
+  if (rcFor === p && rcCanvas && rcCanvas._rot === p.rot) return rcCanvas;
+  const c = document.createElement("canvas");
+  c.width = pageW(p); c.height = pageH(p);
+  const g = c.getContext("2d");
+  g.translate(c.width / 2, c.height / 2);
+  g.rotate(p.rot * Math.PI / 180);
+  g.drawImage(p.bmp, -p.w / 2, -p.h / 2);
+  c._rot = p.rot;
+  rcFor = p; rcCanvas = c;
+  return c;
+}
+
+function setRot(p, deg) {
+  p.rot = ((deg % 360) + 360) % 360;
+  if (rcFor === p) { rcFor = null; rcCanvas = null; }
 }
 
 /* ─── loading ───────────────────────────────────────────────────────────── */
@@ -254,7 +294,7 @@ async function addFiles(fileList) {
     try {
       const bmp = await createImageBitmap(it.blob);
       pages.push({ name: it.name, blob: it.blob, bmp, w: bmp.width, h: bmp.height,
-                   cut: { left: 0, right: 0, top: 0, bottom: 0 } });
+                   rot: 0, cut: { left: 0, right: 0, top: 0, bottom: 0 } });
     } catch (_) { /* not a decodable image */ }
   }
   if (!pages.length) return;
@@ -265,6 +305,8 @@ async function addFiles(fileList) {
 }
 
 /* ─── page list ─────────────────────────────────────────────────────────── */
+const cutSum = p => p.cut.left + p.cut.right + p.cut.top + p.cut.bottom > 0;
+
 function renderList() {
   const el = $("list");
   el.innerHTML = "";
@@ -273,12 +315,14 @@ function renderList() {
     d.className = "chip" + (i === sel ? " sel" : "");
     const c = document.createElement("canvas");
     c.width = 46; c.height = 62;
-    c.getContext("2d").drawImage(p.bmp, 0, 0, 46, 62);
+    c.getContext("2d").drawImage(rotated(p), 0, 0, 46, 62);
     const im = document.createElement("img");
     im.src = c.toDataURL();
     const t = document.createElement("div");
     t.innerHTML = `<div class="n">${i + 1}. ${p.name}</div>` +
-                  (pct(p) ? `<div class="cut">trimmed</div>` : "");
+                  (pct(p) ? `<div class="cut">` +
+                    [(p.rot % 360) ? p.rot + "°" : "", cutSum(p) ? "trimmed" : ""]
+                      .filter(Boolean).join(" · ") + `</div>` : "");
     d.append(im, t);
     d.onclick = () => select(i);
     el.append(d);
@@ -297,13 +341,14 @@ let view = { x: 0, y: 0, w: 0, h: 0 };
 function draw() {
   const p = pages[sel];
   if (!p) return;
+  const PW = pageW(p), PH = pageH(p);
   const maxW = stage.clientWidth - 16, maxH = stage.clientHeight - 16;
-  const k = Math.min(maxW / p.w, maxH / p.h, 1);
-  cv.width = Math.max(1, Math.round(p.w * k));
-  cv.height = Math.max(1, Math.round(p.h * k));
+  const k = Math.min(maxW / PW, maxH / PH, 1);
+  cv.width = Math.max(1, Math.round(PW * k));
+  cv.height = Math.max(1, Math.round(PH * k));
   view = { k, w: cv.width, h: cv.height };
   ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.drawImage(p.bmp, 0, 0, cv.width, cv.height);
+  ctx.drawImage(rotated(p), 0, 0, cv.width, cv.height);
 
   const c = p.cut;
   const L = c.left * cv.width, R = c.right * cv.width;
@@ -322,11 +367,13 @@ function draw() {
   if (B) { ctx.moveTo(0, cv.height - B); ctx.lineTo(cv.width, cv.height - B); }
   ctx.stroke();
 
-  const kept = [Math.round(p.w * (1 - c.left - c.right)),
-                Math.round(p.h * (1 - c.top - c.bottom))];
+  const PW2 = pageW(p), PH2 = pageH(p);
+  const kept = [Math.round(PW2 * (1 - c.left - c.right)),
+                Math.round(PH2 * (1 - c.top - c.bottom))];
   $("readout").textContent =
-    `left ${Math.round(c.left * p.w)} · right ${Math.round(c.right * p.w)} · ` +
-    `top ${Math.round(c.top * p.h)} · bottom ${Math.round(c.bottom * p.h)} px  →  ` +
+    ((p.rot % 360) ? `turned ${p.rot}° · ` : "") +
+    `left ${Math.round(c.left * PW2)} · right ${Math.round(c.right * PW2)} · ` +
+    `top ${Math.round(c.top * PH2)} · bottom ${Math.round(c.bottom * PH2)} px  →  ` +
     `${kept[0]}×${kept[1]}`;
 }
 
@@ -376,11 +423,12 @@ window.addEventListener("keydown", e => {
   }
   const p = pages[sel];
   const horiz = edge === "left" || edge === "right";
-  const span = horiz ? p.w : p.h;
+  const span = horiz ? pageW(p) : pageH(p);
   const step = (e.shiftKey ? 10 : 1) / span;
   let d = 0;
   if (e.key === "ArrowRight" || e.key === "ArrowDown") d = 1;
   else if (e.key === "ArrowLeft" || e.key === "ArrowUp") d = -1;
+  else if (e.key === "r" || e.key === "R") { rotBy(e.shiftKey ? -90 : 90); return; }
   else if (e.key === "PageDown") { select(sel + 1); return; }
   else if (e.key === "PageUp") { select(sel - 1); return; }
   else return;
@@ -399,6 +447,7 @@ $("reset").onclick = () => {
   const p = pages[sel];
   if (!p) return;
   p.cut = { left: 0, right: 0, top: 0, bottom: 0 };
+  setRot(p, 0);
   draw(); renderList();
 };
 
@@ -412,15 +461,44 @@ $("applyAll").onclick = () => {
   draw(); renderList();
 };
 
+/* ─── turning ───────────────────────────────────────────────────────────── */
+function rotBy(d) {
+  const p = pages[sel];
+  if (!p) return;
+  // Cuts are measured on the page as you see it, so turning the page turns
+  // them with it — otherwise a cut you made off the left edge would silently
+  // become a cut off the top.
+  const c = p.cut;
+  const n = ((d % 360) + 360) % 360;
+  for (let i = 0; i < n / 90; i++) {
+    p.cut = { top: c.left, right: c.top, bottom: c.right, left: c.bottom };
+    Object.assign(c, p.cut);
+  }
+  setRot(p, p.rot + d);
+  draw(); renderList();
+}
+$("rotL").onclick = () => rotBy(-90);
+$("rotR").onclick = () => rotBy(90);
+$("rot180").onclick = () => rotBy(180);
+$("rot0").onclick = () => { const p = pages[sel]; if (p) { setRot(p, 0); draw(); renderList(); } };
+$("rotAll").onclick = () => {
+  const p = pages[sel];
+  if (!p) return;
+  if (!confirm(`Turn all ${pages.length} pages to ${p.rot}°?`)) return;
+  for (const q of pages) if (q !== p) setRot(q, p.rot);
+  rcFor = null; rcCanvas = null;
+  draw(); renderList();
+};
+
 /* ─── export ────────────────────────────────────────────────────────────── */
 async function cutOne(p) {
-  const c = p.cut;
-  const sx = Math.round(c.left * p.w), sy = Math.round(c.top * p.h);
-  const sw = Math.max(1, Math.round(p.w * (1 - c.left - c.right)));
-  const sh = Math.max(1, Math.round(p.h * (1 - c.top - c.bottom)));
+  const c = p.cut, PW = pageW(p), PH = pageH(p);
+  const sx = Math.round(c.left * PW), sy = Math.round(c.top * PH);
+  const sw = Math.max(1, Math.round(PW * (1 - c.left - c.right)));
+  const sh = Math.max(1, Math.round(PH * (1 - c.top - c.bottom)));
   const cn = document.createElement("canvas");
   cn.width = sw; cn.height = sh;
-  cn.getContext("2d").drawImage(p.bmp, sx, sy, sw, sh, 0, 0, sw, sh);
+  cn.getContext("2d").drawImage(rotated(p), sx, sy, sw, sh, 0, 0, sw, sh);
   const type = $("fmt").value === "jpeg" ? "image/jpeg" : "image/png";
   const blob = await new Promise(r => cn.toBlob(r, type, 0.92));
   cn.width = cn.height = 0;
