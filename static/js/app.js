@@ -1462,6 +1462,44 @@ document.addEventListener("DOMContentLoaded", () => {
     if (bNo) bNo.addEventListener("click", () => { trimModal.style.display = "none"; });
   }
 
+  // Cut the page out of a photo of it. Only ever the page on screen, and
+  // never a re-run: it swaps the image the page holds and leaves its status
+  // alone, exactly as the trim does.
+  const cutoutBtn = document.getElementById("cutoutBtn");
+  if (cutoutBtn) cutoutBtn.addEventListener("click", async () => {
+    const p = getActive() || pages[0];
+    if (!p || !p.file) { showError("No page loaded."); return; }
+    const label = cutoutBtn.textContent;
+    cutoutBtn.disabled = true; cutoutBtn.textContent = "Finding the page…";
+    try {
+      const fd = new FormData();
+      fd.append("file", p.file, p.name || "page.png");
+      const res = await fetch("/api/cutout", { method: "POST", body: fd });
+      if (!res.ok) {
+        let m = res.statusText;
+        try { m = (await res.json()).detail || m; } catch (_) {}
+        throw new Error(m);
+      }
+      const size = res.headers.get("X-Page-Size") || "";
+      const blob = await res.blob();
+      p.file = new File([blob], p.name || "page.png", { type: "image/png" });
+      p.size = blob.size;
+      try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+      p.thumb = await makeThumb(p.file);
+      renderStrip(); updateBatch(); renderActivePage();
+      if (previewImg && pages.length === 1) previewImg.src = p.thumb;
+      if (orientNote) {
+        orientNote.textContent = `Cut the page out — now ${size}.`;
+        clearTimeout(orientNote._t);
+        orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
+      }
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      cutoutBtn.disabled = false; cutoutBtn.textContent = label;
+    }
+  });
+
   [["trimLeft", "left"], ["trimRight", "right"],
    ["trimTop", "top"], ["trimBottom", "bottom"]].forEach(([id, side]) => {
     const b = document.getElementById(id);

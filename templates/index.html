@@ -496,6 +496,10 @@
              binding shadow, the edge of the scanner bed, or a sliver of the
              facing page. It is in the source, so nothing downstream will
              remove it — cutting it off is the fix. -->
+        <!-- A photo of a page brings the floor with it. This finds the sheet
+             and drops everything round it — locally, nothing charged. -->
+        <span class="orient-label" style="margin-left:14px">Photo of a page?</span>
+        <button class="btn btn-ghost btn-sm" id="cutoutBtn" title="Find the page in a photo and cut away the desk or carpet around it. Runs on this PC — no API key, nothing charged.">✂ Cut out the page</button>
         <span class="orient-label" style="margin-left:14px">Dark strip down an edge?</span>
         <button class="btn btn-ghost btn-sm" id="trimLeft" title="Measure the dark scan strip on the LEFT edge and cut exactly it off">⇤ Trim left</button>
         <button class="btn btn-ghost btn-sm" id="trimRight" title="Same for the right edge">Trim right ⇥</button>

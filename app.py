@@ -2610,6 +2610,45 @@ async def translate_text(request: Request):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/cutout")
+async def cutout(file: UploadFile = File(...)):
+    """Cut the page out of a photo of it, dropping the carpet or desk around.
+
+    Runs on this machine — no API call, nothing charged — and it is a CROP, so
+    the pixels that survive are the originals. Returns the page as PNG, or a
+    422 with a reason when it cannot find one, so the caller can leave that
+    photo alone rather than mangle it.
+    """
+    import tempfile
+    from core.pagecut import cut_page
+    suffix = os.path.splitext(file.filename or "")[1] or ".png"
+    fd, tmp = tempfile.mkstemp(suffix=suffix, dir="uploads")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            shutil.copyfileobj(file.file, fh, 1024 * 1024)
+        img = cv2.imread(tmp)
+        if img is None:
+            raise HTTPException(400, "Could not read that image")
+        loop = asyncio.get_event_loop()
+        out, _mask = await loop.run_in_executor(None, lambda: cut_page(img))
+        if out.shape == img.shape:
+            raise HTTPException(
+                422, "No page found in that photo — it was left as it is. "
+                     "This is for photos of a page on a desk or floor; a page "
+                     "that already fills the frame has nothing to cut.")
+        ok, buf = cv2.imencode(".png", out)
+        if not ok:
+            raise HTTPException(500, "Could not encode the result")
+        return Response(content=buf.tobytes(), media_type="image/png",
+                        headers={"X-Page-Size": f"{out.shape[1]}x{out.shape[0]}",
+                                 **_NO_CACHE})
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 @app.post("/api/check-orientation")
 async def check_orientation(file: UploadFile = File(...),
                             source_lang: str = Form("Japanese")):
