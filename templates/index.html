@@ -368,6 +368,15 @@
         </label>
         <!-- Stamp and nothing else: no models load and no key is needed, so a
              whole folder goes through in seconds. -->
+        <!-- No key, no API, no cost: arithmetic plus the local GPU model. -->
+        <label class="wf-card" data-wf="local-clean">
+          <input type="radio" name="workflow" value="local-clean">
+          <div class="wf-icon">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M4 15l5-5 4 4 3-3 4 4"/><circle cx="9" cy="8.5" r="1.4"/></svg>
+          </div>
+          <span class="wf-title">Clean — no key</span>
+          <span class="wf-desc">Rough page &rarr; white &amp; sharp, on your own GPU</span>
+        </label>
         <label class="wf-card" data-wf="watermark-only">
           <input type="radio" name="workflow" value="watermark-only">
           <div class="wf-icon">

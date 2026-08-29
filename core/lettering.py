@@ -29,27 +29,52 @@ from typing import Dict, List, Optional
 #: the voices a line can be given, in the order a tie is broken
 ROLES = ("sfx", "title", "narration", "shout", "thought", "whisper", "dialogue")
 
-#: What each voice wants from a typeface, best first. Names are matched
-#: loosely against whatever is in fonts/, so a user's own "CC Wild Words" or
-#: "Anime Ace" is picked up without being listed here.
+#: What each voice wants from a typeface, best first.
+#:
+#: These are the faces scanlation actually uses. Matching is loose and by
+#: NAME against whatever sits in fonts/, so dropping in Wild Words, Anime Ace,
+#: Komika or Manga Temple is enough — nothing here needs editing.
+#:
+#: There are deliberately no generic display serifs in this table any more. An
+#: earlier version reached for Cinzel for titles and Marcellus for narration
+#: because they were installed and looked "different", and they are simply not
+#: manga faces — a Roman inscriptional serif in a narration box reads as a
+#: wedding invitation. A role with nothing suitable installed now falls back to
+#: the page's own dialogue font, which is always the safer answer: one honest
+#: typeface beats a wrong one.
 ROLE_FONTS: Dict[str, List[str]] = {
-    # Heavy, condensed, shouty.
-    "shout": ["bangers", "anton", "bebasneue", "impact", "animeace_b",
-              "animeace2_bld", "comicneue-bold"],
-    # Loud and stylised, but it is a noise rather than speech.
-    "sfx": ["bangers", "anton", "reggaeone", "bebasneue", "impact"],
-    # Display lettering for a chapter title or a credit.
-    "title": ["cinzeldecorative-black", "cinzeldecorative-bold", "pirataone",
-              "cinzel", "orbitron", "anton"],
-    # Narration boxes read as a different voice from speech — traditionally a
-    # serif, which is why these are here rather than another comic face.
-    "narration": ["marcellus", "cinzel", "comicneue-bold", "orbitron"],
-    # Inner voice: softer, and set italic on top of whatever this resolves to.
-    "thought": ["comicneue-bold", "marcellus", "animeace", "cinzel"],
-    # Quiet speech: the dialogue face, smaller and lighter, so no override.
+    # Ordinary speech. Wild Words and Anime Ace are the two standards.
+    "dialogue": ["wildwords", "ccwildwords", "animeace", "animeace2_reg",
+                 "mangatemple", "komikaaxis", "digitalstrip", "backissues",
+                 "comicneue"],
+    # The same voice, raised: the BOLD cut of the dialogue face.
+    "shout": ["wildwords-bold", "wildwordsbold", "animeace_b", "animeace2_bld",
+              "komikaaxis-bold", "badaboom", "bangers", "anton"],
+    # A noise, not speech — the loudest, most distorted face available.
+    "sfx": ["badaboom", "komikahand", "komikaaxis", "bangers", "anton",
+            "reggaeone"],
+    # A caption box is a different voice from speech, but still a comic face.
+    "narration": ["ccastrocity", "mangatemple", "komikaslim", "digitalstrip",
+                  "backissues"],
+    # Inner voice: the dialogue face, slanted and a touch smaller.
+    "thought": ["wildwords-italic", "animeace2_ital", "komikaslim"],
+    # Chapter titles and signage.
+    "title": ["badaboom", "komikaaxis", "mangatemple", "bangers", "anton"],
+    # Quiet speech: the dialogue face, smaller.
     "whisper": [],
-    "dialogue": [],
 }
+
+#: Free faces worth installing, and where they come from. Printed by
+#: setup_models.py --fonts and by the app when a role has nothing to use.
+SUGGESTED = [
+    ("Anime Ace 2.0", "blambot.com — free for personal use; the classic "
+                      "manga-scanlation dialogue face"),
+    ("Komika family", "dafont.com/komika-axis.font — free; a good Wild Words "
+                      "stand-in with a real bold"),
+    ("Manga Temple", "dafont.com/manga-temple.font — free for personal use"),
+    ("Badaboom BB", "blambot.com — free for personal use; the standard SFX "
+                    "face"),
+]
 
 #: Roles that should also be slanted, on top of the font choice.
 ITALIC_ROLES = {"thought", "whisper"}
@@ -145,11 +170,15 @@ def build_map(base_font: Optional[str] = None, fonts_dir: str = "fonts",
     for role in ROLES:
         pick = ""
         for want in ROLE_FONTS.get(role, []):
-            for stem, path in have.items():
-                if want in stem:
-                    pick = path
-                    break
-            if pick:
+            # CLOSEST match, not the first one found. "wildwords" is a
+            # substring of "wildwords-bold" as well, and the bold sorts first
+            # on disk, so a plain first-hit search handed ordinary dialogue the
+            # shouting cut of its own face. The shortest stem that contains the
+            # name is the one that IS that name.
+            hits = [(len(stem), path) for stem, path in have.items()
+                    if want in stem]
+            if hits:
+                pick = min(hits)[1]
                 break
         out[role] = pick or (base_font or "")
     for role, path in (overrides or {}).items():

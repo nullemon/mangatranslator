@@ -1518,6 +1518,110 @@ async def _run_enhance(
         _note_job_done()
 
 
+@app.post("/api/localclean")
+async def local_clean(file: UploadFile = File(...),
+                      gpu_cap: str = Form("100"),
+                      hd: str = Form("true"),
+                      watermark: str = Form(""), wm_place: str = Form("br"),
+                      wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                      wm_style: str = Form("clean"), credit: str = Form("")):
+    """Turn a rough page into a clean white one, with NO API and no key.
+
+    Everything here runs on this machine:
+
+      1. Restore  — flatten the lighting, lift the paper to white, put the
+                    black back into the ink, take the grain off. Arithmetic,
+                    no model at all.
+      2. HD       — the MangaJaNai model on the GPU, which is trained on manga
+                    and rebuilds screentone and line work rather than guessing
+                    at them. Optional, and skipped with a note if it is not
+                    installed rather than failing the page.
+
+    Nothing is sent anywhere and nothing is charged. It is also the honest
+    answer for pages an image API refuses on content grounds.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+    from core.gpu_throttle import set_cap as _set_gpu_cap
+    _set_gpu_cap(gpu_cap)
+
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_clean.png"
+    content = compress_upload(await file.read())
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    tasks[task_id] = {
+        "status": "processing", "step": 1, "message": "Queued", "progress": 0,
+        "upload_path": upload_path, "name": file.filename or "page.png",
+        "mode": "localclean",
+    }
+    wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
+              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+              wm_size=wm_size.strip() or "m", credit=credit.strip(),
+              wm_style=wm_style.strip() or "clean")
+    asyncio.create_task(_run_local_clean(task_id, upload_path, output_path,
+                                         hd == "true", wm))
+    return {"task_id": task_id}
+
+
+async def _run_local_clean(task_id: str, image_path: str, output_path: str,
+                           hd: bool = True, wm: dict = None):
+    try:
+        from core.effects import restore_scan
+        note = []
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            tasks[task_id].update({"step": 1, "progress": 25,
+                                   "message": "Flattening the light and "
+                                              "whitening the paper..."})
+            out = restore_scan(img)
+            if hd:
+                try:
+                    from core.upscale import Upscaler
+                    up = Upscaler()
+                    if up.ok:
+                        tasks[task_id].update(
+                            {"progress": 55,
+                             "message": "Rebuilding line work on the GPU "
+                                        "(MangaJaNai)..."})
+                        out = up.upscale(out, target_long=3600)
+                    else:
+                        note.append("no HD model installed — run "
+                                    "./setup_gpu.sh --mangajanai for sharper "
+                                    "line work")
+                except Exception as e:
+                    # A missing or broken upscaler must not lose the clean-up
+                    # that already worked.
+                    note.append(f"HD step skipped ({type(e).__name__})")
+            _write_atomic(output_path, out)
+            return out.shape
+
+        shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        if wm:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                          wm.get("wm_style", "clean"))
+        msg = f"Cleaned locally — {shape[1]}x{shape[0]}, no API used"
+        if note:
+            msg += " · " + "; ".join(note)
+        tasks[task_id].update({
+            "status": "done", "step": 2, "progress": 100, "message": msg,
+            "result": {"output_path": output_path, "translations": {}},
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        })
+    except Exception as e:
+        print(f"[localclean] failed: {e}")
+        tasks[task_id].update({"status": "error", "message": str(e),
+                               "error": str(e)})
+
+
 @app.post("/api/upscale")
 async def upscale_only(file: UploadFile = File(...),
                        gpu_cap: str = Form("100"),
