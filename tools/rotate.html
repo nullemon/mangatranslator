@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bulk Rotate</title>
+<!-- Save this file anywhere and open it. No server, no install, no internet:
+     everything happens in your browser and nothing is uploaded.
+
+     Only quarter turns, deliberately. 90, 180 and 270 move whole pixels to
+     whole pixels, so what comes out is exactly what went in, only turned. Any
+     other angle has to invent pixels between the old ones, which softens line
+     art and leaves blank wedges in the corners. 360 means "leave it alone",
+     and it copies the original bytes rather than re-encoding them. -->
+<style>
+ body{margin:0;background:#0b0d10;color:#e8ecf1;
+      font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+ header{padding:14px 18px;background:#14181d;border-bottom:1px solid #2a3038;
+        display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+ h1{font-size:16px;margin:0}
+ .m{color:#93a0ae;font-size:12.5px}
+ button{font:inherit;color:#e8ecf1;background:#1b2027;border:1px solid #2a3038;
+        border-radius:8px;padding:8px 14px;cursor:pointer}
+ button:hover:not(:disabled){border-color:#3d4653}
+ button:disabled{opacity:.45;cursor:default}
+ button.on{background:#2b3a55;border-color:#4f8cff}
+ button.go{background:#4f8cff;border-color:#4f8cff;color:#fff;font-weight:600}
+ select{font:inherit;color:#e8ecf1;background:#1b2027;border:1px solid #2a3038;
+        border-radius:8px;padding:8px 10px}
+ #drop{margin:18px;padding:44px;border:2px dashed #2a3038;border-radius:14px;
+       text-align:center;color:#93a0ae;cursor:pointer}
+ #drop.hot{border-color:#4f8cff;color:#e8ecf1;background:#0f1520}
+ #grid{display:flex;flex-wrap:wrap;gap:10px;padding:16px}
+ .t{background:#14181d;border:1px solid #2a3038;border-radius:10px;padding:6px;
+    width:132px;text-align:center}
+ .t canvas{max-width:120px;max-height:150px;background:#000;border-radius:4px;display:block;margin:0 auto}
+ .t div{font-size:11px;color:#93a0ae;margin-top:4px;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bulk Rotate</h1>
+  <span class="m">in your browser — nothing is uploaded</span>
+  <span style="flex:1"></span>
+  <span class="m">Turn:</span>
+  <button data-deg="90">⟳ 90°</button>
+  <button data-deg="180" class="on">⟳ 180°</button>
+  <button data-deg="270">⟲ 90°</button>
+  <button data-deg="0">360° (no change)</button>
+  <select id="fmt">
+    <option value="png">PNG (lossless)</option>
+    <option value="jpeg">JPEG (smaller)</option>
+  </select>
+  <button id="add">Add…</button>
+  <button id="go" class="go" disabled>Download ZIP</button>
+</header>
+
+<div id="drop">
+  <div style="font-size:15px;color:#e8ecf1;margin-bottom:6px">
+    Drop your pages here — images, or a whole <b>.zip</b></div>
+  <div>or click to choose · PNG, JPG, WebP, ZIP</div>
+  <input id="file" type="file" accept="image/*,.zip" multiple hidden>
+</div>
+<div id="grid"></div>
+
+<script>
+"use strict";
+let deg = 180;
+const pages = [];                       // {name, blob, bmp}
+const $ = id => document.getElementById(id);
+
+/* ── ZIP in and out, no library ─────────────────────────────────────────── */
+const CRC = (() => { const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) { let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0; } return t; })();
+const crc32 = u8 => { let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0; };
+
+async function readZip(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const dv = new DataView(buf.buffer);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0 && i > buf.length - 66000; i--)
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("not a ZIP file");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true), out = [];
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true);
+    const cl = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nl));
+    p += 46 + nl + xl + cl;
+    if (name.endsWith("/") || name.includes("__MACOSX")) continue;
+    if (!/\.(png|jpe?g|webp|bmp)$/i.test(name)) continue;
+    // Only the LOCAL header says where the data really starts.
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    let data = buf.subarray(start, start + csize);
+    if (method === 8) {
+      if (typeof DecompressionStream !== "function")
+        throw new Error("this browser can't unpack compressed ZIPs — extract it first");
+      const s = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      data = new Uint8Array(await new Response(s).arrayBuffer());
+    } else if (method !== 0) continue;
+    out.push({ name: name.split("/").pop(), blob: new Blob([data]) });
+  }
+  if (!out.length) throw new Error("no images inside");
+  return out;
+}
+
+function writeZip(files) {              // stored: PNG/JPEG are compressed already
+  const enc = new TextEncoder(), locals = [], central = [];
+  let off = 0;
+  for (const f of files) {
+    const nb = enc.encode(f.name), sum = crc32(f.u8);
+    const lh = new Uint8Array(30 + nb.length), lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+    lv.setUint32(14, sum, true); lv.setUint32(18, f.u8.length, true);
+    lv.setUint32(22, f.u8.length, true); lv.setUint16(26, nb.length, true);
+    lh.set(nb, 30); locals.push(lh, f.u8);
+    const ch = new Uint8Array(46 + nb.length), cvw = new DataView(ch.buffer);
+    cvw.setUint32(0, 0x02014b50, true); cvw.setUint16(4, 20, true);
+    cvw.setUint16(6, 20, true); cvw.setUint32(16, sum, true);
+    cvw.setUint32(20, f.u8.length, true); cvw.setUint32(24, f.u8.length, true);
+    cvw.setUint16(28, nb.length, true); cvw.setUint32(42, off, true);
+    ch.set(nb, 46); central.push(ch);
+    off += lh.length + f.u8.length;
+  }
+  const cd = central.reduce((a, b) => a + b.length, 0);
+  const e = new Uint8Array(22), ev = new DataView(e.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true); ev.setUint32(12, cd, true);
+  ev.setUint32(16, off, true);
+  return new Blob([...locals, ...central, e], { type: "application/zip" });
+}
+
+/* ── the turn ───────────────────────────────────────────────────────────── */
+function turned(bmp, d) {
+  const swap = d % 180 !== 0;
+  const c = document.createElement("canvas");
+  c.width = swap ? bmp.height : bmp.width;
+  c.height = swap ? bmp.width : bmp.height;
+  const g = c.getContext("2d");
+  g.translate(c.width / 2, c.height / 2);
+  g.rotate(d * Math.PI / 180);
+  g.drawImage(bmp, -bmp.width / 2, -bmp.height / 2);
+  return c;
+}
+
+function render() {
+  const g = $("grid");
+  g.innerHTML = "";
+  pages.forEach(p => {
+    const box = document.createElement("div");
+    box.className = "t";
+    const c = turned(p.bmp, deg);
+    const k = Math.min(120 / c.width, 150 / c.height);
+    const s = document.createElement("canvas");
+    s.width = Math.max(1, Math.round(c.width * k));
+    s.height = Math.max(1, Math.round(c.height * k));
+    s.getContext("2d").drawImage(c, 0, 0, s.width, s.height);
+    const t = document.createElement("div");
+    t.textContent = p.name;
+    box.append(s, t);
+    g.append(box);
+  });
+  $("go").disabled = !pages.length;
+}
+
+/* ── loading ────────────────────────────────────────────────────────────── */
+async function add(list) {
+  const items = [];
+  for (const f of [...list]) {
+    if (/\.zip$/i.test(f.name) || /zip/.test(f.type)) {
+      try { items.push(...await readZip(f)); }
+      catch (e) { alert(`Couldn't read "${f.name}": ${e.message}`); }
+    } else if (f.type.startsWith("image/")) items.push({ name: f.name, blob: f });
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  for (const it of items) {
+    try { pages.push({ ...it, bmp: await createImageBitmap(it.blob) }); }
+    catch (_) {}
+  }
+  if (pages.length) $("drop").style.display = "none";
+  render();
+}
+
+document.querySelectorAll("header [data-deg]").forEach(b => b.onclick = () => {
+  deg = +b.dataset.deg;
+  document.querySelectorAll("header [data-deg]")
+    .forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+
+$("go").onclick = async () => {
+  const b = $("go"), label = b.textContent;
+  b.disabled = true;
+  try {
+    const type = $("fmt").value === "jpeg" ? "image/jpeg" : "image/png";
+    const ext = type === "image/jpeg" ? "jpg" : "png";
+    const files = [];
+    for (let i = 0; i < pages.length; i++) {
+      b.textContent = `Turning ${i + 1}/${pages.length}…`;
+      const p = pages[i];
+      let u8;
+      if (deg === 0) {
+        // Nothing to change: keep the original bytes rather than re-encoding
+        // them, which could only cost quality.
+        u8 = new Uint8Array(await p.blob.arrayBuffer());
+        files.push({ name: p.name, u8 });
+        continue;
+      }
+      const blob = await new Promise(r => turned(p.bmp, deg).toBlob(r, type, 0.95));
+      u8 = new Uint8Array(await blob.arrayBuffer());
+      files.push({ name: p.name.replace(/\.[^.]+$/, "") + "." + ext, u8 });
+    }
+    b.textContent = "Packing…";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(writeZip(files));
+    a.download = `rotated_${deg}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    alert("Failed: " + e.message);
+  } finally { b.disabled = false; b.textContent = label; }
+};
+
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+$("add").onclick = () => $("file").click();
+$("file").onchange = e => { add(e.target.files); e.target.value = ""; };
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev,
+  e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev,
+  e => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", e => add(e.dataTransfer.files));
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => { e.preventDefault(); if (pages.length) add(e.dataTransfer.files); });
+</script>
+</body>
+</html>
