@@ -223,4 +223,69 @@ def restore_scan(img: np.ndarray, strength: float = 1.0) -> np.ndarray:
     # 7. Snap the last of it: the existing finish anchors its curves to this
     #    page's own histogram peaks, so midtones stay put.
     from .pipeline import scan_finish
-    return scan_finish(u8)
+    out = scan_finish(u8)
+
+    # 8. Flatten the DARK fields — and it has to happen HERE, after the levels
+    #    stretch, not before it. Everything above evens out the PAPER, but a
+    #    page whose background is dark (night scenes, whole dark-aesthetic
+    #    chapters) keeps its pulp mottle, and the stretch then AMPLIFIES what
+    #    is left: flattening first was measured at std 11.3 against the
+    #    digital target's 3.8, because the black-end ramp pulled the residue
+    #    apart again. Done last, the surface stays put.
+    #
+    #    A large, dark, detail-free area is treated as one surface: each pixel
+    #    is pulled to the local median. Gated on LOW DETAIL, so hatching,
+    #    screentone and line art in dark panels do not qualify and are not
+    #    touched.
+    g8 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    dm = cv2.blur(g8.astype(np.float32), (5, 5))
+    dv = cv2.blur(g8.astype(np.float32) ** 2, (5, 5)) - dm ** 2
+    det = cv2.blur(np.sqrt(np.maximum(dv, 0)), (9, 9))
+    flat_dark = ((g8 < 120) & (det < 16)).astype(np.uint8) * 255
+    flat_dark = cv2.morphologyEx(flat_dark, cv2.MORPH_OPEN,
+                                 np.ones((9, 9), np.uint8))
+    if cv2.countNonZero(flat_dark) > 0.02 * g8.size:
+        # One tone per field, not a local blur. A local median removes the
+        # speckle but leaves the LARGE-scale unevenness — different parts of
+        # the background crushed to different levels by the stretch — and that
+        # is what actually reads as blotchy (measured: local detail 0.1 yet
+        # the field's spread still 11.8 against the digital page's 3.8). Each
+        # connected dark field is a single surface, so it gets its single
+        # median colour, feathered at the edges. Separate fields (the page
+        # background, a dark tent, a shadow) each keep their own level.
+        # And the GLOW along the panel borders. The unsharp pass overshoots
+        # where a dark field meets a white panel, and the stretch amplifies
+        # that into a pale 20px fringe hanging in the dark — measured, it was
+        # the entire remaining unevenness (5,853 of 241,000 background pixels,
+        # all in one band beside the border). Pull the ring around each field
+        # down to the field's own tone; gated on low detail and on staying
+        # below paper level, so the border line itself and any true artwork
+        # beside the field are untouched.
+        # Absorbed in two passes because the field's own edge sits well back
+        # from the border (its ramp fails the flatness gate), so one ring from
+        # it does not span the whole glow.
+        #
+        # det < 45 is from measurement rather than instinct: the glow itself
+        # is a steep ramp and reads at det ~30 — a gate of 20 excluded the
+        # very thing being removed — while genuine dark hatching beside a
+        # field reads at ~95. Bright balloon interiors that also score low
+        # are already excluded by the value test.
+        for _pass in range(2):
+            ring = cv2.dilate(flat_dark, np.ones((41, 41), np.uint8))
+            ring[flat_dark > 0] = 0
+            halo = (ring > 0) & (g8 < 140) & (det < 45)
+            if not halo.any():
+                break
+            flat_dark[halo] = 255
+        n2, lab2, st2, _ = cv2.connectedComponentsWithStats(flat_dark, 8)
+        fill = out.copy()
+        for i in range(1, n2):
+            if st2[i, cv2.CC_STAT_AREA] < 0.005 * g8.size:
+                continue
+            sel = lab2 == i
+            fill[sel] = np.median(out[sel].reshape(-1, 3), axis=0)
+        wgt = cv2.GaussianBlur(flat_dark.astype(np.float32) / 255.0,
+                               (0, 0), 4)[..., None] * 0.9
+        out = np.clip(out.astype(np.float32) * (1 - wgt)
+                      + fill.astype(np.float32) * wgt, 0, 255).astype(np.uint8)
+    return out
