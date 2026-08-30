@@ -460,3 +460,15 @@ def contact_sheet(variants, cols=4):
         sheet[y:y + ch, x:x + cw] = cv2.resize(v, (cw, ch),
                                                interpolation=cv2.INTER_AREA)
     return sheet
+
+
+def clean_page_nokey(img):
+    """The recipe behind the Clean — no key workflow.
+
+    This is lab version 12, "pitch black" — chosen by the user's eye against
+    eleven alternatives on their own scans, which is the only judgement that
+    counts for a look. Ink snapped hard to true 0 with gamma leaning the same
+    way: the digital-release look, where black is actually black. If taste
+    changes, run the Clean Lab again and point this at the new number.
+    """
+    return _restore_tuned(img, ink_snap=110, gamma=1.1)

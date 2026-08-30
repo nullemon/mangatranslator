@@ -1674,7 +1674,7 @@ async def local_clean(file: UploadFile = File(...),
 async def _run_local_clean(task_id: str, image_path: str, output_path: str,
                            hd: bool = True, wm: dict = None):
     try:
-        from core.effects import restore_scan
+        from core.effects import clean_page_nokey
         note = []
 
         def do_work():
@@ -1682,9 +1682,9 @@ async def _run_local_clean(task_id: str, image_path: str, output_path: str,
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
             tasks[task_id].update({"step": 1, "progress": 25,
-                                   "message": "Flattening the light and "
-                                              "whitening the paper..."})
-            out = restore_scan(img)
+                                   "message": "Cleaning (pitch-black recipe — "
+                                              "picked in the Clean Lab)..."})
+            out = clean_page_nokey(img)
             if hd:
                 try:
                     from core.upscale import Upscaler
