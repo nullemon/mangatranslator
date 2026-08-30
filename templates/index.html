@@ -377,17 +377,6 @@
           <span class="wf-title">Clean — no key</span>
           <span class="wf-desc">Rough page &rarr; white &amp; sharp, on your own GPU</span>
         </label>
-        <!-- BETA: the tuning loop. Ten one-lever variations of the clean on
-             one page; the user says which number looks right and that lever
-             becomes the default. -->
-        <label class="wf-card" data-wf="clean-lab">
-          <input type="radio" name="workflow" value="clean-lab">
-          <div class="wf-icon">
-            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
-          </div>
-          <span class="wf-title">Clean Lab (beta)</span>
-          <span class="wf-desc">12 versions of one page — incl. absolute-black — pick a number</span>
-        </label>
         <label class="wf-card" data-wf="watermark-only">
           <input type="radio" name="workflow" value="watermark-only">
           <div class="wf-icon">
@@ -641,7 +630,6 @@
       <div class="result-actions">
         <button class="btn btn-primary" id="downloadBtn">Download This Page</button>
         <button class="btn btn-ghost" id="downloadCleanBtn" title="This page without your watermark. Already made — no re-translating, nothing charged.">⬇ No watermark</button>
-        <button class="btn btn-ghost" id="labZipBtn" style="display:none" title="Every full-size version, numbered — pick the best and say which number.">⬇ All versions</button>
         <button class="btn btn-ghost" id="stampBtn" title="Stamp your watermark + credit onto THIS page only, using the Watermark settings above">🖋 Stamp This Page</button>
         <button class="btn btn-primary" id="translateScanBtn" style="display:none">Translate This Scan</button>
         <button class="btn btn-ghost" id="reuseBtn" title="Feed this result back in so you can run another step on it (scan, upscale, clean…)">↺ Use Result as Input</button>

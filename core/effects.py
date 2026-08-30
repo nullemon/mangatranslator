@@ -310,7 +310,7 @@ def _flatten_dark_fields(out):
 
 def _restore_tuned(img, *, flatten=1.0, black_cut=0.5, denoise=6.0,
                    sharpen=0.55, snap=True, dark_flatten=True,
-                   clahe=False, gamma=1.0, ink_snap=0):
+                   clahe=False, gamma=1.0, ink_snap=0, ink_fields=False):
     """restore_scan with its levers exposed. The default arguments reproduce
     restore_scan exactly; the lab varies one at a time."""
     h, w = img.shape[:2]
@@ -323,6 +323,49 @@ def _restore_tuned(img, *, flatten=1.0, black_cut=0.5, denoise=6.0,
         if ref > 20:
             work[:, :, c] *= min(3.0, 255.0 / ref)
     work = np.clip(work, 0, 255)
+
+    if ink_fields:
+        # Commit the page's dark FIELDS to ink before any level decision.
+        #
+        # It runs HERE, straight after the white balance, and the position is
+        # the fix: placed later it never fired, because the light-flatten
+        # reads a dark background as shadowed paper and brightens it toward
+        # white before any later step can see it — traced on the failing page,
+        # the background was already at ~230 by then.
+        #
+        # Thresholds after the fact cannot be trusted either. On
+        # a page whose background is a tan mid-dark wash — the user's campfire
+        # page — the final levels snap saw that wash as the page's brightest
+        # strong peak, called it PAPER, and bleached the whole background to
+        # 239. A fixed ink threshold missed it in the other direction. The
+        # only robust reading is structural: a LARGE, FLAT region well below
+        # the paper level is a background field whatever its exact tone, and
+        # on the pitch-black look it belongs at 0. Real shading and artwork
+        # carry texture, so the flatness gate excludes them; small regions are
+        # left alone entirely.
+        gg = cv2.cvtColor(np.clip(work, 0, 255).astype(np.uint8),
+                          cv2.COLOR_BGR2GRAY)
+        fm = cv2.blur(gg.astype(np.float32), (7, 7))
+        fv = cv2.blur(gg.astype(np.float32) ** 2, (7, 7)) - fm ** 2
+        fdet = cv2.blur(np.sqrt(np.maximum(fv, 0)), (11, 11))
+        paper_lv = float(np.percentile(gg, 95))
+        candidate = ((gg < paper_lv - 70) & (fdet < 18)).astype(np.uint8) * 255
+        candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN,
+                                     np.ones((11, 11), np.uint8))
+        n_, lab_, st_, _c = cv2.connectedComponentsWithStats(candidate, 8)
+        field = np.zeros(gg.shape, np.uint8)
+        for i in range(1, n_):
+            if st_[i, cv2.CC_STAT_AREA] >= 0.03 * gg.size:
+                field[lab_ == i] = 255
+        if field.any():
+            # Take the mottle with it: absorb the low-detail fringe so the
+            # field edge does not leave a grey rim against the art.
+            grow = cv2.dilate(field, np.ones((13, 13), np.uint8))
+            field[(grow > 0) & (gg < paper_lv - 55) & (fdet < 26)] = 255
+            wgt = cv2.GaussianBlur(field.astype(np.float32) / 255.0,
+                                   (0, 0), 2.5)[..., None]
+            work = work * (1.0 - 0.97 * wgt)
+
 
     if flatten > 0:                                       # even the light
         gray = cv2.cvtColor(work.astype(np.uint8), cv2.COLOR_BGR2GRAY)
@@ -471,4 +514,4 @@ def clean_page_nokey(img):
     way: the digital-release look, where black is actually black. If taste
     changes, run the Clean Lab again and point this at the new number.
     """
-    return _restore_tuned(img, ink_snap=110, gamma=1.1)
+    return _restore_tuned(img, ink_snap=110, gamma=1.1, ink_fields=True)
