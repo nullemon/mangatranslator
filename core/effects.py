@@ -225,18 +225,27 @@ def restore_scan(img: np.ndarray, strength: float = 1.0) -> np.ndarray:
     from .pipeline import scan_finish
     out = scan_finish(u8)
 
-    # 8. Flatten the DARK fields — and it has to happen HERE, after the levels
-    #    stretch, not before it. Everything above evens out the PAPER, but a
-    #    page whose background is dark (night scenes, whole dark-aesthetic
-    #    chapters) keeps its pulp mottle, and the stretch then AMPLIFIES what
-    #    is left: flattening first was measured at std 11.3 against the
-    #    digital target's 3.8, because the black-end ramp pulled the residue
-    #    apart again. Done last, the surface stays put.
-    #
-    #    A large, dark, detail-free area is treated as one surface: each pixel
-    #    is pulled to the local median. Gated on LOW DETAIL, so hatching,
-    #    screentone and line art in dark panels do not qualify and are not
-    #    touched.
+    return _flatten_dark_fields(out)
+
+
+def _flatten_dark_fields(out):
+    """The restore's final step, shared with the clean lab.
+
+    A page whose background is dark (night scenes, whole dark-aesthetic
+    chapters) keeps its pulp mottle through the paper-oriented steps, and the
+    levels stretch then AMPLIFIES what is left — so this runs after the
+    stretch, never before it (measured: flattening first left std 11.3 against
+    the digital target's 3.8).
+
+    A large, dark, detail-free area is treated as one surface: each connected
+    field is filled with its single median tone (a local blur removes speckle
+    but leaves the large-scale unevenness that actually reads as blotchy), and
+    the pale glow the sharpening pass leaves along panel borders is absorbed
+    into the field in two passes. Gated on LOW DETAIL throughout — det < 45 by
+    measurement, the glow ramp reading ~30 and true dark hatching ~95 — so
+    line art, screentone and hatching are untouched. A page with no large flat
+    dark area is returned as it came.
+    """
     g8 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
     dm = cv2.blur(g8.astype(np.float32), (5, 5))
     dv = cv2.blur(g8.astype(np.float32) ** 2, (5, 5)) - dm ** 2
@@ -289,3 +298,145 @@ def restore_scan(img: np.ndarray, strength: float = 1.0) -> np.ndarray:
         out = np.clip(out.astype(np.float32) * (1 - wgt)
                       + fill.astype(np.float32) * wgt, 0, 255).astype(np.uint8)
     return out
+
+
+# ── the clean lab: ten recipes, one page, you pick ──────────────────────────
+#
+# Nobody can tune a clean-up from an argument about it — the page has to be
+# looked at. Each recipe below moves ONE lever away from the default, so when
+# a particular version looks right, that lever is the thing to keep. The
+# labels are burnt into the corner of each output so "number 7 is the best"
+# is all the feedback needed.
+
+def _restore_tuned(img, *, flatten=1.0, black_cut=0.5, denoise=6.0,
+                   sharpen=0.55, snap=True, dark_flatten=True,
+                   clahe=False, gamma=1.0):
+    """restore_scan with its levers exposed. The default arguments reproduce
+    restore_scan exactly; the lab varies one at a time."""
+    h, w = img.shape[:2]
+    if h < 32 or w < 32:
+        return img
+    work = img.astype(np.float32)
+
+    for c in range(3):                                    # white balance
+        ref = float(np.percentile(work[:, :, c], 97.5))
+        if ref > 20:
+            work[:, :, c] *= min(3.0, 255.0 / ref)
+    work = np.clip(work, 0, 255)
+
+    if flatten > 0:                                       # even the light
+        gray = cv2.cvtColor(work.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+        k = max(3, (min(h, w) // 60) | 1)
+        paper = cv2.dilate(gray, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (k, k)))
+        se = max(8, int(min(h, w) / 12))
+        sw_, sh_ = max(4, w * se // min(h, w)), max(4, h * se // min(h, w))
+        small = cv2.medianBlur(cv2.resize(paper, (sw_, sh_),
+                                          interpolation=cv2.INTER_AREA), 3)
+        paper = np.maximum(cv2.resize(small.astype(np.float32), (w, h),
+                                      interpolation=cv2.INTER_CUBIC), 40.0)
+        gain = np.clip(float(np.percentile(paper, 95)) / paper, 0.6, 2.0)
+        lift = np.clip((gray.astype(np.float32) - 60.0) / 100.0, 0.0, 1.0)
+        work = np.clip(work * (1.0 + (gain - 1.0) * lift * flatten)[..., None],
+                       0, 255)
+
+    if black_cut > 0:                                     # take the floor off
+        g2 = cv2.cvtColor(work.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+        lo = min(float(np.percentile(g2, black_cut)), 110.0)
+        hi = float(np.percentile(g2, 99.5))
+        if hi - lo > 40:
+            work = np.clip((work - lo) * (255.0 / (hi - lo)), 0, 255)
+
+    u8 = work.astype(np.uint8)
+    if gamma != 1.0:
+        lut = np.clip(((np.arange(256) / 255.0) ** gamma) * 255.0,
+                      0, 255).astype(np.uint8)
+        u8 = cv2.LUT(u8, lut)
+    if clahe:
+        lab = cv2.cvtColor(u8, cv2.COLOR_BGR2LAB)
+        lab[:, :, 0] = cv2.createCLAHE(2.0, (12, 12)).apply(lab[:, :, 0])
+        u8 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    if denoise > 0:                                       # grain off
+        if float(cv2.cvtColor(u8, cv2.COLOR_BGR2HSV)[:, :, 1].mean()) < 26:
+            g = cv2.fastNlMeansDenoising(
+                cv2.cvtColor(u8, cv2.COLOR_BGR2GRAY), None, int(denoise), 7, 21)
+            u8 = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+        else:
+            u8 = cv2.fastNlMeansDenoisingColored(
+                u8, None, int(denoise), int(denoise), 7, 21)
+
+    if sharpen > 0:                                       # edge back
+        blur = cv2.GaussianBlur(u8, (0, 0), 1.1)
+        u8 = cv2.addWeighted(u8, 1.0 + sharpen, blur, -sharpen, 0)
+
+    if snap:                                              # levels snap
+        from .pipeline import scan_finish
+        u8 = scan_finish(u8)
+    if dark_flatten:
+        u8 = _flatten_dark_fields(u8)
+    return u8
+
+
+#: (number, name, what it changes, kwargs). One lever each, both directions.
+CLEAN_VARIANTS = [
+    (1, "standard", "the current default", {}),
+    (2, "gentle", "no levels snap - tones kept soft",
+        dict(snap=False, sharpen=0.3)),
+    (3, "deep blacks", "harder black floor",
+        dict(black_cut=2.0)),
+    (4, "soft blacks", "barely touches the floor",
+        dict(black_cut=0.1)),
+    (5, "flat + smooth", "double denoise",
+        dict(denoise=12)),
+    (6, "crisp", "double sharpening",
+        dict(sharpen=1.1)),
+    (7, "no halo", "no sharpening at all",
+        dict(sharpen=0.0)),
+    (8, "raw fields", "dark backgrounds left un-flattened",
+        dict(dark_flatten=False)),
+    (9, "punchy", "local contrast (CLAHE) before the snap",
+        dict(clahe=True)),
+    (10, "ink-heavy", "gamma towards ink",
+        dict(gamma=1.25)),
+]
+
+
+def clean_variants(img, max_edge=2200):
+    """All ten recipes on one page, labels burnt in.
+
+    Run at a capped size so ten passes stay under half a minute; the winner is
+    then re-run at full size (and through HD) by the normal path, so nothing
+    about the comparison run limits the final page.
+    """
+    h, w = img.shape[:2]
+    if max(h, w) > max_edge:
+        s = max_edge / max(h, w)
+        img = cv2.resize(img, (int(w * s), int(h * s)),
+                         interpolation=cv2.INTER_AREA)
+    out = []
+    for num, name, desc, kw in CLEAN_VARIANTS:
+        v = _restore_tuned(img, **kw)
+        v = v.copy()
+        tag = f"{num}. {name}"
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 3)
+        cv2.rectangle(v, (0, 0), (tw + 26, th + 26), (255, 255, 255), -1)
+        cv2.rectangle(v, (0, 0), (tw + 26, th + 26), (0, 0, 0), 2)
+        cv2.putText(v, tag, (13, th + 13), cv2.FONT_HERSHEY_SIMPLEX, 1.1,
+                    (0, 0, 200), 3)
+        out.append((num, name, desc, v))
+    return out
+
+
+def contact_sheet(variants, cols=5):
+    """The ten versions on one sheet, for picking at a glance."""
+    th, tw = variants[0][3].shape[:2]
+    ch, cw = 560, max(1, int(560 * tw / th))
+    rows = (len(variants) + cols - 1) // cols
+    sheet = np.full((rows * (ch + 8) + 8, cols * (cw + 8) + 8, 3), 30, np.uint8)
+    for i, (_n, _name, _d, v) in enumerate(variants):
+        r, c = divmod(i, cols)
+        y, x = 8 + r * (ch + 8), 8 + c * (cw + 8)
+        sheet[y:y + ch, x:x + cw] = cv2.resize(v, (cw, ch),
+                                               interpolation=cv2.INTER_AREA)
+    return sheet
