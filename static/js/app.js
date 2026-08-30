@@ -391,7 +391,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
       "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
       "scan-raw": "Make it Raw", "watermark-only": "Watermark Pages",
-      "local-clean": "Clean It (no key)", "clean-lab": "Make 10 Versions",
+      "local-clean": "Clean It (no key)", "clean-lab": "Make 12 Versions",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
     if (window.updateCutBtn) window.updateCutBtn();

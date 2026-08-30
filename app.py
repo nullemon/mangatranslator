@@ -1549,7 +1549,7 @@ async def clean_lab(file: UploadFile = File(...), gpu_cap: str = Form("100")):
 
     async def run():
         try:
-            from core.effects import clean_variants, contact_sheet
+            from core.effects import contact_sheet, CLEAN_VARIANTS
             img = cv2.imread(upload_path)
             if img is None:
                 raise ValueError("Cannot load image")
@@ -1557,7 +1557,7 @@ async def clean_lab(file: UploadFile = File(...), gpu_cap: str = Form("100")):
             def work():
                 # ~3s a version; the message counts them so it never looks hung.
                 out = []
-                from core.effects import CLEAN_VARIANTS, _restore_tuned
+                from core.effects import _restore_tuned
                 h, w = img.shape[:2]
                 src = img
                 if max(h, w) > 2200:
@@ -1567,7 +1567,7 @@ async def clean_lab(file: UploadFile = File(...), gpu_cap: str = Form("100")):
                 for i, (num, name, desc, kw) in enumerate(CLEAN_VARIANTS):
                     tasks[task_id].update(
                         {"progress": 5 + int(85 * i / len(CLEAN_VARIANTS)),
-                         "message": f"Version {num}/10 — {name}..."})
+                         "message": f"Version {num}/{len(CLEAN_VARIANTS)} — {name}..."})
                     v = _restore_tuned(src, **kw)
                     tag = f"{num}. {name}"
                     (tw2, th2), _b = cv2.getTextSize(
@@ -1584,7 +1584,7 @@ async def clean_lab(file: UploadFile = File(...), gpu_cap: str = Form("100")):
             await asyncio.get_event_loop().run_in_executor(None, work)
             tasks[task_id].update({
                 "status": "done", "step": 2, "progress": 100,
-                "message": "10 versions ready — zoom in, pick a number, and "
+                "message": f"{len(CLEAN_VARIANTS)} versions ready — zoom in, pick a number, and "
                            "say which. Download all ten full-size below.",
                 "result": {"output_path": output_path, "translations": {}},
                 "output_url": f"/api/result/{task_id}",

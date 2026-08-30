@@ -310,7 +310,7 @@ def _flatten_dark_fields(out):
 
 def _restore_tuned(img, *, flatten=1.0, black_cut=0.5, denoise=6.0,
                    sharpen=0.55, snap=True, dark_flatten=True,
-                   clahe=False, gamma=1.0):
+                   clahe=False, gamma=1.0, ink_snap=0):
     """restore_scan with its levers exposed. The default arguments reproduce
     restore_scan exactly; the lab varies one at a time."""
     h, w = img.shape[:2]
@@ -375,6 +375,20 @@ def _restore_tuned(img, *, flatten=1.0, black_cut=0.5, denoise=6.0,
         u8 = scan_finish(u8)
     if dark_flatten:
         u8 = _flatten_dark_fields(u8)
+    if ink_snap > 0:
+        # Absolute ink. A digital release's blacks are genuinely 0, not dark
+        # grey — it is the single clearest difference between a clean rip and
+        # a cleaned scan. Everything at or below the threshold becomes pure
+        # black, edges feathered by one blurred step so line ends do not
+        # alias. The threshold is the whole judgement call — push it high and
+        # mid-grey shading goes with the ink — which is exactly why it is a
+        # numbered lab version rather than a default.
+        g = cv2.cvtColor(u8, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        t = float(ink_snap)
+        # 1 at ink, 0 above the threshold band, smooth in between.
+        wgt = np.clip((t - g) / 18.0 + 1.0, 0.0, 1.0)
+        wgt = cv2.GaussianBlur(wgt, (0, 0), 0.8)[..., None]
+        u8 = np.clip(u8.astype(np.float32) * (1.0 - wgt), 0, 255).astype(np.uint8)
     return u8
 
 
@@ -399,6 +413,12 @@ CLEAN_VARIANTS = [
         dict(clahe=True)),
     (10, "ink-heavy", "gamma towards ink",
         dict(gamma=1.25)),
+    # The two the user's reference pages actually look like: digital-release
+    # blacks, genuinely 0.
+    (11, "absolute black", "everything near-ink snapped to pure black",
+        dict(ink_snap=70)),
+    (12, "pitch black", "ink snap pushed hard - shading may go with it",
+        dict(ink_snap=110, gamma=1.1)),
 ]
 
 
@@ -428,7 +448,7 @@ def clean_variants(img, max_edge=2200):
     return out
 
 
-def contact_sheet(variants, cols=5):
+def contact_sheet(variants, cols=4):
     """The ten versions on one sheet, for picking at a glance."""
     th, tw = variants[0][3].shape[:2]
     ch, cw = 560, max(1, int(560 * tw / th))
