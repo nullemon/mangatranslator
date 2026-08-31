@@ -1237,7 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // These three were surviving the reset and being posted verbatim on
       // the next re-render — old erase boxes and hand-added bubbles painted
       // onto the turned page at pre-turn coordinates.
-      p.covers = []; p.added = []; p.rotations = {};
+      p.covers = []; p.added = []; p.rotations = {}; p.fonts = {};
     }
     p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
     return true;
@@ -1958,7 +1958,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.glows = new Set();
             page.fits = new Set();
             page.boxes = {};
-            page.covers = []; page.added = []; page.rotations = {};
+            page.covers = []; page.added = []; page.rotations = {}; page.fonts = {};
             page.rev++;
             renderStrip(); updateBatch();
             if (page.uid === activeUid) renderActivePage();
@@ -2231,6 +2231,14 @@ document.addEventListener("DOMContentLoaded", () => {
   function buildTranslationsList(page) {
     const el = document.getElementById("translationsList");
     el.innerHTML = "";
+    // Per-bubble font picker options: every installed font (the main Font
+    // dropdown already lists them), with "Auto" meaning the mood system /
+    // page font decide as usual.
+    const fontOpts = cur => ['<option value="">Auto font</option>']
+      .concat([...(fontSelect ? fontSelect.options : [])]
+        .filter(o => o.value)
+        .map(o => `<option value="${esc(o.value)}"${o.value === cur ? " selected" : ""}>${esc(o.textContent)}</option>`))
+      .join("");
     let items = page.items || [];
     if (items.length === 0 && page.result && page.result.result && page.result.result.translations) {
       items = Object.entries(page.result.result.translations).map(([id, t]) => ({
@@ -2279,6 +2287,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
+          <select class="tl-font" data-id="${it.id}" title="Font for THIS bubble — your pick beats the mood system and the page font" style="max-width:130px">${fontOpts((page.fonts || {})[it.id] || "")}</select>
           <button class="tl-vert${(page.rotations || {})[it.id] === -90 ? " on" : ""}" title="VERTICAL: set this text sideways, reading bottom-to-top (for tall single-column text). Click again for normal horizontal." data-id="${it.id}">↕</button>
           <button class="tl-style" title="Copy this bubble's LOOK (size, colour, glow, tilt, fit) — then paste it onto the others" data-id="${it.id}">🎨</button>
           <button class="tl-fit${page.fits && page.fits.has(String(it.id)) ? " on" : ""}" title="FIT THE BOX: grow this text until it properly fills its box (long words are hyphenated so one word can't keep everything tiny). Click again to go back to the normal fit." data-id="${it.id}">⤢</button>
@@ -2311,6 +2320,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span class="tl-fsv">${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}%</span>
             <button class="tl-fsb" data-id="${it.id}" data-d="1" title="Bigger">A+</button>
           </span>
+          <select class="tl-font" data-id="${it.id}" title="Font for THIS text — your pick beats the mood system and the page font" style="max-width:130px">${fontOpts((page.fonts || {})[it.id] || "")}</select>
           <button class="tl-del" title="Delete this added text" data-id="${it.id}">✕</button>
         </div>
         <textarea class="tl-edit add-edit" data-id="${it.id}" rows="2">${esc(it.translation || "")}</textarea>`;
@@ -2413,6 +2423,13 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.addEventListener("click", () => {
         page.added = (page.added || []).filter(a => String(a.id) !== btn.dataset.id);
         buildTranslationsList(page);
+      });
+    });
+    el.querySelectorAll(".tl-font").forEach(s => {
+      s.addEventListener("change", () => {
+        page.fonts = page.fonts || {};
+        if (s.value) page.fonts[s.dataset.id] = s.value;
+        else delete page.fonts[s.dataset.id];
       });
     });
     el.querySelectorAll(".tl-color").forEach(grp => {
@@ -2557,6 +2574,7 @@ document.addEventListener("DOMContentLoaded", () => {
           glows: [...(page.glows || [])], fits: [...(page.fits || [])], edits,
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
+          fonts: page.fonts || {},
           boxes: page.boxes || {},
           offsets: page.offsets || {},
           covers: page.covers || [],
@@ -2702,6 +2720,7 @@ document.addEventListener("DOMContentLoaded", () => {
       fits: [...(page.fits || [])],
       glows: [...(page.glows || [])], offsets: page.offsets || {},
       colors: page.colors || {}, fontScales: page.fontScales || {},
+      fonts: page.fonts || {},
       boxes: page.boxes || {}, covers: page.covers || [],
       rotations: JSON.parse(JSON.stringify(page.rotations || {})),
       added: (page.added || []).map(a => ({ ...a })),
@@ -2714,6 +2733,7 @@ document.addEventListener("DOMContentLoaded", () => {
     page.fits = new Set(s.fits || []);
     page.glows = new Set(s.glows); page.offsets = s.offsets; page.colors = s.colors;
     page.fontScales = s.fontScales; page.boxes = s.boxes; page.covers = s.covers;
+    page.fonts = s.fonts || {};
     page.rotations = s.rotations || {};
     page.added = s.added;
     (page.items || []).forEach((it, i) => { if (i < s.trans.length) it.translation = s.trans[i]; });
@@ -4428,7 +4448,7 @@ document.addEventListener("DOMContentLoaded", () => {
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
       p.items = []; p.excluded = new Set(); p.erased = new Set(); p.glows = new Set(); p.fits = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
-      p.covers = []; p.added = []; p.rotations = {};
+      p.covers = []; p.added = []; p.rotations = {}; p.fonts = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();

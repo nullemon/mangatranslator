@@ -2320,6 +2320,16 @@ async def rerender(task_id: str, request: Request):
     colors = {str(k): v for k, v in (payload.get("colors") or {}).items()}
     font_scales = {str(k): v for k, v in (payload.get("font_scales") or {}).items()}
     boxes = {str(k): v for k, v in (payload.get("boxes") or {}).items()}
+    # Per-bubble font picks from the editor. Names only — resolved against
+    # fonts/ and dropped if they point anywhere else or at nothing.
+    fonts_by_id = {str(k): v for k, v in (payload.get("fonts") or {}).items()}
+
+    def _font(nid):
+        v = os.path.basename(str(fonts_by_id.get(nid, "") or ""))
+        if (v and v.lower().endswith((".ttf", ".otf"))
+                and os.path.exists(os.path.join("fonts", v))):
+            return v
+        return ""
     rotations = {}
     for k, v in (payload.get("rotations") or {}).items():
         try:
@@ -2369,6 +2379,11 @@ async def rerender(task_id: str, request: Request):
             "original": it.get("original", ""),
             "translation": text,
             "type": it.get("type", ""),
+            # Without this the voice was LOST on every re-render: the rebuild
+            # dropped the translator's tone, so Font-per-mood pages fell back
+            # to the page font the moment Apply was pressed.
+            "tone": it.get("tone", ""),
+            "font": _font(nid),
             "in_bubble": it.get("in_bubble", True),
             "dark": it.get("dark", False),
             "src_rect": it.get("src_rect"),
@@ -2422,6 +2437,7 @@ async def rerender(task_id: str, request: Request):
             "manual_rot": aid in rotations,
             "color": colors.get(aid, "auto"),
             "font_scale": _scale(aid),
+            "font": _font(aid),
             "fit_box": aid in fits,
         })
 

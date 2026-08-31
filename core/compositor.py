@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import cv2
 import numpy as np
@@ -349,6 +350,14 @@ class Compositor:
                 role_font, role_ital, role_scale, _role = lettering.style_for(
                     it, self.font_map, self.renderer.font_path)
                 ital = ital or role_ital
+            # A face the user picked for THIS bubble beats the mood system
+            # and the page font both — mood toggle on or off. They chose it
+            # by name; the machine's job is to use it.
+            pick = str(it.get("font") or "").strip()
+            if pick:
+                cand = os.path.join("fonts", os.path.basename(pick))
+                if os.path.exists(cand):
+                    role_font = cand
             bbox = it.get("bbox")
             if not bbox:
                 continue
