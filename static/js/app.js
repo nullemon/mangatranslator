@@ -1470,34 +1470,70 @@ document.addEventListener("DOMContentLoaded", () => {
     if (bNo) bNo.addEventListener("click", () => { trimModal.style.display = "none"; });
   }
 
-  // Cut the page out of a photo of it. Only ever the page on screen, and
-  // never a re-run: it swaps the image the page holds and leaves its status
-  // alone, exactly as the trim does.
+  // Cut the page out of a photo of it. Never a re-run: it swaps the image the
+  // page holds and leaves its status alone, exactly as the trim does. With
+  // "every page" ticked it walks the whole chapter, because a chapter shot on
+  // the carpet is shot on the carpet on every page — and a photo the server
+  // finds no page in (or one that already fills the frame) is skipped, not a
+  // reason to stop the run.
   const cutoutBtn = document.getElementById("cutoutBtn");
+
+  async function cutoutOne(p) {
+    const fd = new FormData();
+    fd.append("file", p.file, p.name || "page.png");
+    const res = await fetch("/api/cutout", { method: "POST", body: fd });
+    if (!res.ok) {
+      let m = res.statusText;
+      try { m = (await res.json()).detail || m; } catch (_) {}
+      const err = new Error(m);
+      err.refused = res.status === 422;   // no page found / already full-frame
+      throw err;
+    }
+    const size = res.headers.get("X-Page-Size") || "";
+    const blob = await res.blob();
+    p.file = new File([blob], p.name || "page.png", { type: "image/png" });
+    p.size = blob.size;
+    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    p.thumb = await makeThumb(p.file);
+    return size;
+  }
+
   if (cutoutBtn) cutoutBtn.addEventListener("click", async () => {
-    const p = getActive() || pages[0];
-    if (!p || !p.file) { showError("No page loaded."); return; }
+    const every = !!(orientAll && orientAll.checked);
+    const targets = (every ? pages : [getActive() || pages[0]])
+      .filter(p => p && p.file);
+    if (!targets.length) { showError("No page loaded."); return; }
     const label = cutoutBtn.textContent;
-    cutoutBtn.disabled = true; cutoutBtn.textContent = "Finding the page…";
+    cutoutBtn.disabled = true;
+    let cut = 0, skipped = 0, lastSize = "";
     try {
-      const fd = new FormData();
-      fd.append("file", p.file, p.name || "page.png");
-      const res = await fetch("/api/cutout", { method: "POST", body: fd });
-      if (!res.ok) {
-        let m = res.statusText;
-        try { m = (await res.json()).detail || m; } catch (_) {}
-        throw new Error(m);
+      for (let i = 0; i < targets.length; i++) {
+        cutoutBtn.textContent = targets.length > 1
+          ? `Finding the page ${i + 1}/${targets.length}…`
+          : "Finding the page…";
+        try {
+          lastSize = await cutoutOne(targets[i]);
+          cut++;
+        } catch (e) {
+          if (e.refused) { skipped++; continue; }
+          throw e;
+        }
+        // The strip updates as each page lands, so a long chapter shows its
+        // progress rather than freezing until the end.
+        renderStrip();
       }
-      const size = res.headers.get("X-Page-Size") || "";
-      const blob = await res.blob();
-      p.file = new File([blob], p.name || "page.png", { type: "image/png" });
-      p.size = blob.size;
-      try { URL.revokeObjectURL(p.thumb); } catch (_) {}
-      p.thumb = await makeThumb(p.file);
-      renderStrip(); updateBatch(); renderActivePage();
-      if (previewImg && pages.length === 1) previewImg.src = p.thumb;
+      updateBatch(); renderActivePage();
+      if (previewImg && pages.length === 1) previewImg.src = targets[0].thumb;
       if (orientNote) {
-        orientNote.textContent = `Cut the page out — now ${size}.`;
+        let msg;
+        if (targets.length === 1) {
+          msg = cut ? `Cut the page out — now ${lastSize}.`
+                    : "No page found in this photo — left alone.";
+        } else {
+          msg = `Cut the page out of ${cut} photo${cut === 1 ? "" : "s"}.`;
+          if (skipped) msg += ` ${skipped} had no page to find (or already filled the frame) — left alone.`;
+        }
+        orientNote.textContent = msg;
         clearTimeout(orientNote._t);
         orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
       }
