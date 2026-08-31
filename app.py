@@ -1725,6 +1725,60 @@ _TURNS = {
 }
 
 
+@app.post("/api/turn")
+async def turn_one(file: UploadFile = File(...), kind: str = Form(...)):
+    """One stateless turn, for the orientation bar's buttons.
+
+    Those buttons used to do this in the browser: decode, canvas-rotate and
+    PNG-encode every full-resolution photo on the page's own thread. On a real
+    chapter that froze the UI for half a minute with nothing to show for it,
+    and the buttons still took clicks — so pages got turned twice. cv2 does
+    the same pixel permutation here in a fraction of the time, off the
+    browser entirely. No task, no charge, and lossless by construction.
+    """
+    ops = {
+        "180": [cv2.ROTATE_180],
+        "left": [cv2.ROTATE_90_COUNTERCLOCKWISE],
+        "right": [cv2.ROTATE_90_CLOCKWISE],
+    }
+    if kind not in ops and kind != "mirror":
+        raise HTTPException(400, f"Unknown turn {kind!r}")
+    import tempfile
+    suffix = os.path.splitext(file.filename or "")[1] or ".png"
+    fd, tmp = tempfile.mkstemp(suffix=suffix, dir="uploads")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            shutil.copyfileobj(file.file, fh, 1024 * 1024)
+
+        def do_work():
+            img = cv2.imread(tmp)
+            if img is None:
+                raise ValueError("Could not read that image")
+            if kind == "mirror":
+                img = cv2.flip(img, 1)
+            else:
+                for op in ops[kind]:
+                    img = cv2.rotate(img, op)
+            ok, buf = cv2.imencode(".png", img)
+            if not ok:
+                raise ValueError("Could not encode the result")
+            return buf.tobytes(), img.shape
+
+        try:
+            data, shape = await asyncio.get_event_loop().run_in_executor(
+                None, do_work)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return Response(content=data, media_type="image/png",
+                        headers={"X-Page-Size": f"{shape[1]}x{shape[0]}",
+                                 **_NO_CACHE})
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 @app.post("/api/rotatepage")
 async def rotate_page_task(file: UploadFile = File(...),
                            turn: str = Form("cw"),

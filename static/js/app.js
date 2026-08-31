@@ -1167,9 +1167,27 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // The turn itself, on the server: cv2 permutes the pixels in a fraction of
+  // the time the canvas route took, and the browser's thread stays free. The
+  // canvas version below is kept as the fallback so the buttons still work
+  // if the request fails.
+  async function serverTurn(file, kind) {
+    const fd = new FormData();
+    fd.append("file", file, "page.png");
+    fd.append("kind", kind);
+    const res = await fetch("/api/turn", { method: "POST", body: fd });
+    if (!res.ok) throw new Error("server turn failed");
+    return await res.blob();
+  }
+
   async function reorientPage(p, kind) {
     if (!p || !p.file) return false;
-    const blob = await transformImage(p.file, kind);
+    let blob;
+    try {
+      blob = await serverTurn(p.file, kind);
+    } catch (_) {
+      blob = await transformImage(p.file, kind);
+    }
     const name = p.name || "page.png";
     p.file = new File([blob], name, { type: "image/png" });
     p.size = blob.size;
@@ -1653,25 +1671,45 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   async function applyOrient(kind, scope) {
+    // A second click while a run is going must NOT queue a second run: on a
+    // big chapter that is exactly how pages ended up turned twice — the bar
+    // looked dead, the user clicked again, and both runs went through.
+    if (applyOrient._busy) return;
+    applyOrient._busy = true;
     // scope: "all" / "active", or left out to follow the "every page" box.
     const all = scope ? scope === "all" : !!(orientAll && orientAll.checked);
     // Before anything is translated there is no active page yet, so fall back
     // to the first — that is the one on screen in the upload preview.
     const targets = all ? pages.filter(p => p.file)
                         : [getActive() || pages[0]].filter(p => p && p.file);
-    if (!targets.length) { showError("No page image to turn."); return; }
+    if (!targets.length) {
+      applyOrient._busy = false;
+      showError("No page image to turn."); return;
+    }
     const bar = document.getElementById("orientBar");
+    const btns = bar ? bar.querySelectorAll("button") : [];
+    btns.forEach(b => { b.disabled = true; });
     if (bar) bar.style.opacity = ".5";
     let done = 0, lost = 0;
     try {
-      for (const p of targets) {
+      for (let i = 0; i < targets.length; i++) {
+        if (orientNote && targets.length > 1)
+          orientNote.textContent = `Turning ${i + 1}/${targets.length}…`;
+        const p = targets[i];
         const had = p.status === "done";
-        if (await reorientPage(p, kind)) { done++; if (had) lost++; }
+        if (await reorientPage(p, kind)) {
+          done++; if (had) lost++;
+          // The strip keeps up as pages land, so a long chapter shows its
+          // progress instead of freezing until the end.
+          renderStrip();
+        }
       }
     } catch (e) {
       showError(e.message);
     } finally {
       if (bar) bar.style.opacity = "";
+      btns.forEach(b => { b.disabled = false; });
+      applyOrient._busy = false;
     }
     if (!done) return;
     const spec = ORIENT[kind];
@@ -1788,15 +1826,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (isCutPages(workflow)) {
       // Background removal for the whole batch: local, no key, no charge.
-      appendWm(f);
+      //
+      // NO watermark here, even when one is typed. Cutting out (like
+      // rotating) is a FIX-UP step: its output usually goes straight back in
+      // for cleaning or translation, and a mark baked into the intermediate
+      // pages would ride along into everything made from them. The final
+      // workflows stamp; the preparation ones do not.
       return { url: "/api/cutpage", form: f };
     }
     if (isRotatePages(workflow)) {
       // Rotate only, on the SERVER — the browser-side turn lags on a real
-      // chapter of full-resolution photos, this does not.
+      // chapter of full-resolution photos, this does not. No watermark, for
+      // the same reason as the cut-out above: this is preparation, not the
+      // release.
       const rt = document.getElementById("rotateTurn");
       f.append("turn", rt ? rt.value : "cw");
-      appendWm(f);
       return { url: "/api/rotatepage", form: f };
     }
     if (isRawify(workflow)) {
