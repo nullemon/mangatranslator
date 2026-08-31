@@ -4081,20 +4081,15 @@ document.addEventListener("DOMContentLoaded", () => {
     el.addEventListener("change", refreshWmPreview);
   });
   setTimeout(refreshWmPreview, 400);
-  const wmAllOut = document.getElementById("wmAllOut");
-  if (wmAllOut) {
-    wmAllOut.checked = localStorage.getItem("manga_wm_all") === "1";
-    wmAllOut.addEventListener("change", () =>
-      localStorage.setItem("manga_wm_all", wmAllOut.checked ? "1" : "0"));
-  }
   function appendWm(f) {
-    // watermark + credit for non-translate outputs, when the master toggle is on
+    // watermark + credit for non-translate outputs.
     //
-    // ...except in the Watermark-only workflow, where stamping IS the job.
-    // Gating it on the "also stamp other outputs" toggle meant the mark was
-    // never sent unless that box happened to be ticked, and the server then
-    // refused the whole run with "there is nothing to stamp".
-    if (!isStampOnly(workflow) && !(wmAllOut && wmAllOut.checked)) return;
+    // No gate. There used to be an "every output" toggle here, and it earned
+    // its removal twice: first the Watermark-only workflow refused whole runs
+    // with "there is nothing to stamp" because the box wasn't ticked, then
+    // Cut out pages shipped unmarked pages after the user had typed a mark
+    // and picked a style. A typed watermark IS the opt-in — and the clean
+    // twin is always kept, so an unmarked copy costs one click, not a rerun.
     if (watermarkInput && watermarkInput.value.trim()) {
       f.append("watermark", watermarkInput.value.trim());
       if (wmPlace) f.append("wm_place", wmPlace.value);

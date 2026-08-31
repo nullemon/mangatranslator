@@ -121,6 +121,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .setting-group.half{grid-column:span 2}
 .setting-group.full{grid-column:1/-1}
+/* A markedly taller group (the watermark block, with its preview) takes two
+   grid ROWS: its height is shared across them and the next row's fields sit
+   beside it, instead of one row being stretched to its height and every
+   neighbour growing a tower of empty space underneath. */
+.setting-group.tall{grid-row:span 2}
 .setting-group>label{
   font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;
   color:var(--text-faint);font-weight:600;
