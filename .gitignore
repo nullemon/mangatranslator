@@ -7,3 +7,6 @@ output/
 
 # Learned series style profiles (user data)
 profiles/
+
+# Downloaded model weights (auto-fetched on first use — never committed)
+models/
