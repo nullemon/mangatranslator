@@ -368,6 +368,16 @@
         </label>
         <!-- Stamp and nothing else: no models load and no key is needed, so a
              whole folder goes through in seconds. -->
+        <!-- Photos of pages -> just the pages, whole batch in one go.
+             Local model (or classical fallback), no key, nothing charged. -->
+        <label class="wf-card" data-wf="cut-pages">
+          <input type="radio" name="workflow" value="cut-pages">
+          <div class="wf-icon">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l18 18M3 21L21 3" opacity="0.25"/><path d="M7 5h11v15H7z"/><path d="M9.5 8.5h6M9.5 11.5h6M9.5 14.5h4"/><circle cx="5.5" cy="18.5" r="1.3"/><circle cx="5.5" cy="14.5" r="1.3"/><path d="M6.6 17.7L12 12.5M6.6 15.3L12 20.5" opacity="0.6"/></svg>
+          </div>
+          <span class="wf-title">Cut out pages — no key</span>
+          <span class="wf-desc">Photos on a desk or floor &rarr; just the pages, all in one go</span>
+        </label>
         <!-- No key, no API, no cost: arithmetic plus the local GPU model. -->
         <label class="wf-card" data-wf="local-clean">
           <input type="radio" name="workflow" value="local-clean">

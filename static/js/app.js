@@ -324,7 +324,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const needsScan = wf => wf === "raw-scan-translate" || wf === "raw-scan" || wf === "scan-upscale";
   const isClean = wf => wf === "clean";
   const isLocalClean = wf => wf === "local-clean";
-  const needsTranslate = wf => wf !== "local-clean" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
+  const isCutPages = wf => wf === "cut-pages";
+  const needsTranslate = wf => wf !== "local-clean" && wf !== "cut-pages" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
   const isUpscaleOnly = wf => wf === "upscale-only";
   // Both go to /api/rawify; "watermark-only" just passes style "none", so the
   // page comes back stamped and otherwise untouched.
@@ -390,7 +391,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "raw-translate": "Translate Raw", "raw-scan": "Enhance to Scan",
       "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
       "scan-raw": "Make it Raw", "watermark-only": "Watermark Pages",
-      "local-clean": "Clean It (no key)",
+      "local-clean": "Clean It (no key)", "cut-pages": "Cut Out Pages",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
     if (window.updateCutBtn) window.updateCutBtn();
@@ -1691,6 +1692,11 @@ document.addEventListener("DOMContentLoaded", () => {
       appendWm(f);
       return { url: "/api/localclean", form: f };
     }
+    if (isCutPages(workflow)) {
+      // Background removal for the whole batch: local, no key, no charge.
+      appendWm(f);
+      return { url: "/api/cutpage", form: f };
+    }
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
       f.append("strength", rawStrength ? rawStrength.value : "1");
@@ -1946,6 +1952,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     : workflow === "scan-raw" ? "Clean" : "Original";
     // (watermark-only falls through to "Original" / "Watermarked" below)
     const rightLabel = workflow === "local-clean" ? "Cleaned"
+                     : workflow === "cut-pages" ? "Page only"
                      : workflow === "watermark-only" ? "Watermarked"
                      : workflow === "upscale-only" ? "Upscaled HD"
                      : workflow === "scan-upscale" ? "Scan + HD"
@@ -1953,6 +1960,7 @@ document.addEventListener("DOMContentLoaded", () => {
                      : workflow === "scan-raw" ? "Raw feel"
                      : "Translated";
     const tabLabel = workflow === "local-clean" ? "Clean"
+                   : workflow === "cut-pages" ? "Cut"
                    : workflow === "watermark-only" ? "Stamped"
                    : workflow === "raw-scan" ? "Scan"
                    : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"

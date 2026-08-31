@@ -1622,6 +1622,90 @@ async def _run_local_clean(task_id: str, image_path: str, output_path: str,
                                "error": str(e)})
 
 
+@app.post("/api/cutpage")
+async def cut_page_task(file: UploadFile = File(...),
+                        watermark: str = Form(""), wm_place: str = Form("br"),
+                        wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                        wm_style: str = Form("clean"), credit: str = Form("")):
+    """The whole-batch version of ✂ Cut out the page: photos in, pages out.
+
+    Each photo has its background — carpet, desk, whatever it was lying on —
+    found and cut away, as its own task so a folder of photos runs through
+    the ordinary batch machinery in one go. Local, no key, nothing charged.
+
+    A photo with no background to remove is NOT an error here: in a bulk run
+    the honest answer is to pass it through untouched with a note, so one
+    already-clean page never stops a chapter.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_cut.png"
+    # No compress_upload here: the whole promise of the cut is that the
+    # surviving pixels are the originals, so the original file is kept.
+    with open(upload_path, "wb") as f:
+        f.write(await file.read())
+
+    tasks[task_id] = {
+        "status": "processing", "step": 1, "message": "Queued", "progress": 0,
+        "upload_path": upload_path, "name": file.filename or "page.png",
+        "mode": "cutpage",
+    }
+    wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
+              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+              wm_size=wm_size.strip() or "m", credit=credit.strip(),
+              wm_style=wm_style.strip() or "clean")
+    asyncio.create_task(_run_cut_page(task_id, upload_path, output_path, wm))
+    return {"task_id": task_id}
+
+
+async def _run_cut_page(task_id: str, image_path: str, output_path: str,
+                        wm: dict = None):
+    try:
+        from core.pagecut import cut_page, engine
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            tasks[task_id].update({"step": 1, "progress": 30,
+                                   "message": "Finding the page..."})
+            out, _mask = cut_page(img)
+            untouched = out.shape == img.shape
+            _write_atomic(output_path, out)
+            return out.shape, untouched
+
+        (shape, untouched) = await asyncio.get_event_loop().run_in_executor(
+            None, do_work)
+        if wm and not untouched:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                          wm.get("wm_style", "clean"))
+        if untouched:
+            msg = ("No background found — the page already fills the frame, "
+                   "so it was passed through untouched")
+        else:
+            msg = (f"Background cut away — {shape[1]}x{shape[0]}, "
+                   f"{'AI' if engine() == 'ai' else 'basic'} cutter, "
+                   "no API used")
+            if engine() == "basic":
+                msg += (" · rougher edge: install the AI cutter with "
+                        "pip install rembg onnxruntime")
+        tasks[task_id].update({
+            "status": "done", "step": 2, "progress": 100, "message": msg,
+            "result": {"output_path": output_path, "translations": {}},
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        })
+    except Exception as e:
+        print(f"[cutpage] failed: {e}")
+        tasks[task_id].update({"status": "error", "message": str(e),
+                               "error": str(e)})
+
+
 @app.post("/api/upscale")
 async def upscale_only(file: UploadFile = File(...),
                        gpu_cap: str = Form("100"),
