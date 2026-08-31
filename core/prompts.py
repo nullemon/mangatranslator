@@ -108,9 +108,13 @@ Rules:
 - "tone" is HOW the line is said, for choosing a typeface: "shout" (angry,
   yelled, a spiky balloon or huge lettering), "whisper" (small or trailing
   off), "thought" (inner voice, a cloud balloon), "narration" (a caption
-  box), "title", "sfx", or "dialogue" for ordinary speech. You can see the
-  panel, so judge it from the face, the balloon shape and the size of the
-  original lettering — not from punctuation alone.
+  box), "title", "sfx", "goofy" (comic relief — a gag line, a silly face, a
+  character playing the fool), "eerie" (an ominous or supernatural voice —
+  a villain's dripping balloon, a curse, something speaking from the dark),
+  or "dialogue" for ordinary speech. You can see the panel, so judge it from
+  the face, the balloon shape and the size of the original lettering — not
+  from punctuation alone. Use "goofy" and "eerie" sparingly: only when the
+  panel clearly plays the line that way.
 - Skip regions with no readable text or already in {target_lang}.
 - Return ONLY the JSON array.{_style_block(style)}"""
 

@@ -27,7 +27,8 @@ import re
 from typing import Dict, List, Optional
 
 #: the voices a line can be given, in the order a tie is broken
-ROLES = ("sfx", "title", "narration", "shout", "thought", "whisper", "dialogue")
+ROLES = ("sfx", "title", "narration", "shout", "thought", "whisper",
+         "goofy", "eerie", "dialogue")
 
 #: What each voice wants from a typeface, best first.
 #:
@@ -42,26 +43,47 @@ ROLES = ("sfx", "title", "narration", "shout", "thought", "whisper", "dialogue")
 #: wedding invitation. A role with nothing suitable installed now falls back to
 #: the page's own dialogue font, which is always the safer answer: one honest
 #: typeface beats a wrong one.
+#: Names are matched with spaces/underscores/dashes squashed out, so the
+#: files can keep whatever name they arrived under — "Blambot Classic BB
+#: W00 Italic.ttf" matches "blambotclassicbb" as it stands.
 ROLE_FONTS: Dict[str, List[str]] = {
-    # Ordinary speech. Wild Words and Anime Ace are the two standards.
-    "dialogue": ["wildwords", "ccwildwords", "animeace", "animeace2_reg",
-                 "mangatemple", "komikaaxis", "digitalstrip", "backissues",
-                 "comicneue"],
-    # The same voice, raised: the BOLD cut of the dialogue face.
-    "shout": ["wildwords-bold", "wildwordsbold", "animeace_b", "animeace2_bld",
-              "komikaaxis-bold", "badaboom", "bangers", "anton"],
+    # Ordinary speech. Blambot Classic first — it is what the user letters
+    # dialogue with — then Meanwhile (the JJK speech face), then Wild Words
+    # and Anime Ace, the two old standards.
+    "dialogue": ["blambotclassicbb", "meanwhilecc", "meanwhile", "wildwords",
+                 "ccwildwords", "animeace", "animeace2reg", "mangatemple",
+                 "komikaaxis", "digitalstrip", "backissues", "comicneue"],
+    # The raised voice. Kennebunkport bold is the scanlation shout standard
+    # (TCB among others); Brushzerker and BeatDown are the user's own angry
+    # faces from released chapters; the bold cut of the dialogue face is the
+    # last resort.
+    "shout": ["kennebunkportbold", "kennebunkport", "brushzerkerbb",
+              "bbbeatdown", "beatdown", "wildwordsbold", "animeaceb",
+              "animeace2bld", "komikaaxisbold", "badaboom", "bangers",
+              "anton"],
     # A noise, not speech — the loudest, most distorted face available.
     "sfx": ["badaboom", "komikahand", "komikaaxis", "bangers", "anton",
             "reggaeone"],
     # A caption box is a different voice from speech, but still a comic face.
     "narration": ["ccastrocity", "mangatemple", "komikaslim", "digitalstrip",
                   "backissues"],
-    # Inner voice: the dialogue face, slanted and a touch smaller.
-    "thought": ["wildwords-italic", "animeace2_ital", "komikaslim"],
+    # Inner voice, the fluffy cloud balloon: Indie Star is drawn for exactly
+    # that, so it goes on upright; the italic cuts of the speech faces are
+    # the fallback.
+    "thought": ["indiestarbbreg", "indiestarbb", "meanwhileccitalic",
+                "wildwordsitalic", "animeace2ital", "komikaslim"],
     # Chapter titles and signage.
     "title": ["badaboom", "komikaaxis", "mangatemple", "bangers", "anton"],
     # Quiet speech: the dialogue face, smaller.
     "whisper": [],
+    # Comic relief — a gag line from a character playing the fool. The
+    # "w00regular" spelling matches the file as it arrives (a "W00" web cut
+    # sits mid-name, so plain "...regular" would never be a substring).
+    "goofy": ["ccdanpanosianw00regular", "ccdanpanosianregular",
+              "ccdanpanosian"],
+    # The ominous voice: a villain's balloon, a curse, something speaking
+    # from the dark. Soothsayer is what official lettering reaches for.
+    "eerie": ["ccsoothsayer"],
 }
 
 #: Free faces worth installing, and where they come from. Printed by
@@ -77,7 +99,12 @@ SUGGESTED = [
 ]
 
 #: Roles that should also be slanted, on top of the font choice.
-ITALIC_ROLES = {"thought", "whisper"}
+#:
+#: Thought ONLY. The letterer's rule, verbatim from the user's team: "only
+#: ever use italic if it's thought bubbles or character thoughts in general".
+#: Whisper used to slant too, and that read as a thought — a whisper is just
+#: smaller, which ROLE_SCALE already handles.
+ITALIC_ROLES = {"thought"}
 
 #: Roles set a little smaller than the box would otherwise give.
 #:
@@ -140,18 +167,32 @@ def normalise(tone: str) -> str:
         "announcement": "title", "sign": "title", "heading": "title",
         "sound": "sfx", "sound_effect": "sfx", "onomatopoeia": "sfx",
         "normal": "dialogue", "speech": "dialogue", "neutral": "dialogue",
+        "silly": "goofy", "comedic": "goofy", "comedy": "goofy",
+        "funny": "goofy", "playful": "goofy", "joking": "goofy",
+        "gag": "goofy",
+        "creepy": "eerie", "ominous": "eerie", "sinister": "eerie",
+        "spooky": "eerie", "haunting": "eerie", "menacing": "eerie",
+        "demonic": "eerie", "evil": "eerie", "supernatural": "eerie",
     }
     return alias.get(t, "")
 
 
+def _squash(name: str) -> str:
+    """Lowercase and drop the separators. Real font files arrive as
+    "Blambot Classic BB W00 Italic.ttf" or "indiestarbb_reg.ttf" — spaces,
+    underscores and dashes are packaging noise, not identity."""
+    return re.sub(r"[\s_\-]+", "", name.lower())
+
+
 def _index(fonts_dir: str = "fonts") -> Dict[str, str]:
-    """Everything installed, keyed by a lowercased stem, so the table above can
-    name a font without knowing its exact filename or case."""
+    """Everything installed, keyed by a squashed lowercase stem, so the table
+    above can name a font without knowing its exact filename, case or
+    separator style."""
     out = {}
     try:
         for n in sorted(os.listdir(fonts_dir)):
             if n.lower().endswith((".ttf", ".otf")):
-                out[os.path.splitext(n)[0].lower()] = os.path.join(fonts_dir, n)
+                out[_squash(os.path.splitext(n)[0])] = os.path.join(fonts_dir, n)
     except OSError:
         pass
     return out
@@ -171,12 +212,13 @@ def build_map(base_font: Optional[str] = None, fonts_dir: str = "fonts",
         pick = ""
         for want in ROLE_FONTS.get(role, []):
             # CLOSEST match, not the first one found. "wildwords" is a
-            # substring of "wildwords-bold" as well, and the bold sorts first
+            # substring of "wildwordsbold" as well, and the bold sorts first
             # on disk, so a plain first-hit search handed ordinary dialogue the
             # shouting cut of its own face. The shortest stem that contains the
             # name is the one that IS that name.
+            w = _squash(want)
             hits = [(len(stem), path) for stem, path in have.items()
-                    if want in stem]
+                    if w in stem]
             if hits:
                 pick = min(hits)[1]
                 break
@@ -189,9 +231,15 @@ def build_map(base_font: Optional[str] = None, fonts_dir: str = "fonts",
 
 
 def style_for(item: dict, font_map: Dict[str, str], base_font: str = ""):
-    """(font_path, italic, size_scale) for one region."""
+    """(font_path, italic, size_scale, role) for one region."""
     role = normalise(item.get("tone", "")) or infer_tone(
         item.get("translation", ""), item.get("type", ""),
         bool(item.get("dark")))
     path = font_map.get(role) or base_font
-    return path, role in ITALIC_ROLES, ROLE_SCALE.get(role, 1.0), role
+    # Synthetic slant only when the role FELL BACK to the page's own font —
+    # that slant is what distinguishes a thought from speech when both wear
+    # the same face. A font picked FOR the role is used as it was drawn:
+    # Indie Star is a thought face already, and slanting it (or a file that
+    # is already an italic cut) just mangles the letterforms.
+    fallback = not path or path == (base_font or font_map.get("dialogue", ""))
+    return path, role in ITALIC_ROLES and fallback, ROLE_SCALE.get(role, 1.0), role
