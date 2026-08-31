@@ -1002,7 +1002,19 @@ class TranslationPipeline:
         print(f"[pipeline]   balloon detect : {c['detector']}")
         print(f"[pipeline]   manga-ocr      : {mark(c['manga_ocr'])}")
         print(f"[pipeline]   free-text CRAFT: {mark(c['free_text_detector_craft'])}")
-        print(f"[pipeline]   text-pixel seg : {mark(c['text_pixel_seg'])}")
+        # Reported from the session's OWN provider, not from the global
+        # device: installing plain `onnxruntime` over `onnxruntime-gpu`
+        # silently drops this one model to CPU while everything else stays
+        # on the GPU, and the banner used to say GPU/ON regardless.
+        try:
+            from .text_seg import provider as _ts_provider
+            tsp = _ts_provider()
+        except Exception:
+            tsp = ""
+        ts_note = (" — ON CPU: slow! reinstall onnxruntime-gpu"
+                   if (c["text_pixel_seg"] and tsp == "cpu" and dev == "cuda")
+                   else "")
+        print(f"[pipeline]   text-pixel seg : {mark(c['text_pixel_seg'])}{ts_note}")
         print(f"[pipeline]   LaMa inpaint   : {mark(c['lama_inpaint'])}")
         print(f"[pipeline]   upscaler       : {mark(c['upscaler'])}")
         print(f"[pipeline]   RTL shaping    : {mark(c['raqm_rtl_shaping'])} (raqm)")

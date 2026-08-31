@@ -124,6 +124,19 @@ def _load():
     return _SESSION
 
 
+def provider() -> str:
+    """Which device the loaded session actually runs on: "cuda", "cpu", or
+    "" when nothing is loaded. ORT can list CUDA as available, fail to load
+    its libraries, and quietly run on CPU — and installing the plain
+    `onnxruntime` package over `onnxruntime-gpu` (as a stray
+    `pip install rembg` does) downgrades this to CPU silently. Surfacing the
+    truth here is what lets the pipeline banner stop lying about it."""
+    if _SESSION is None:
+        return ""
+    used = (_SESSION.get_providers() or ["CPUExecutionProvider"])[0]
+    return "cuda" if used == "CUDAExecutionProvider" else "cpu"
+
+
 class TextSegmenter:
     """Page-level text stroke mask + text-block boxes.
     Lazy: nothing heavy happens until `ok`."""

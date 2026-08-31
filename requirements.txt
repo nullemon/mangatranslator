@@ -29,5 +29,13 @@ python-bidi>=0.4.2
 # outline where the classical cues can only draw a hull around it. The model
 # (~176MB) downloads itself on first use. Both run fine on CPU; without them
 # the cut-out still works, just with a rougher edge.
+#
+# WARNING for GPU installs: the plain `onnxruntime` package OVERWRITES the
+# module that `onnxruntime-gpu` (from setup_gpu.sh) provides, silently
+# dropping the comic-text-detector to CPU — cleaning a page went from a
+# couple of seconds to half a minute exactly this way. If the pipeline
+# banner says the text-pixel seg is ON CPU while everything else is CUDA:
+#   pip uninstall -y onnxruntime onnxruntime-gpu && pip install onnxruntime-gpu
+# (rembg runs happily on the GPU build too.)
 rembg>=2.0.60
 onnxruntime>=1.17.0
