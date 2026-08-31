@@ -10,3 +10,11 @@ profiles/
 
 # Downloaded model weights (auto-fetched on first use — never committed)
 models/
+
+# User-added lettering fonts: licensed files (Blambot, Comicraft) must never
+# land in a public repo. The fonts that SHIP with the app are already tracked
+# and stay tracked — ignore rules never untrack a file — so this only hides
+# new additions.
+fonts/*.ttf
+fonts/*.TTF
+fonts/*.otf
