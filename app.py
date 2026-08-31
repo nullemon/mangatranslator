@@ -412,11 +412,20 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
 
     `place` = tl/tr/bl/br/random for point styles; for ribbon it picks the
     top or bottom edge. `opacity` 0-100."""
+    style = (style or "clean").lower()
+    # "clean+tile" (or any style "+tile"): the chosen mark AND a faint tile
+    # pass over the whole page, in one go — the corner stamp signs the page,
+    # the tile makes it not worth stealing. The tile layer goes on gentler
+    # than the main mark so the two read as one design.
+    if style.endswith("+tile") and len(style) > 5:
+        _stamp_watermark(image_path, text, place, opacity, size, style[:-5])
+        _stamp_watermark(image_path, text, place,
+                         max(12, int(int(opacity or 50) * 0.55)), size, "tile")
+        return
     img = cv2.imread(image_path)
     if img is None:
         return
     h, w = img.shape[:2]
-    style = (style or "clean").lower()
     if place == "tile":                       # legacy value from old configs
         style, place = "tile", "br"
     alpha = int(np.clip(int(opacity or 50), 5, 100) * 255 / 100)

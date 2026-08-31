@@ -185,8 +185,12 @@
             </select>
             <input type="number" id="wmOpacity" min="10" max="100" step="5" value="70"
                    style="width:76px" title="Opacity %">
-            <label class="toggle" style="margin:0" title="Also stamp on Upscale HD, Scan → Raw and AI-scan outputs (not just translations)."><input type="checkbox" id="wmAllOut"><span class="toggle-slider"></span></label>
+            <label class="toggle" style="margin:0" title="Stamp EVERY page of every workflow — Upscale HD, Scan → Raw, Clean — no key, Cut out pages and AI-scan outputs alike, not just translations."><input type="checkbox" id="wmAllOut"><span class="toggle-slider"></span></label>
             <span class="toggle-hint" style="margin:0">every output</span>
+          </div>
+          <div class="inline-row" style="margin-top:6px;align-items:center">
+            <label class="toggle" style="margin:0" title="On top of the style above, repeat the mark faintly across the whole page — your corner stamp signs it AND the tile covers it, in one pass. (Does nothing extra when the style is already Tiled.)"><input type="checkbox" id="wmTileToo"><span class="toggle-slider"></span></label>
+            <span class="toggle-hint" style="margin:0">＋ tiled all over as well</span>
           </div>
           <img id="wmPreview" alt="Watermark preview" style="margin-top:8px;width:100%;max-width:340px;border-radius:8px;border:1px solid rgba(128,128,128,.25);display:none">
         </div>

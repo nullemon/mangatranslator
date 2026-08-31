@@ -1623,7 +1623,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (wmPlace) f.append("wm_place", wmPlace.value);
         if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
         if (wmSize) f.append("wm_size", wmSize.value);
-        if (wmStyle) f.append("wm_style", wmStyle.value);
+        if (wmStyle) f.append("wm_style", wmStyleValue());
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -1665,7 +1665,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (wmPlace) f.append("wm_place", wmPlace.value);
         if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
         if (wmSize) f.append("wm_size", wmSize.value);
-        if (wmStyle) f.append("wm_style", wmStyle.value);
+        if (wmStyle) f.append("wm_style", wmStyleValue());
       }
       if (creditInput && creditInput.value.trim()) {
         f.append("credit", creditInput.value.trim());
@@ -4036,10 +4036,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const wmStyle = document.getElementById("wmStyle");
   const wmPreview = document.getElementById("wmPreview");
+  const wmTileToo = document.getElementById("wmTileToo");
   if (wmStyle) {
     wmStyle.value = localStorage.getItem("manga_wm_style") || "clean";
     wmStyle.addEventListener("change", () => localStorage.setItem("manga_wm_style", wmStyle.value));
   }
+  if (wmTileToo) {
+    wmTileToo.checked = localStorage.getItem("manga_wm_tile_too") === "1";
+    wmTileToo.addEventListener("change", () =>
+      localStorage.setItem("manga_wm_tile_too", wmTileToo.checked ? "1" : "0"));
+  }
+  // The style actually sent: the picked one, with "+tile" folded in when the
+  // "tiled all over as well" box is on — the corner mark signs the page, the
+  // tile covers it. Already-Tiled needs no second tiling.
+  window.wmStyleValue = function () {
+    const base = wmStyle ? wmStyle.value : "clean";
+    return (wmTileToo && wmTileToo.checked && base !== "tile")
+      ? base + "+tile" : base;
+  };
   let _wmPrevTimer = null;
   function refreshWmPreview() {
     if (!wmPreview) return;
@@ -4049,7 +4063,7 @@ document.addEventListener("DOMContentLoaded", () => {
     _wmPrevTimer = setTimeout(() => {
       const q = new URLSearchParams({
         text: txt,
-        style: wmStyle ? wmStyle.value : "clean",
+        style: wmStyleValue(),
         place: wmPlace ? wmPlace.value : "br",
         opacity: wmOpacity ? wmOpacity.value : 70,
         size: wmSize ? wmSize.value : "m",
@@ -4059,7 +4073,7 @@ document.addEventListener("DOMContentLoaded", () => {
       wmPreview.style.display = "";
     }, 350);
   }
-  [watermarkInput, wmStyle, document.getElementById("wmPlace"),
+  [watermarkInput, wmStyle, wmTileToo, document.getElementById("wmPlace"),
    document.getElementById("wmSize"), document.getElementById("wmOpacity"),
    creditInput].forEach(el => {
     if (!el) return;
@@ -4086,7 +4100,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (wmPlace) f.append("wm_place", wmPlace.value);
       if (wmOpacity) f.append("wm_opacity", wmOpacity.value);
       if (wmSize) f.append("wm_size", wmSize.value);
-      if (wmStyle) f.append("wm_style", wmStyle.value);
+      if (wmStyle) f.append("wm_style", wmStyleValue());
     }
     if (creditInput && creditInput.value.trim()) f.append("credit", creditInput.value.trim());
   }
@@ -4112,7 +4126,7 @@ document.addEventListener("DOMContentLoaded", () => {
           wm_place: wmPlace ? wmPlace.value : "br",
           wm_opacity: wmOpacity ? wmOpacity.value : 50,
           wm_size: wmSize ? wmSize.value : "m",
-          wm_style: wmStyle ? wmStyle.value : "clean",
+          wm_style: wmStyleValue(),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
