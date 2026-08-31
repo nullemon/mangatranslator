@@ -2730,7 +2730,7 @@ async def cutout(file: UploadFile = File(...)):
     photo alone rather than mangle it.
     """
     import tempfile
-    from core.pagecut import cut_page
+    from core.pagecut import cut_page, engine
     suffix = os.path.splitext(file.filename or "")[1] or ".png"
     fd, tmp = tempfile.mkstemp(suffix=suffix, dir="uploads")
     try:
@@ -2751,6 +2751,7 @@ async def cutout(file: UploadFile = File(...)):
             raise HTTPException(500, "Could not encode the result")
         return Response(content=buf.tobytes(), media_type="image/png",
                         headers={"X-Page-Size": f"{out.shape[1]}x{out.shape[0]}",
+                                 "X-Cutout-Engine": engine(),
                                  **_NO_CACHE})
     finally:
         try:

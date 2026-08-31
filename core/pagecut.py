@@ -46,6 +46,18 @@ as the largest connected NEUTRAL region instead. Chroma is only trusted as a
 fallback because it fails in its own way — a genuinely grey carpet — and on
 exactly those photos the carpet blurs softer than print, which is the case the
 detail cue already wins.
+
+And the fourth lesson is that hand-built cues have a ceiling. The chroma hull
+keeps the artwork perfectly but pays for it with a wedge of carpet at every
+corner, because a convex hull cannot follow a bowed page edge. Tracing the
+actual boundary is a segmentation problem, and a small local model (U2-Net,
+via rembg — the standard background remover) solves it outright: on the same
+photos it hugs the sheet's true outline, spine dip and curled corners
+included, in about a third of a second on CPU. So when rembg is installed its
+mask is used first, cleaned up with the same page-sized/full-frame sanity
+rules as everything else, and the classical cues remain as the fallback for
+an install without it. Nothing here imports rembg at startup — the first
+cut-out pays the model load, and an install without the package never does.
 """
 import cv2
 import numpy as np
@@ -72,6 +84,70 @@ def _detail(gray):
 #: a hull covering this much of the frame means the cue did not actually
 #: separate page from floor — it just said "everything".
 FULL_FRAME = 0.92
+
+#: the U2-Net session, made once and kept. None = not tried yet;
+#: False = rembg is not installed (or broke), so don't try again.
+_NN = None
+
+
+def _neural_keep(small: np.ndarray):
+    """The sheet as U2-Net sees it, or None when the model cannot help.
+
+    The mask is trusted for its BOUNDARY — that is what the hand-built cues
+    cannot do — but it still passes the same sanity rules as every other cue:
+    interior holes are page (a colour panel or a dark splash is still the
+    page), only page-sized bodies count, and a mask that is nearly the whole
+    frame means there is no background to remove.
+    """
+    global _NN
+    if _NN is False:
+        return None
+    if _NN is None:
+        try:
+            from rembg import new_session, remove
+            _NN = (new_session("u2net"), remove)
+        except Exception:
+            _NN = False
+            print("[pagecut] for a far better page cut-out: "
+                  "pip install rembg onnxruntime")
+            return None
+    sess, remove = _NN
+    try:
+        m = remove(cv2.cvtColor(small, cv2.COLOR_BGR2RGB),
+                   session=sess, only_mask=True)
+    except Exception:
+        return None
+    if m is None:
+        return None
+    if m.ndim == 3:
+        m = m[..., 0]
+    sh, sw = small.shape[:2]
+    if m.shape[:2] != (sh, sw):
+        m = cv2.resize(m, (sw, sh), interpolation=cv2.INTER_LINEAR)
+    keep = (m > 127).astype(np.uint8) * 255
+    # Holes inside the sheet are the sheet.
+    flood = cv2.copyMakeBorder(keep, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    ffm = np.zeros((sh + 4, sw + 4), np.uint8)
+    cv2.floodFill(flood, ffm, (0, 0), 255)
+    keep = keep | cv2.bitwise_not(flood[1:-1, 1:-1])
+    # Specks are not pages; every page-sized body is (a spread can split).
+    o = max(3, int(min(sh, sw) * 0.01)) | 1
+    keep = cv2.morphologyEx(keep, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                      (o, o)))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(keep, 8)
+    big = [i for i in range(1, n)
+           if stats[i, cv2.CC_STAT_AREA] >= MIN_PAGE * sh * sw]
+    if not big:
+        return None
+    keep = (np.isin(lab, big).astype(np.uint8)) * 255
+    # A hair of margin, for the model's tendency to sit exactly on the edge.
+    g = max(3, int(min(sh, sw) * 0.008)) | 1
+    keep = cv2.dilate(keep,
+                      cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (g, g)))
+    if int(cv2.countNonZero(keep)) > FULL_FRAME * sh * sw:
+        return None
+    return keep
 
 
 def _hull_of(cand: np.ndarray):
@@ -122,9 +198,15 @@ def page_mask(img: np.ndarray) -> np.ndarray:
     sh, sw = small.shape[:2]
     keep_all = np.full((h, w), 255, np.uint8)
 
-    # First cue: the page is the busy region. Relative to this photo's own
-    # detail, with a floor so that a picture of nothing much does not have its
-    # noise promoted into "print".
+    # The model first, when it is installed: it traces the sheet's actual
+    # outline, which no hand-built cue below can do.
+    nn = _neural_keep(small)
+    if nn is not None:
+        return cv2.resize(nn, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    # First classical cue: the page is the busy region. Relative to this
+    # photo's own detail, with a floor so that a picture of nothing much does
+    # not have its noise promoted into "print".
     det = _detail(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY))
     thr = max(6.0, float(np.percentile(det, 65)))
     out = _hull_of((det > thr).astype(np.uint8) * 255)
@@ -191,6 +273,12 @@ def page_mask(img: np.ndarray) -> np.ndarray:
     if out is None or int(cv2.countNonZero(out)) > FULL_FRAME * sh * sw:
         return keep_all
     return cv2.resize(out, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def engine() -> str:
+    """Which cutter did the last cut: "ai" once the model has loaded and run,
+    "basic" while it has not (not installed, or not called on yet)."""
+    return "ai" if _NN not in (None, False) else "basic"
 
 
 def cut_page(img: np.ndarray, background=(255, 255, 255), pad: int = 2):

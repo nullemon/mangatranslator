@@ -1490,6 +1490,7 @@ document.addEventListener("DOMContentLoaded", () => {
       throw err;
     }
     const size = res.headers.get("X-Page-Size") || "";
+    cutoutOne.engine = res.headers.get("X-Cutout-Engine") || "";
     const blob = await res.blob();
     p.file = new File([blob], p.name || "page.png", { type: "image/png" });
     p.size = blob.size;
@@ -1532,6 +1533,12 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           msg = `Cut the page out of ${cut} photo${cut === 1 ? "" : "s"}.`;
           if (skipped) msg += ` ${skipped} had no page to find (or already filled the frame) — left alone.`;
+        }
+        // The AI cutter follows the page's real outline; the basic one can
+        // only draw a hull round it. Worth saying when the better one is
+        // sitting uninstalled.
+        if (cut && cutoutOne.engine === "basic") {
+          msg += " (Rough edge? Install the AI cutter: pip install rembg onnxruntime — then restart.)";
         }
         orientNote.textContent = msg;
         clearTimeout(orientNote._t);

@@ -20,3 +20,9 @@ fonttools>=4.22.0
 # visually-ordered glyphs so it isn't drawn disconnected and backwards.
 arabic-reshaper>=3.0.0
 python-bidi>=0.4.2
+# The page cut-out ("✂ Cut out the page"): U2-Net traces the sheet's real
+# outline where the classical cues can only draw a hull around it. The model
+# (~176MB) downloads itself on first use. Both run fine on CPU; without them
+# the cut-out still works, just with a rougher edge.
+rembg>=2.0.60
+onnxruntime>=1.17.0
