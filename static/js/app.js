@@ -295,6 +295,14 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     gemini: {
       label: "Gemini API Key", placeholder: "AIza...", storageKey: "manga_key_gemini",
+      // Google hands out free-tier API keys (rate-limited, no card). That is
+      // the honest answer to "make it free": same pipeline, real bubble
+      // coordinates, and no driving a logged-in browser through the consumer
+      // app — which risks the very account it borrows.
+      freeHint: {
+        text: "No key? Google gives out FREE Gemini API keys (rate-limited, no card) → aistudio.google.com",
+        url: "https://aistudio.google.com/apikey",
+      },
       // The "×" figures are what a page costs RELATIVE to Flash-Lite, worked
       // out from Google's list prices. They are rough and they will drift, but
       // the ordering is the point: Pro is not a little dearer than Flash, it is
@@ -417,6 +425,16 @@ document.addEventListener("DOMContentLoaded", () => {
     apiKeyInput.placeholder = cfg.placeholder;
     apiKeyInput.value = localStorage.getItem(cfg.storageKey) || "";
     showSaved(apiKeyStatus, apiKeyInput.value.trim());
+    const keyHint = document.getElementById("apiKeyHint");
+    if (keyHint) {
+      if (cfg.freeHint) {
+        keyHint.textContent = cfg.freeHint.text;
+        keyHint.href = cfg.freeHint.url;
+        keyHint.style.display = "";
+      } else {
+        keyHint.style.display = "none";
+      }
+    }
     modelSelect.innerHTML = "";
     for (const m of cfg.models) {
       const opt = document.createElement("option");
