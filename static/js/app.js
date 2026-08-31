@@ -570,7 +570,11 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (_) {}
     }
     await loadFonts();
-    if (last) {
+    // Auto-select ONLY on a single add. Someone dropping a whole folder of
+    // mood fonts (shout cuts, thought faces, the eerie voice) is stocking
+    // the shelf, not choosing a page font — and this used to set the main
+    // dialogue font to whichever file happened to upload last.
+    if (last && files.length === 1) {
       fontSelect.value = last;
       localStorage.setItem("manga_font", last);
     }

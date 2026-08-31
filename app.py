@@ -3304,11 +3304,17 @@ async def annotated(task_id: str):
 async def upload_font(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith((".ttf", ".otf")):
         raise HTTPException(400, "Upload a .ttf or .otf font file")
-    dest = f"fonts/{file.filename}"
+    # The NAME is kept exactly as it arrived — spaces, caps, W00 infixes —
+    # because the mood table matches on it. Only the directory part is
+    # stripped: a filename is not a path, and a crafted "../" must not be.
+    name = os.path.basename(file.filename)
+    if not name or name.startswith("."):
+        raise HTTPException(400, "That filename can't be used")
+    dest = f"fonts/{name}"
     content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
-    return {"message": f"Font '{file.filename}' uploaded", "path": dest}
+    return {"message": f"Font '{name}' uploaded", "path": dest}
 
 
 @app.get("/api/fonts")
