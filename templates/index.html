@@ -197,7 +197,7 @@
               <option value="m" selected>Medium</option>
               <option value="l">Large</option>
             </select>
-            <input type="number" id="wmOpacity" min="10" max="100" step="5" value="70"
+            <input type="number" id="wmOpacity" min="10" max="100" step="5" value="50"
                    style="width:76px" title="Opacity %">
             <label class="toggle" style="margin:0" title="On top of the style above, repeat the mark faintly across the whole page — your corner stamp signs it AND the tile covers it, in one pass. (Does nothing extra when the style is already Tiled.)"><input type="checkbox" id="wmTileToo"><span class="toggle-slider"></span></label>
             <span class="toggle-hint" style="margin:0">＋ tiled all over as well</span>
@@ -389,10 +389,10 @@
           <span class="wf-title">Cut out pages — no key</span>
           <span class="wf-desc">Photos on a desk or floor &rarr; just the pages, all in one go</span>
         </label>
-        <!-- Rotate ONLY, server-side. The orientation bar can turn a chapter
-             too, but it does it in the browser — decode, rotate, re-encode
-             of every full-resolution photo — and on a real chapter that
-             lags badly. Here each page is one task on the server instead. -->
+        <!-- Rotate ONLY, as a batch: each page is one server task with the
+             ordinary progress and ZIP downloads. The orientation bar turns
+             pages too (also server-side now); this card is the whole-chapter
+             front door with a direction picker and a downloadable result. -->
         <label class="wf-card" data-wf="rotate-pages">
           <input type="radio" name="workflow" value="rotate-pages">
           <div class="wf-icon">
@@ -565,7 +565,7 @@
         <button class="btn btn-ghost btn-sm" id="trimRight" title="Same for the right edge">Trim right ⇥</button>
         <button class="btn btn-ghost btn-sm" id="trimTop" title="Same for the top edge">⇡ Top</button>
         <button class="btn btn-ghost btn-sm" id="trimBottom" title="Same for the bottom edge">⇣ Bottom</button>
-        <label class="orient-all" title="Applies to the turn, cut-out and trim buttons alike — a chapter scanned badly is usually scanned that way on every page"><input type="checkbox" id="orientAll"> every page</label>
+        <label class="orient-all" title="Applies to the turn and cut-out buttons — a chapter scanned badly is usually scanned that way on every page. Trims stay one page at a time on purpose: each cut is placed by hand."><input type="checkbox" id="orientAll"> every page</label>
         <!-- The exit door: after bulk-turning / trimming / cutting a chapter,
              take the fixed files straight back out — no workflow, no API. -->
         <button class="btn btn-sm" id="savePagesBtn" style="margin-left:14px" title="Download every loaded page exactly as it is right now — after turning, trimming or cutting — packed into one ZIP. Pure download: nothing is processed and nothing is charged. Tip: to bulk-rotate a whole chapter, upload the zip or photos, tick 'every page', click a turn button, then this.">⬇ Save pages as ZIP</button>

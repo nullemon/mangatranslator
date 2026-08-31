@@ -1103,12 +1103,19 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function pump() {
+    // The generation guard: Start Over zeroes `running` while a page may
+    // still be in flight, and that page's cleanup used to decrement AGAIN —
+    // running went to -1 and the next batch ran two GPU jobs at once.
     while (running < MAX_CONCURRENT) {
       const next = pages.find(p => p.status === "queued");
       if (!next) break;
       next.status = "processing";
       running++;
-      processPage(next).finally(() => { running--; pump(); });
+      const gen = pump._gen || 0;
+      processPage(next).finally(() => {
+        if ((pump._gen || 0) === gen) running--;
+        pump();
+      });
     }
     renderStrip();
   }
@@ -1120,10 +1127,11 @@ document.addEventListener("DOMContentLoaded", () => {
      glance from the text, but until now the only fix was to leave the app,
      re-edit the file and upload it again.
 
-     The turn is done here in the browser on the page's own image, so it costs
-     nothing and needs no round trip. It rewrites the file that gets sent, which
-     is what makes it a real fix rather than a display trick: detection, OCR and
-     the translation all then see a page the right way up. */
+     The turn happens on the server (/api/turn) — the canvas fallback below
+     runs only if that request fails. Either way it rewrites the file that
+     gets sent, which is what makes it a real fix rather than a display
+     trick: detection, OCR and the translation all then see a page the right
+     way up. */
   const ORIENT = {
     "180":    { label: "flipped 180°",   swap: false, rotate: Math.PI,      flip: false },
     "mirror": { label: "mirrored",       swap: false, rotate: 0,            flip: true  },
@@ -1204,6 +1212,10 @@ document.addEventListener("DOMContentLoaded", () => {
       p.items = []; p.excluded = new Set(); p.erased = new Set();
       p.glows = new Set(); p.fits = new Set();
       p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+      // These three were surviving the reset and being posted verbatim on
+      // the next re-render — old erase boxes and hand-added bubbles painted
+      // onto the turned page at pre-turn coordinates.
+      p.covers = []; p.added = []; p.rotations = {};
     }
     p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
     return true;
@@ -1523,12 +1535,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (cutoutBtn) cutoutBtn.addEventListener("click", async () => {
+    if (applyOrient._busy) return;
     const every = !!(orientAll && orientAll.checked);
     const targets = (every ? pages : [getActive() || pages[0]])
       .filter(p => p && p.file);
     if (!targets.length) { showError("No page loaded."); return; }
     const label = cutoutBtn.textContent;
-    cutoutBtn.disabled = true;
+    orientLock(true);
     let cut = 0, skipped = 0, lastSize = "";
     try {
       for (let i = 0; i < targets.length; i++) {
@@ -1570,7 +1583,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       showError(e.message);
     } finally {
-      cutoutBtn.disabled = false; cutoutBtn.textContent = label;
+      orientLock(false); cutoutBtn.textContent = label;
     }
   });
 
@@ -1630,10 +1643,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const savePagesBtn = document.getElementById("savePagesBtn");
   if (savePagesBtn) savePagesBtn.addEventListener("click", async () => {
+    if (applyOrient._busy) return;
     const targets = pages.filter(p => p && p.file);
     if (!targets.length) { showError("No pages loaded."); return; }
     const label = savePagesBtn.textContent;
-    savePagesBtn.disabled = true;
+    orientLock(true);
     try {
       const files = [], seen = new Set();
       for (let i = 0; i < targets.length; i++) {
@@ -1666,9 +1680,21 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       showError(e.message);
     } finally {
-      savePagesBtn.disabled = false; savePagesBtn.textContent = label;
+      orientLock(false); savePagesBtn.textContent = label;
     }
   });
+
+  // ONE lock for the whole orientation bar. Every tool in it — the turns,
+  // the auto-fix, the cut-out, the zip export — rewrites or reads the same
+  // page files, so any of them running means all of them are off-limits:
+  // two running at once double-turned pages and clobbered cut-outs.
+  function orientLock(on) {
+    applyOrient._busy = on;
+    const bar = document.getElementById("orientBar");
+    if (!bar) return;
+    bar.style.opacity = on ? ".5" : "";
+    bar.querySelectorAll("button").forEach(b => { b.disabled = on; });
+  }
 
   async function applyOrient(kind, scope) {
     // A second click while a run is going must NOT queue a second run: on a
@@ -1686,10 +1712,7 @@ document.addEventListener("DOMContentLoaded", () => {
       applyOrient._busy = false;
       showError("No page image to turn."); return;
     }
-    const bar = document.getElementById("orientBar");
-    const btns = bar ? bar.querySelectorAll("button") : [];
-    btns.forEach(b => { b.disabled = true; });
-    if (bar) bar.style.opacity = ".5";
+    orientLock(true);
     let done = 0, lost = 0;
     try {
       for (let i = 0; i < targets.length; i++) {
@@ -1707,9 +1730,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       showError(e.message);
     } finally {
-      if (bar) bar.style.opacity = "";
-      btns.forEach(b => { b.disabled = false; });
-      applyOrient._busy = false;
+      orientLock(false);
     }
     if (!done) return;
     const spec = ORIENT[kind];
@@ -1814,13 +1835,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (isUpscaleOnly(workflow)) {
       // Faithful HD upscale, no translation and no API keys needed.
+      f.append("compress", compressOut && compressOut.checked ? "true" : "false");
+      f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       appendWm(f);
       return { url: "/api/upscale", form: f };
     }
     if (isLocalClean(workflow)) {
       // Nothing but this machine: no key is read and none is sent.
+      // "true" : "true" — both branches identical, so unticking HD Upscale
+      // did nothing and every clean still paid for the GPU pass. The toggle
+      // now actually decides.
       const hd = document.getElementById("hdUpscale");
-      f.append("hd", hd && hd.checked ? "true" : "true");
+      f.append("hd", hd && hd.checked ? "true" : "false");
+      f.append("compress", compressOut && compressOut.checked ? "true" : "false");
+      f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       appendWm(f);
       return { url: "/api/localclean", form: f };
     }
@@ -1848,6 +1876,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("strength", rawStrength ? rawStrength.value : "1");
       f.append("style", isStampOnly(workflow) ? "none"
                : (rawStyle ? rawStyle.value : "photo"));
+      f.append("compress", compressOut && compressOut.checked ? "true" : "false");
+      f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       appendWm(f);
       return { url: "/api/rawify", form: f };
     }
@@ -1868,6 +1898,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function processPage(page) {
     page.error = ""; page.progress = 0; page.step = 0; page.message = "Queued";
+    // The page remembers which workflow made it: the result panes and tabs
+    // must describe THIS page, not whatever card happens to be selected when
+    // the user is setting up the next job.
+    page.workflow = workflow;
     try {
       const { url, form } = buildRequest(page.file);
       const res = await fetch(url, { method: "POST", body: form });
@@ -1902,6 +1936,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.glows = new Set();
             page.fits = new Set();
             page.boxes = {};
+            page.covers = []; page.added = []; page.rotations = {};
             page.rev++;
             renderStrip(); updateBatch();
             if (page.uid === activeUid) renderActivePage();
@@ -1949,10 +1984,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // leaving an inverted one for the ⟳ button.
   const orientAuto = document.getElementById("orientAuto");
   if (orientAuto) orientAuto.addEventListener("click", async () => {
+    if (applyOrient._busy) return;
     const targets = pages.filter(p => p.file);
     if (!targets.length) { showError("No pages loaded to check."); return; }
     const say = (t) => { if (orientNote) orientNote.textContent = t; };
-    orientAuto.disabled = true;
+    orientLock(true);
     const label = orientAuto.textContent;
     const flip = [], unsure = [];
     try {
@@ -1994,7 +2030,7 @@ document.addEventListener("DOMContentLoaded", () => {
         orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 10000);
       }
     } finally {
-      orientAuto.disabled = false;
+      orientLock(false);
       orientAuto.textContent = label;
     }
   });
@@ -2077,6 +2113,10 @@ document.addEventListener("DOMContentLoaded", () => {
     batchStatus.textContent = `${done} / ${pages.length} done` + (err ? ` · ${err} failed` : "");
     batchProgressFill.style.width = (pages.length ? (done / pages.length * 100) : 0) + "%";
     zipBtn.disabled = done === 0;
+    // The clean-ZIP button was never disabled, so before anything finished
+    // it looked live and clicking it silently produced nothing.
+    const zc = document.getElementById("zipCleanBtn");
+    if (zc) zc.disabled = done === 0;
   }
 
   addPagesBtn.addEventListener("click", () => fileInput.click());
@@ -2093,26 +2133,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     // Result is image-only (no translation) for the scan / upscale workflows —
     // label the panes accordingly so it never says "Translated" when it didn't.
-    const noTranslate = !needsTranslate(workflow);
-    const leftLabel = (workflow === "raw-scan" || workflow === "scan-upscale") ? "Rough"
-                    : workflow === "scan-raw" ? "Clean" : "Original";
+    // Keyed on the workflow that made THIS page, not the live picker: a
+    // finished translation was relabelling itself "Upscaled HD" (and losing
+    // its Details tab) the moment another card was clicked to set up the
+    // next job. Pages from before this fix have no record, so they fall
+    // back to the picker exactly as before.
+    const wf = p.workflow || workflow;
+    const noTranslate = !needsTranslate(wf);
+    const leftLabel = (wf === "raw-scan" || wf === "scan-upscale") ? "Rough"
+                    : wf === "scan-raw" ? "Clean" : "Original";
     // (watermark-only falls through to "Original" / "Watermarked" below)
-    const rightLabel = workflow === "local-clean" ? "Cleaned"
-                     : workflow === "cut-pages" ? "Page only"
-                     : workflow === "rotate-pages" ? "Turned"
-                     : workflow === "watermark-only" ? "Watermarked"
-                     : workflow === "upscale-only" ? "Upscaled HD"
-                     : workflow === "scan-upscale" ? "Scan + HD"
-                     : workflow === "raw-scan" ? "Manga Scan"
-                     : workflow === "scan-raw" ? "Raw feel"
+    const rightLabel = wf === "local-clean" ? "Cleaned"
+                     : wf === "cut-pages" ? "Page only"
+                     : wf === "rotate-pages" ? "Turned"
+                     : wf === "watermark-only" ? "Watermarked"
+                     : wf === "upscale-only" ? "Upscaled HD"
+                     : wf === "scan-upscale" ? "Scan + HD"
+                     : wf === "raw-scan" ? "Manga Scan"
+                     : wf === "scan-raw" ? "Raw feel"
                      : "Translated";
-    const tabLabel = workflow === "local-clean" ? "Clean"
-                   : workflow === "cut-pages" ? "Cut"
-                   : workflow === "rotate-pages" ? "Turned"
-                   : workflow === "watermark-only" ? "Stamped"
-                   : workflow === "raw-scan" ? "Scan"
-                   : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"
-                   : workflow === "scan-raw" ? "Raw"
+    const tabLabel = wf === "local-clean" ? "Clean"
+                   : wf === "cut-pages" ? "Cut"
+                   : wf === "rotate-pages" ? "Turned"
+                   : wf === "watermark-only" ? "Stamped"
+                   : wf === "raw-scan" ? "Scan"
+                   : (wf === "upscale-only" || wf === "scan-upscale") ? "HD"
+                   : wf === "scan-raw" ? "Raw"
                    : "Translated";
 
     if (p.status === "done") {
@@ -2469,9 +2515,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const edits = {};
     (page.items || []).forEach(it => { edits[it.id] = it.translation; });
 
+    // BOTH apply buttons go quiet, not just the one that was pressed — there
+    // is one on the Details tab and one on the Translated tab, and leaving
+    // the other live let a second click look like a second render.
     const useBtn = btn || applyBtn;
+    const otherBtn = [applyBtn, document.getElementById("editApply")]
+      .find(b => b && b !== useBtn);
     const label = useBtn.textContent;
     useBtn.disabled = true; useBtn.textContent = "Re-rendering...";
+    if (otherBtn) otherBtn.disabled = true;
     try {
       const res = await fetch(`/api/rerender/${page.taskId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -2521,6 +2573,7 @@ document.addEventListener("DOMContentLoaded", () => {
       showError(e.message);
     } finally {
       useBtn.disabled = false; useBtn.textContent = label;
+      if (otherBtn) otherBtn.disabled = false;
     }
   }
 
@@ -2681,7 +2734,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const page = getActive();
     if (!page || !page.taskId) return;
     const key = apiKeyInput.value.trim();
-    if (!key) { editHint.textContent = "Enter your API key first."; return; }
+    // The offline engine needs no key — and with it selected the key field
+    // is hidden, so demanding one here was a door with no handle.
+    if (!key && !(ENGINE_CONFIG[engineSelect.value] || {}).offline) {
+      editHint.textContent = "Enter your API key first."; return;
+    }
     collectEdits(page);
     const label = rescanBtn.textContent;
     rescanBtn.disabled = true; rescanBtn.textContent = "Scanning…";
@@ -3663,7 +3720,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     back.querySelector("#roGo").onclick = async () => {
       const msg = back.querySelector(".ro-msg");
-      if (!apiKeyInput.value.trim()) { msg.textContent = "Add your API key first."; return; }
+      if (!apiKeyInput.value.trim()
+          && !(ENGINE_CONFIG[engineSelect.value] || {}).offline) {
+        msg.textContent = "Add your API key first."; return;
+      }
       pushUndo(page); persist();
       const btn = back.querySelector("#roGo");
       btn.disabled = true; btn.textContent = "Re-translating…";
@@ -4163,17 +4223,29 @@ document.addEventListener("DOMContentLoaded", () => {
   transFull.addEventListener("load", () => { if (tool) buildOverlay(); });
 
   /* ══ DOWNLOAD / ZIP / NEW ══ */
-  function downloadPage(withWatermark) {
+  async function downloadPage(withWatermark) {
     const p = getActive();
     if (!p || p.status !== "done") return;
-    const a = document.createElement("a");
-    a.href = `/api/result/${p.taskId}?t=${p.rev}` +
-             (withWatermark ? "" : "&watermark=0");
     const chN = (chapterName && chapterName.value.trim()) || "";
     const stem = (p.name || "page.png").replace(/\.[^.]+$/, "");
-    a.download = (chN ? chN + " - " + stem : "translated_" + stem) +
-                 (withWatermark ? "" : " (no watermark)") + ".png";
-    a.click();
+    // Named by what the server actually sends, not ".png" on faith: with
+    // Compress Output on, the result is a JPEG, and a JPEG called .png
+    // breaks opening it in Photoshop. (The ZIP path learned this first.)
+    try {
+      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}` +
+                              (withWatermark ? "" : "&watermark=0"));
+      if (!res.ok) throw new Error("download failed");
+      const blob = await res.blob();
+      const ext = blob.type === "image/jpeg" ? ".jpg" : ".png";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (chN ? chN + " - " + stem : "translated_" + stem) +
+                   (withWatermark ? "" : " (no watermark)") + ext;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    } catch (e) {
+      showError(e.message);
+    }
   }
 
   downloadBtn.addEventListener("click", () => downloadPage(true));
@@ -4213,7 +4285,7 @@ document.addEventListener("DOMContentLoaded", () => {
         text: txt,
         style: wmStyleValue(),
         place: wmPlace ? wmPlace.value : "br",
-        opacity: wmOpacity ? wmOpacity.value : 70,
+        opacity: wmOpacity ? wmOpacity.value : 50,
         size: wmSize ? wmSize.value : "m",
         credit: (creditInput && creditInput.value.trim()) || "",
       });
@@ -4318,7 +4390,8 @@ document.addEventListener("DOMContentLoaded", () => {
   translateScanBtn.addEventListener("click", async () => {
     const p = getActive();
     if (!p || p.status !== "done") return;
-    if (!apiKeyInput.value.trim()) {
+    if (!apiKeyInput.value.trim()
+        && !(ENGINE_CONFIG[engineSelect.value] || {}).offline) {
       apiKeyInput.focus(); apiKeyInput.style.borderColor = "#f87171"; return;
     }
     apiKeyInput.style.borderColor = "";
@@ -4333,6 +4406,7 @@ document.addEventListener("DOMContentLoaded", () => {
       p.thumb = URL.createObjectURL(blob);
       p.status = "queued"; p.taskId = null; p.result = null;
       p.items = []; p.excluded = new Set(); p.erased = new Set(); p.glows = new Set(); p.fits = new Set(); p.offsets = {}; p.colors = {}; p.fontScales = {}; p.boxes = {};
+      p.covers = []; p.added = []; p.rotations = {};
       p.error = ""; p.rev = 0;
       renderStrip(); updateBatch(); renderActivePage();
       pump();
@@ -4621,6 +4695,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function resetAll() {
     pages.forEach(p => { try { URL.revokeObjectURL(p.thumb); } catch (_) {} });
     pages = []; activeUid = null; running = 0;
+    pump._gen = (pump._gen || 0) + 1;   // in-flight cleanups no longer count
     fileInput.value = "";
     previewRow.style.display = "none";
     dropZone.style.display = "";

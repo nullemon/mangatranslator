@@ -1531,6 +1531,8 @@ async def _run_enhance(
 async def local_clean(file: UploadFile = File(...),
                       gpu_cap: str = Form("100"),
                       hd: str = Form("true"),
+                      compress: str = Form("false"),
+                      max_quality: str = Form("false"),
                       watermark: str = Form(""), wm_place: str = Form("br"),
                       wm_opacity: str = Form("50"), wm_size: str = Form("m"),
                       wm_style: str = Form("clean"), credit: str = Form("")):
@@ -1558,7 +1560,9 @@ async def local_clean(file: UploadFile = File(...),
     ext = Path(file.filename or "img.png").suffix or ".png"
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}_clean.png"
-    content = compress_upload(await file.read())
+    # Maximum Quality and Compress Output sat in the always-visible Options
+    # grid promising generic behaviour, and this endpoint ignored both.
+    content = compress_upload(await file.read(), full=(max_quality == "true"))
     with open(upload_path, "wb") as f:
         f.write(content)
 
@@ -1572,12 +1576,14 @@ async def local_clean(file: UploadFile = File(...),
               wm_size=wm_size.strip() or "m", credit=credit.strip(),
               wm_style=wm_style.strip() or "clean")
     asyncio.create_task(_run_local_clean(task_id, upload_path, output_path,
-                                         hd == "true", wm))
+                                         hd == "true", wm,
+                                         compress == "true"))
     return {"task_id": task_id}
 
 
 async def _run_local_clean(task_id: str, image_path: str, output_path: str,
-                           hd: bool = True, wm: dict = None):
+                           hd: bool = True, wm: dict = None,
+                           compress: bool = False):
     try:
         from core.effects import clean_page_nokey
         note = []
@@ -1612,6 +1618,9 @@ async def _run_local_clean(task_id: str, image_path: str, output_path: str,
             return out.shape
 
         shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        if compress:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: compress_output(output_path))
         if wm:
             _stamp_output(output_path, wm["watermark"], wm["wm_place"],
                           wm["wm_opacity"], wm["wm_size"], wm["credit"],
@@ -1857,6 +1866,8 @@ async def _run_rotate_page(task_id: str, image_path: str, output_path: str,
 @app.post("/api/upscale")
 async def upscale_only(file: UploadFile = File(...),
                        gpu_cap: str = Form("100"),
+                       compress: str = Form("false"),
+                       max_quality: str = Form("false"),
                        watermark: str = Form(""), wm_place: str = Form("br"),
                        wm_opacity: str = Form("50"), wm_size: str = Form("m"),
                        wm_style: str = Form("clean"),
@@ -1874,7 +1885,7 @@ async def upscale_only(file: UploadFile = File(...),
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}_hd.png"
 
-    content = compress_upload(await file.read())
+    content = compress_upload(await file.read(), full=(max_quality == "true"))
     with open(upload_path, "wb") as f:
         f.write(content)
 
@@ -1892,7 +1903,8 @@ async def upscale_only(file: UploadFile = File(...),
               wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
               wm_size=wm_size.strip() or "m", credit=credit.strip(),
               wm_style=wm_style.strip() or "clean")
-    asyncio.create_task(_run_upscale(task_id, upload_path, output_path, wm))
+    asyncio.create_task(_run_upscale(task_id, upload_path, output_path, wm,
+                                     compress == "true"))
     return {"task_id": task_id}
 
 
@@ -1900,6 +1912,8 @@ async def upscale_only(file: UploadFile = File(...),
 async def rawify_only(file: UploadFile = File(...),
                       strength: str = Form("1.0"),
                       style: str = Form("photo"),
+                      compress: str = Form("false"),
+                      max_quality: str = Form("false"),
                       watermark: str = Form(""), wm_place: str = Form("br"),
                       wm_opacity: str = Form("50"), wm_size: str = Form("m"),
                       wm_style: str = Form("clean"),
@@ -1917,7 +1931,7 @@ async def rawify_only(file: UploadFile = File(...),
     ext = Path(file.filename or "img.png").suffix or ".png"
     upload_path = f"uploads/{task_id}{ext}"
     output_path = f"output/{task_id}_raw.png"
-    content = compress_upload(await file.read())
+    content = compress_upload(await file.read(), full=(max_quality == "true"))
     with open(upload_path, "wb") as f:
         f.write(content)
     tasks[task_id] = {
@@ -1940,13 +1954,13 @@ async def rawify_only(file: UploadFile = File(...),
               wm_size=wm_size.strip() or "m", credit=credit.strip(),
               wm_style=wm_style.strip() or "clean")
     asyncio.create_task(_run_rawify(task_id, upload_path, output_path,
-                                    stren, wstyle, wm))
+                                    stren, wstyle, wm, compress == "true"))
     return {"task_id": task_id}
 
 
 async def _run_rawify(task_id: str, image_path: str, output_path: str,
                       strength: float = 1.0, style: str = "photo",
-                      wm: dict = None):
+                      wm: dict = None, compress: bool = False):
     try:
         stamp_only = style == "none"
         tasks[task_id].update({"step": 1, "progress": 30,
@@ -1963,6 +1977,9 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
             return out.shape
 
         shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        if compress:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: compress_output(output_path))
         if wm:
             _stamp_output(output_path, wm["watermark"], wm["wm_place"],
                           wm["wm_opacity"], wm["wm_size"], wm["credit"],
@@ -1984,7 +2001,7 @@ async def _run_rawify(task_id: str, image_path: str, output_path: str,
 
 
 async def _run_upscale(task_id: str, image_path: str, output_path: str,
-                       wm: dict = None):
+                       wm: dict = None, compress: bool = False):
     try:
         from core.upscale import Upscaler
         tasks[task_id].update({"step": 1, "progress": 10,
@@ -2006,6 +2023,9 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str,
 
         loop = asyncio.get_event_loop()
         shape = await loop.run_in_executor(None, do_work)
+        if compress:
+            output_path = await loop.run_in_executor(
+                None, lambda: compress_output(output_path))
         if wm:
             _stamp_output(output_path, wm["watermark"], wm["wm_place"],
                           wm["wm_opacity"], wm["wm_size"], wm["credit"],
@@ -2665,10 +2685,12 @@ async def rescan(task_id: str, request: Request):
     except Exception:
         raise HTTPException(400, "Invalid JSON body")
     api_key = (payload.get("api_key") or "").strip()
-    if not api_key:
+    provider = payload.get("provider", "claude")
+    # The offline engine has no key to give — every other editor endpoint
+    # already exempts it; this one was the odd man out.
+    if not api_key and provider not in ("local", "offline"):
         raise HTTPException(400, "api_key is required")
     target_lang = payload.get("target_lang", "English")
-    provider = payload.get("provider", "claude")
     model = payload.get("model", "")
     style_prompt = payload.get("style_prompt", "")
 
