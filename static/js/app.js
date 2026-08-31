@@ -1558,6 +1558,96 @@ document.addEventListener("DOMContentLoaded", () => {
     if (b) b.addEventListener("click", () => openTrim(side));
   });
 
+  // ══ SAVE PAGES AS ZIP ══
+  // The exit door for the fix-up tools. Turning, trimming and cutting all
+  // rewrite the page files in place, but until now the only way to get those
+  // files BACK was to run a workflow — so "bulk rotate a zip" meant paying
+  // for processing nobody asked for. This zips the pages exactly as they
+  // stand, in the browser, and hands the file over. Entries are STORED, not
+  // deflated: PNG and JPEG are already compressed, so deflate would spend
+  // seconds to save nothing.
+  const _CRC_T = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+  const _crc32 = u8 => {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < u8.length; i++) c = _CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  };
+  function _writeZip(files) {           // [{name, u8}] -> Blob
+    const enc = new TextEncoder(), locals = [], central = [];
+    let off = 0;
+    for (const f of files) {
+      const nb = enc.encode(f.name), sum = _crc32(f.u8);
+      const lh = new Uint8Array(30 + nb.length), lv = new DataView(lh.buffer);
+      lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+      lv.setUint32(14, sum, true); lv.setUint32(18, f.u8.length, true);
+      lv.setUint32(22, f.u8.length, true); lv.setUint16(26, nb.length, true);
+      lh.set(nb, 30); locals.push(lh, f.u8);
+      const ch = new Uint8Array(46 + nb.length), cv2_ = new DataView(ch.buffer);
+      cv2_.setUint32(0, 0x02014b50, true); cv2_.setUint16(4, 20, true);
+      cv2_.setUint16(6, 20, true); cv2_.setUint32(16, sum, true);
+      cv2_.setUint32(20, f.u8.length, true); cv2_.setUint32(24, f.u8.length, true);
+      cv2_.setUint16(28, nb.length, true); cv2_.setUint32(42, off, true);
+      ch.set(nb, 46); central.push(ch);
+      off += lh.length + f.u8.length;
+    }
+    const cd = central.reduce((a, b) => a + b.length, 0);
+    const e = new Uint8Array(22), ev = new DataView(e.buffer);
+    ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true); ev.setUint32(12, cd, true);
+    ev.setUint32(16, off, true);
+    return new Blob([...locals, ...central, e], { type: "application/zip" });
+  }
+
+  const savePagesBtn = document.getElementById("savePagesBtn");
+  if (savePagesBtn) savePagesBtn.addEventListener("click", async () => {
+    const targets = pages.filter(p => p && p.file);
+    if (!targets.length) { showError("No pages loaded."); return; }
+    const label = savePagesBtn.textContent;
+    savePagesBtn.disabled = true;
+    try {
+      const files = [], seen = new Set();
+      for (let i = 0; i < targets.length; i++) {
+        savePagesBtn.textContent = `Packing ${i + 1}/${targets.length}…`;
+        const p = targets[i];
+        // The tools re-encode as PNG but keep the upload's name; the entry
+        // in the zip should not claim to be a JPEG when it is not.
+        let name = p.name || `page-${i + 1}.png`;
+        if ((p.file.type === "image/png") && !/\.png$/i.test(name))
+          name = name.replace(/\.[^.]*$/, "") + ".png";
+        while (seen.has(name.toLowerCase()))
+          name = name.replace(/(\.[^.]*)$/, "-2$1");
+        seen.add(name.toLowerCase());
+        files.push({ name, u8: new Uint8Array(await p.file.arrayBuffer()) });
+      }
+      savePagesBtn.textContent = "Packing…";
+      const blob = _writeZip(files);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const cn = document.getElementById("chapterName");
+      a.download = ((cn && cn.value.trim()) || "pages") + ".zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      if (orientNote) {
+        orientNote.textContent =
+          `Saved ${files.length} page${files.length === 1 ? "" : "s"} as they are now — nothing was processed.`;
+        clearTimeout(orientNote._t);
+        orientNote._t = setTimeout(() => { orientNote.textContent = ""; }, 9000);
+      }
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      savePagesBtn.disabled = false; savePagesBtn.textContent = label;
+    }
+  });
+
   async function applyOrient(kind, scope) {
     // scope: "all" / "active", or left out to follow the "every page" box.
     const all = scope ? scope === "all" : !!(orientAll && orientAll.checked);

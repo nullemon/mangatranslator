@@ -544,6 +544,9 @@
         <button class="btn btn-ghost btn-sm" id="trimTop" title="Same for the top edge">⇡ Top</button>
         <button class="btn btn-ghost btn-sm" id="trimBottom" title="Same for the bottom edge">⇣ Bottom</button>
         <label class="orient-all" title="Applies to the turn, cut-out and trim buttons alike — a chapter scanned badly is usually scanned that way on every page"><input type="checkbox" id="orientAll"> every page</label>
+        <!-- The exit door: after bulk-turning / trimming / cutting a chapter,
+             take the fixed files straight back out — no workflow, no API. -->
+        <button class="btn btn-sm" id="savePagesBtn" style="margin-left:14px" title="Download every loaded page exactly as it is right now — after turning, trimming or cutting — packed into one ZIP. Pure download: nothing is processed and nothing is charged. Tip: to bulk-rotate a whole chapter, upload the zip or photos, tick 'every page', click a turn button, then this.">⬇ Save pages as ZIP</button>
         <span class="orient-note" id="orientNote"></span>
       </div>
 
