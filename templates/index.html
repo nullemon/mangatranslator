@@ -388,6 +388,18 @@
           <span class="wf-title">Cut out pages — no key</span>
           <span class="wf-desc">Photos on a desk or floor &rarr; just the pages, all in one go</span>
         </label>
+        <!-- Rotate ONLY, server-side. The orientation bar can turn a chapter
+             too, but it does it in the browser — decode, rotate, re-encode
+             of every full-resolution photo — and on a real chapter that
+             lags badly. Here each page is one task on the server instead. -->
+        <label class="wf-card" data-wf="rotate-pages">
+          <input type="radio" name="workflow" value="rotate-pages">
+          <div class="wf-icon">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 5h11v15H8z" opacity="0.35"/><path d="M4 8a8 8 0 0 1 14-3"/><path d="M18 2v3h-3"/></svg>
+          </div>
+          <span class="wf-title">Rotate only — no key</span>
+          <span class="wf-desc">Turn the whole batch 90°/180°, nothing else — no lag</span>
+        </label>
         <!-- No key, no API, no cost: arithmetic plus the local GPU model. -->
         <label class="wf-card" data-wf="local-clean">
           <input type="radio" name="workflow" value="local-clean">
@@ -405,6 +417,15 @@
           <span class="wf-title">Watermark only</span>
           <span class="wf-desc">Just stamp the pages — no translating, no key</span>
         </label>
+      </div>
+      <!-- Which way, for the Rotate-only workflow. -->
+      <div class="size-control" id="rotatePanel" style="display:none; margin-top:10px">
+        <label for="rotateTurn">Turn every page</label>
+        <select id="rotateTurn" style="width:210px" title="Which way each page is turned">
+          <option value="cw" selected>⟳ 90° right (clockwise)</option>
+          <option value="ccw">⟲ 90° left (anticlockwise)</option>
+          <option value="180">↻ 180° — upside down</option>
+        </select>
       </div>
       <div class="size-control" id="rawIntensityPanel" style="display:none; margin-top:10px">
         <select id="rawStyle" style="width:210px" title="Raw style">

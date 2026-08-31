@@ -325,7 +325,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const isClean = wf => wf === "clean";
   const isLocalClean = wf => wf === "local-clean";
   const isCutPages = wf => wf === "cut-pages";
-  const needsTranslate = wf => wf !== "local-clean" && wf !== "cut-pages" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
+  const isRotatePages = wf => wf === "rotate-pages";
+  const needsTranslate = wf => wf !== "local-clean" && wf !== "cut-pages" && wf !== "rotate-pages" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
   const isUpscaleOnly = wf => wf === "upscale-only";
   // Both go to /api/rawify; "watermark-only" just passes style "none", so the
   // page comes back stamped and otherwise untouched.
@@ -383,6 +384,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (rawIntensityPanel)
       rawIntensityPanel.style.display =
         (isRawify(wf) && !isStampOnly(wf)) ? "" : "none";
+    const rotatePanel = document.getElementById("rotatePanel");
+    if (rotatePanel) rotatePanel.style.display = isRotatePages(wf) ? "" : "none";
     // Keep the Settings panel always visible (it's collapsible) so the top menu
     // never disappears when switching to Raw → Scan / upscale workflows.
     document.querySelector(".settings-bar").style.display = "";
@@ -392,6 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
       "upscale-only": "Upscale to HD", "scan-upscale": "Enhance + Upscale",
       "scan-raw": "Make it Raw", "watermark-only": "Watermark Pages",
       "local-clean": "Clean It (no key)", "cut-pages": "Cut Out Pages",
+      "rotate-pages": "Rotate Pages",
     }[wf] || "Go";
     localStorage.setItem("manga_workflow", wf);
     if (window.updateCutBtn) window.updateCutBtn();
@@ -1787,6 +1791,14 @@ document.addEventListener("DOMContentLoaded", () => {
       appendWm(f);
       return { url: "/api/cutpage", form: f };
     }
+    if (isRotatePages(workflow)) {
+      // Rotate only, on the SERVER — the browser-side turn lags on a real
+      // chapter of full-resolution photos, this does not.
+      const rt = document.getElementById("rotateTurn");
+      f.append("turn", rt ? rt.value : "cw");
+      appendWm(f);
+      return { url: "/api/rotatepage", form: f };
+    }
     if (isRawify(workflow)) {
       // Deterministic rough-raw effect: no models, no API keys.
       f.append("strength", rawStrength ? rawStrength.value : "1");
@@ -2043,6 +2055,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // (watermark-only falls through to "Original" / "Watermarked" below)
     const rightLabel = workflow === "local-clean" ? "Cleaned"
                      : workflow === "cut-pages" ? "Page only"
+                     : workflow === "rotate-pages" ? "Turned"
                      : workflow === "watermark-only" ? "Watermarked"
                      : workflow === "upscale-only" ? "Upscaled HD"
                      : workflow === "scan-upscale" ? "Scan + HD"
@@ -2051,6 +2064,7 @@ document.addEventListener("DOMContentLoaded", () => {
                      : "Translated";
     const tabLabel = workflow === "local-clean" ? "Clean"
                    : workflow === "cut-pages" ? "Cut"
+                   : workflow === "rotate-pages" ? "Turned"
                    : workflow === "watermark-only" ? "Stamped"
                    : workflow === "raw-scan" ? "Scan"
                    : (workflow === "upscale-only" || workflow === "scan-upscale") ? "HD"

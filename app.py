@@ -1715,6 +1715,91 @@ async def _run_cut_page(task_id: str, image_path: str, output_path: str,
                                "error": str(e)})
 
 
+#: the three turns, spelt the way cv2 spells them. A quarter turn twice is
+#: what 180 uses on purpose: cv2.ROTATE_180 exists, but naming it here keeps
+#: the mapping table the single place a turn is defined.
+_TURNS = {
+    "cw":  ([cv2.ROTATE_90_CLOCKWISE], "90° right"),
+    "ccw": ([cv2.ROTATE_90_COUNTERCLOCKWISE], "90° left"),
+    "180": ([cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_CLOCKWISE], "180°"),
+}
+
+
+@app.post("/api/rotatepage")
+async def rotate_page_task(file: UploadFile = File(...),
+                           turn: str = Form("cw"),
+                           watermark: str = Form(""), wm_place: str = Form("br"),
+                           wm_opacity: str = Form("50"), wm_size: str = Form("m"),
+                           wm_style: str = Form("clean"), credit: str = Form("")):
+    """Rotate only, as a workflow: a whole zip or folder of sideways photos
+    in, the same pages turned the chosen way out — with the ordinary batch
+    progress and ZIP downloads, and nothing else done to them.
+
+    cv2.rotate on the raw upload is a pure pixel permutation, so this is
+    lossless by construction; the upload is kept as-is (no compress step)
+    for the same reason.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file")
+    if turn not in _TURNS:
+        raise HTTPException(400, f"Unknown turn {turn!r} — use cw, ccw or 180")
+
+    task_id = str(uuid.uuid4())
+    ext = Path(file.filename or "img.png").suffix or ".png"
+    upload_path = f"uploads/{task_id}{ext}"
+    output_path = f"output/{task_id}_turned.png"
+    with open(upload_path, "wb") as f:
+        f.write(await file.read())
+
+    tasks[task_id] = {
+        "status": "processing", "step": 1, "message": "Queued", "progress": 0,
+        "upload_path": upload_path, "name": file.filename or "page.png",
+        "mode": "rotatepage",
+    }
+    wm = dict(watermark=watermark.strip(), wm_place=wm_place.strip() or "br",
+              wm_opacity=int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
+              wm_size=wm_size.strip() or "m", credit=credit.strip(),
+              wm_style=wm_style.strip() or "clean")
+    asyncio.create_task(_run_rotate_page(task_id, upload_path, output_path,
+                                         turn, wm))
+    return {"task_id": task_id}
+
+
+async def _run_rotate_page(task_id: str, image_path: str, output_path: str,
+                           turn: str, wm: dict = None):
+    try:
+        ops, label = _TURNS[turn]
+
+        def do_work():
+            img = cv2.imread(image_path)
+            if img is None:
+                raise ValueError(f"Cannot load image: {image_path}")
+            tasks[task_id].update({"step": 1, "progress": 40,
+                                   "message": f"Turning {label}..."})
+            for op in ops:
+                img = cv2.rotate(img, op)
+            _write_atomic(output_path, img)
+            return img.shape
+
+        shape = await asyncio.get_event_loop().run_in_executor(None, do_work)
+        if wm:
+            _stamp_output(output_path, wm["watermark"], wm["wm_place"],
+                          wm["wm_opacity"], wm["wm_size"], wm["credit"],
+                          wm.get("wm_style", "clean"))
+        tasks[task_id].update({
+            "status": "done", "step": 2, "progress": 100,
+            "message": f"Turned {label} — {shape[1]}x{shape[0]}, lossless, "
+                       "no API used",
+            "result": {"output_path": output_path, "translations": {}},
+            "output_url": f"/api/result/{task_id}",
+            "original_url": f"/api/original/{task_id}",
+        })
+    except Exception as e:
+        print(f"[rotatepage] failed: {e}")
+        tasks[task_id].update({"status": "error", "message": str(e),
+                               "error": str(e)})
+
+
 @app.post("/api/upscale")
 async def upscale_only(file: UploadFile = File(...),
                        gpu_cap: str = Form("100"),
