@@ -1831,6 +1831,18 @@ class Compositor:
             rect = (int(cx - bw / 2), int(cy - bh / 2),
                     max(int(bw), 8), max(int(bh), 8))
             return rect, (float(ang) if abs(ang) >= 1.0 else 0.0)
+        # A chunky (non-strip) selection the user drew CLEARLY TILTED: honour
+        # the tilt and fill its oriented box, so a slanted multi-line caption
+        # gets slanted multi-line text. The strip test above only caught long
+        # thin bars; a fat tilted box fell through to the axis-aligned inner
+        # rectangle and came out dead straight — the "why is my curved box
+        # giving straight text" case. Gated at >=7° so a hand-drawn box that
+        # is roughly upright (a degree or two of wobble) still reads straight.
+        if 7.0 <= abs(ang) <= 45.0:
+            bw, bh = rw * 0.90, rh * 0.86
+            rect = (int(cx - bw / 2), int(cy - bh / 2),
+                    max(int(bw), 8), max(int(bh), 8))
+            return rect, float(ang)
         return self._poly_inner_rect(poly, w, h), 0.0
 
     def _estimate_text_angle(self, x, y, w, h):
