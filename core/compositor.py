@@ -547,12 +547,25 @@ class Compositor:
                 own_boxes = [tuple(int(v) for v in bb),
                              tuple(int(v) for v in rect)]
                 if abs(rotation) < 3 and not it.get("manual_rot"):
-                    wided = self._widen_vertical_rect(rect, result, used_boxes,
-                                                      own_boxes)
-                    if wided != tuple(int(v) for v in rect):
-                        rect = wided
-                        used_boxes.append(tuple(int(v) for v in rect))
-                        own_boxes.append(tuple(int(v) for v in rect))
+                    sx4, sy4, sw4, sh4 = src_rect
+                    # A BIG vertical Japanese column — a title / impact line
+                    # like 「この試合」 or 「詰んでね…!?」: tall-and-narrow AND
+                    # set in large glyphs (a fat column). Typeset the English
+                    # SIDEWAYS to match it, exactly like the manual Vertical
+                    # translate tool (-90°), rather than crushing it into a
+                    # small horizontal caption. Small vertical DIALOGUE columns
+                    # stay horizontal below, where that reads better.
+                    big_vertical = (sh4 >= 2.0 * max(sw4, 1)
+                                    and sw4 >= 0.055 * result.shape[1])
+                    if big_vertical:
+                        rotation = -90.0
+                    else:
+                        wided = self._widen_vertical_rect(
+                            rect, result, used_boxes, own_boxes)
+                        if wided != tuple(int(v) for v in rect):
+                            rect = wided
+                            used_boxes.append(tuple(int(v) for v in rect))
+                            own_boxes.append(tuple(int(v) for v in rect))
                 # Pro presence: grow the box over quiet background until the
                 # English renders at ~70% of the source glyph size. Never for
                 # SFX (pros keep those small beside the art), and never into
