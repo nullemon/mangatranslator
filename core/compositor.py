@@ -143,9 +143,18 @@ class Compositor:
             for (x0, y0, x1, y1) in self._mask_regions(text_mask):
                 crop = result[y0:y1, x0:x1]
                 cm = text_mask[y0:y1, x0:x1]
-                out = self.lama.inpaint(crop, cm)
-                if out is None:
-                    out = cv2.inpaint(crop, cm, 5, cv2.INPAINT_TELEA)
+                # A SMOOTH background (a solid black panel, a flat tone, a
+                # gradient) is healed by extending that background, not by an
+                # inpaint model. LaMa/TELEA over solid black or a gradient
+                # invent a lighter, textured patch — the blurry pale smudges
+                # where erased text used to sit. On smooth ground the seamless
+                # fill is exact; LaMa is kept for genuinely DETAILED art.
+                if self._bg_is_smooth(crop, cm):
+                    out = self._heal_smooth(crop, cm)
+                else:
+                    out = self.lama.inpaint(crop, cm)
+                    if out is None:
+                        out = cv2.inpaint(crop, cm, 5, cv2.INPAINT_TELEA)
                 if out.shape[:2] != crop.shape[:2]:
                     out = cv2.resize(out, (crop.shape[1], crop.shape[0]),
                                      interpolation=cv2.INTER_CUBIC)
@@ -155,6 +164,39 @@ class Compositor:
             if healed:
                 return result
         return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
+
+    @staticmethod
+    def _bg_is_smooth(crop, mask):
+        """Is the background around the erase mask smooth (solid / flat tone /
+        gradient) rather than detailed line art? Judged on the pixels OUTSIDE
+        the (dilated) mask: low high-frequency energy means smooth, so a
+        seamless tonal fill will beat an inpaint model that would smudge."""
+        if crop.size == 0:
+            return False
+        g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        m = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+        bg = g[m == 0]
+        if bg.size < 64:
+            return False
+        # High-frequency energy of the background only (subtract a blur, look
+        # at what is left). Solid black / smooth gradients score near zero;
+        # hatching, screentone and line art score high.
+        blur = cv2.GaussianBlur(g, (0, 0), 3)
+        hf = cv2.absdiff(g, blur)
+        return float(hf[m == 0].mean()) < 6.0
+
+    @staticmethod
+    def _heal_smooth(crop, mask):
+        """Fill the mask by extending the smooth surrounding background: a
+        rough fill to seed the holes, then a heavy blur so the seam and any
+        inpaint texture dissolve into the solid/gradient tone. Exact on a
+        black panel (stays black); seamless on a gradient."""
+        seed = cv2.inpaint(crop, mask, 3, cv2.INPAINT_NS)
+        soft = cv2.GaussianBlur(seed, (0, 0), 8)
+        out = seed.copy()
+        sel = mask > 0
+        out[sel] = soft[sel]
+        return out
 
     @staticmethod
     def _mask_regions(mask, pad: int = 64, join: int = 32):
@@ -1375,9 +1417,16 @@ class Compositor:
             mwin = np.zeros((wy1 - wy0, wx1 - wx0), np.uint8)
             mwin[oy0 - wy0:oy1 - wy0, ox0 - wx0:ox1 - wx0] = tsub
             sub = result[wy0:wy1, wx0:wx1]
-            out = self.lama.inpaint(sub, mwin) if use_lama else None
-            if out is None:
-                out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
+            # Smooth background (solid black panel, flat tone, gradient) →
+            # extend the tone seamlessly; a model here invents the pale blurry
+            # smudge that showed where erased text used to sit. Detailed art
+            # still goes through LaMa.
+            if self._bg_is_smooth(sub, mwin):
+                out = self._heal_smooth(sub, mwin)
+            else:
+                out = self.lama.inpaint(sub, mwin) if use_lama else None
+                if out is None:
+                    out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
             m = mwin > 0
             sub[m] = out[m]
             dsub |= tsub
