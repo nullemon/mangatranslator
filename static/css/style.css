@@ -379,17 +379,6 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .rsz-h{position:absolute;width:12px;height:12px;background:#fff;border:2px solid var(--accent);
   border-radius:50%;touch-action:none;z-index:2}
 .resize-box.added-box .rsz-h{border-color:#16a34a}
-/* The rotation knob above a resize box, and its live angle readout. */
-.rot-h{position:absolute;left:50%;top:-28px;transform:translateX(-50%);
-  width:20px;height:20px;border-radius:50%;background:#fff;
-  border:2px solid var(--accent);color:var(--accent);cursor:grab;
-  display:flex;align-items:center;justify-content:center;
-  font-size:12px;line-height:1;user-select:none;touch-action:none}
-.rot-h:active{cursor:grabbing}
-.resize-box.added-box .rot-h{border-color:#16a34a;color:#16a34a}
-.rot-val{position:absolute;left:50%;top:-52px;transform:translateX(-50%);
-  background:rgba(0,0,0,.78);color:#fff;font-size:11px;
-  padding:2px 7px;border-radius:6px;pointer-events:none;white-space:nowrap}
 .rsz-nw{left:-7px;top:-7px;cursor:nwse-resize}
 .rsz-n {left:calc(50% - 6px);top:-7px;cursor:ns-resize}
 .rsz-ne{right:-7px;top:-7px;cursor:nesw-resize}

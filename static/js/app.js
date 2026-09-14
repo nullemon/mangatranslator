@@ -3038,74 +3038,15 @@ document.addEventListener("DOMContentLoaded", () => {
                         "resize-box" + (isAdded ? " added-box" : ""));
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>` +
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
-        .map(d => `<span class="rsz-h rsz-${d}" data-d="${d}"></span>`).join("") +
-      `<span class="rot-h" title="Drag to tilt this text (snaps near straight and ±90°). Double-click to straighten.">⟳</span>` +
-      `<span class="rot-val" style="display:none"></span>`;
-    const deg = (page.rotations || {})[it.id];
-    const d0 = deg != null ? deg : (it.rotation || 0);
-    if (d0) box.style.transform = `rotate(${d0}deg)`;
+        .map(d => `<span class="rsz-h rsz-${d}" data-d="${d}"></span>`).join("");
+    // The resize/move box is ALWAYS axis-aligned — never CSS-rotated. A
+    // rotated handle box fought the drag math (pointer deltas are measured in
+    // screen space) and made moving/resizing feel broken. Tilt is a separate
+    // property, set in the Edit popover's Tilt slider or by drawing a slanted
+    // Point-translate selection; it shows on the rendered text, not on this
+    // editing handle.
     bindResize(box, it, page, W, H);
-    bindRotate(box, it, page);
     moveLayer.appendChild(box);
-  }
-
-  // The rotation knob above a resize box: drag round the box centre to tilt,
-  // with a snap at the angles a letterer actually wants (0, ±90, 180) so a
-  // near-straight box lands straight. Stored in page.rotations — the same
-  // channel the Edit popover and the ↕ vertical button already use — and
-  // applied for real on Apply & Re-render; the CSS transform is the live
-  // preview. Double-click straightens. When the DETECTOR tilted the region,
-  // straightening stores an explicit 0 (deleting the entry would hand the
-  // detected tilt straight back).
-  function bindRotate(box, it, page) {
-    const knob = box.querySelector(".rot-h");
-    const val = box.querySelector(".rot-val");
-    if (!knob) return;
-    const current = () => {
-      const r = (page.rotations || {})[it.id];
-      return r != null ? r : (it.rotation || 0);
-    };
-    const store = d => {
-      page.rotations = page.rotations || {};
-      if (d === 0 && !it.rotation) delete page.rotations[it.id];
-      else page.rotations[it.id] = d;
-      box.style.transform = d ? `rotate(${d}deg)` : "";
-      if (val) val.textContent = d + "°";
-    };
-    const angleAt = e => {
-      const r = box.getBoundingClientRect();
-      return Math.atan2(e.clientY - (r.top + r.height / 2),
-                        e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
-    };
-    let rotating = false, startAng = 0, baseDeg = 0;
-    knob.addEventListener("pointerdown", e => {
-      e.preventDefault(); e.stopPropagation();
-      pushUndo(page);
-      rotating = true; startAng = angleAt(e); baseDeg = current();
-      box.classList.add("dragging");
-      if (val) { val.style.display = ""; val.textContent = Math.round(baseDeg) + "°"; }
-      try { knob.setPointerCapture(e.pointerId); } catch (_) {}
-    });
-    knob.addEventListener("pointermove", e => {
-      if (!rotating) return;
-      let d = baseDeg + (angleAt(e) - startAng);
-      while (d > 180) d -= 360;
-      while (d < -180) d += 360;
-      for (const s of [0, 90, -90, 180, -180])
-        if (Math.abs(d - s) <= 4) { d = s; break; }
-      store(Math.round(d));
-    });
-    const done = e => {
-      if (!rotating) return;
-      rotating = false; box.classList.remove("dragging");
-      if (val) val.style.display = "none";
-      try { knob.releasePointerCapture(e.pointerId); } catch (_) {}
-    };
-    knob.addEventListener("pointerup", done);
-    knob.addEventListener("pointercancel", done);
-    knob.addEventListener("dblclick", e => {
-      e.stopPropagation(); pushUndo(page); store(0);
-    });
   }
 
   function bindResize(box, it, page, W, H) {
@@ -3159,11 +3100,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const box = makeBox(bx + off[0], by + off[1], bw, bh, W, H,
                         "move-box" + (isAdded ? " added-box" : ""));
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>`;
-    // Show any tilt here too, so Move/Edit agree with Resize about where
-    // the text actually sits.
-    const _deg = (page.rotations || {})[it.id];
-    const _d0 = _deg != null ? _deg : (it.rotation || 0);
-    if (_d0) box.style.transform = `rotate(${_d0}deg)`;
+    // Axis-aligned like the resize box — tilt is set in the Edit popover,
+    // not by rotating this handle.
     if (tool === "move") {
       box.classList.add("draggable");
       bindDrag(box, it, page, W, H);
