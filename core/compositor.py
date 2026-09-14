@@ -428,10 +428,31 @@ class Compositor:
                 bh = min(bh, h - by)
                 if bw < 6 or bh < 6:
                     continue
-                # A bordered caption box gets a clean solid fill; text drawn over
-                # bare artwork has just its strokes inpainted out (no slab).
-                cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
-                rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
+                # RESIZING an existing box (manual_box, not a freshly DRAWN
+                # box) means "grow the TEXT to fill this" — it must NOT erase
+                # more of the art. The whole-region content-aware heal below is
+                # right for a box the user DREW over something to cover it, but
+                # on a resize it wiped the enlarged box and ate the artwork
+                # (the "resize ruins the photo" report). So a pure resize
+                # erases only the original text STROKES (seg-masked), never the
+                # whole box, and the box is used solely to lay the text out.
+                if it.get("manual_box") and not it.get("manual"):
+                    touched = self._inpaint_text(result, bx, by, bw, bh,
+                                                 contain=False) \
+                        or (bx, by, bw, bh)
+                    cap = None
+                    # Dark background? (light text on a black slab). Median of
+                    # the box after erasing the strokes.
+                    roi = gray[by:by + bh, bx:bx + bw]
+                    dark = bool(roi.size and float(np.median(roi)) < 110)
+                    pad = max(2, min(bw, bh) // 20)
+                    rect = (bx + pad, by + pad,
+                            max(bw - 2 * pad, 8), max(bh - 2 * pad, 8))
+                else:
+                    # A bordered caption box gets a clean solid fill; text drawn
+                    # over bare artwork has just its strokes inpainted out.
+                    cap, bb = self._plan_free_region(gray, bx, by, bw, bh, refine=False)
+                    rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
                 # Point-selected outline: the translation must sit inside the
                 # user's shape — and a strip-shaped selection runs ALONG the
                 # strip at its own angle (a tilted banner gets tilted text).
