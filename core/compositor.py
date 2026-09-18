@@ -1369,6 +1369,45 @@ class Compositor:
             return mask
         return (keep[labels] * 255).astype(np.uint8)
 
+    def _contain_ink_mask(self, result, x0, y0, x1, y1, seg_roi=None):
+        """Ink strokes inside a USER-DRAWN erase box, so only the text is healed
+        and the artwork behind it survives. Detection runs on a context-padded
+        window (a tight box alone corrupts the local background estimate), then
+        the mask is clipped back to the box and its strokes grown so
+        antialiased edges are fully covered. Returns a box-sized uint8 mask, or
+        None when the result is implausible — nothing found, or the box is a
+        near-solid fill — in which case the caller heals the whole box."""
+        H, W = result.shape[:2]
+        bw, bh = x1 - x0, y1 - y0
+        if bw < 3 or bh < 3:
+            return None
+        pad = int(np.clip(min(bw, bh) // 3, 12, 80))
+        wx0, wy0 = max(0, x0 - pad), max(0, y0 - pad)
+        wx1, wy1 = min(W, x1 + pad), min(H, y1 + pad)
+        gwin = cv2.cvtColor(result[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
+        # Prefer the text-pixel model when it marked enough of the box; else the
+        # polarity-agnostic ink-deviation mask (catches bold solid glyphs the
+        # seg model misses, and faint narration of either polarity).
+        ink = None
+        if seg_roi is not None and cv2.countNonZero(seg_roi) >= 40:
+            ink = np.zeros_like(gwin)
+            ink[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = seg_roi
+        if ink is None:
+            ink = self._ink_mask(gwin)
+        # Keep only ink inside the drawn box.
+        box = np.zeros_like(gwin)
+        box[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = 255
+        ink = cv2.bitwise_and(ink, box)
+        # Grow strokes so antialiased edges and thin serifs are fully covered.
+        k = int(np.clip(min(bw, bh) // 50, 2, 6))
+        ink = cv2.dilate(ink, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1)))
+        ink = cv2.bitwise_and(ink, box)   # dilation must not spill past the box
+        cover = cv2.countNonZero(ink) / float(bw * bh)
+        if cover < 0.004 or cover > 0.55:
+            return None
+        return ink[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0].copy()
+
     def _inpaint_text(self, result, x, y, w, h, contain=False):
         """Remove text from a free-text region. Builds the stroke mask from where
         the image deviates from its smooth background, so faint / low-contrast
@@ -1389,16 +1428,22 @@ class Compositor:
         gray_roi = cv2.cvtColor(result[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
         seg_roi = self._seg_mask[y0:y1, x0:x1] if self._seg_mask is not None else None
         if contain:
-            # USER-DRAWN region (cover box / item ⌫ / resized box): the box is
-            # a command — content-aware heal the WHOLE region, exactly like the
-            # lasso eraser (the one erase tool that always worked). The
-            # protective stroke heuristics below repeatedly made these erases
-            # silently do nothing: a tight user box wrecks the local background
-            # estimate (everything "deviates"), the anchor filter then keeps
-            # only deviation near the seg strokes / paper glow — and bold solid
-            # glyphs aren't in the seg mask at all (_strip_nontext_blobs drops
-            # them as non-text), so the exact fragment the user boxed survived.
-            tight = np.full(gray_roi.shape, 255, np.uint8)
+            # USER-DRAWN region (cover box / item ⌫ / resized box). The intent
+            # is to erase the TEXT the user boxed while KEEPING the artwork
+            # behind it. Healing the WHOLE box obliterates that background — on
+            # textured art (screentone, hatching, gradients) the filled box
+            # reads as an obvious patch, and an inpaint model fills the void
+            # with ghost-text mush. So detect the actual ink strokes inside the
+            # box (either polarity) and mask ONLY those; the surrounding art
+            # then fills the thin stroke holes cleanly, exactly like automatic
+            # erasure. Detection runs on a context-padded window because a tight
+            # box alone corrupts the local background estimate (the old reason
+            # stroke masking "did nothing" here). If the result is implausible
+            # (nothing found, or the box is a near-solid fill) we fall back to
+            # healing the whole box, so the erase is never a silent no-op.
+            tight = self._contain_ink_mask(result, x0, y0, x1, y1, seg_roi)
+            if tight is None:
+                tight = np.full(gray_roi.shape, 255, np.uint8)
         else:
             tight = self._stroke_halo_mask(gray_roi, seg_roi)
             # HARD constraint for AUTOMATIC erasure: with the text-pixel
