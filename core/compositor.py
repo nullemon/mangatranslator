@@ -1346,6 +1346,26 @@ class Compositor:
         gate = max(localbg + 10.0, 160.0)
         halo = np.where((band > 0) & (gsrc.astype(np.float32) > gate), 255, 0).astype(np.uint8)
         mask = cv2.bitwise_or(strokes, halo)
+        # White text-BACKING: a letterer sets shouted/narration lines on busy
+        # art over a painted white glow so they stay readable. That backing is
+        # far wider than the thin halo band above — left behind, it survives as
+        # the ugly white blob around the re-lettered text (the "erase isn't
+        # working" complaint). Absorb the whole near-white region that HUGS the
+        # strokes: take near-white components within a stroke-scaled reach that
+        # actually touch the lettering. Speckle (paper showing between tone
+        # dots) is scattered and doesn't touch the strokes, so it is left. And
+        # over-including white costs nothing — white refills as white.
+        back_reach = int(np.clip(6.0 * float(np.median(vals)), 10, 70)) if vals.size else 12
+        reach = cv2.dilate(strokes, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * back_reach + 1, 2 * back_reach + 1)))
+        nearwhite = ((gsrc >= 205) & (reach > 0)).astype(np.uint8) * 255
+        if cv2.countNonZero(nearwhite) > 0:
+            # keep only near-white blobs the strokes actually touch
+            seed = cv2.bitwise_or(nearwhite, (strokes > 0).astype(np.uint8) * 255)
+            n2, lab2, _s2, _c2 = cv2.connectedComponentsWithStats(seed, 8)
+            touch = np.unique(lab2[strokes > 0])
+            backing = np.isin(lab2, touch[touch > 0]) & (nearwhite > 0)
+            mask = cv2.bitwise_or(mask, (backing * 255).astype(np.uint8))
         return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
                           iterations=1)
 
@@ -1453,11 +1473,19 @@ class Compositor:
             # HARD constraint for AUTOMATIC erasure: with the text-pixel
             # model present, only pixels IT calls lettering may be erased —
             # the local deviation mask alone happily eats hair and face lines
-            # when a det box sits on a character (the melted-head bug).
+            # when a det box sits on a character (the melted-head bug). BUT the
+            # danger is only DARK art (hair, ink lines); the white glow/halo a
+            # letterer paints behind text on busy art is near-white and can
+            # never be art, yet it extends well past the 9px seg skirt. Clipping
+            # it away leaves the glow behind as an ugly white blob once the
+            # glyphs vanish — so let near-white mask pixels through the clip and
+            # only constrain the DARK part of the mask to the seg strokes.
             if seg_roi is not None:
                 if cv2.countNonZero(seg_roi) >= 40:
                     allow = cv2.dilate(seg_roi, np.ones((9, 9), np.uint8))
-                    tight = cv2.bitwise_and(tight, allow)
+                    glow = (gray_roi >= 200).astype(np.uint8) * 255
+                    keep = cv2.bitwise_or(allow, glow)
+                    tight = cv2.bitwise_and(tight, keep)
                 else:
                     tight[:] = 0
         if cv2.countNonZero(tight) == 0:
