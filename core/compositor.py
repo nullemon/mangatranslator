@@ -1385,15 +1385,19 @@ class Compositor:
         wx0, wy0 = max(0, x0 - pad), max(0, y0 - pad)
         wx1, wy1 = min(W, x1 + pad), min(H, y1 + pad)
         gwin = cv2.cvtColor(result[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
-        # Prefer the text-pixel model when it marked enough of the box; else the
-        # polarity-agnostic ink-deviation mask (catches bold solid glyphs the
-        # seg model misses, and faint narration of either polarity).
-        ink = None
+        # Polarity-agnostic ink deviation ALWAYS — it catches the bold / solid
+        # glyphs the seg model strips as "solid blobs" (a display title the user
+        # boxed used to survive the erase for exactly this reason), and faint
+        # narration of either polarity. The seg mask is then ADDED on top
+        # (union) for the fine, low-contrast strokes deviation can miss. Seg is
+        # never trusted ALONE here: when it stripped the very text the user
+        # boxed, a seg-only mask covers empty air and leaves the text sitting
+        # there — which is what "the eraser stopped working" meant.
+        ink = self._ink_mask(gwin)
         if seg_roi is not None and cv2.countNonZero(seg_roi) >= 40:
-            ink = np.zeros_like(gwin)
-            ink[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = seg_roi
-        if ink is None:
-            ink = self._ink_mask(gwin)
+            seg_full = np.zeros_like(gwin)
+            seg_full[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = seg_roi
+            ink = cv2.bitwise_or(ink, seg_full)
         # Keep only ink inside the drawn box.
         box = np.zeros_like(gwin)
         box[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = 255
