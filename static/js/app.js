@@ -2233,6 +2233,17 @@ document.addEventListener("DOMContentLoaded", () => {
       detailsTab.style.display   = noTranslate ? "none" : "";
       translateScanBtn.style.display = noTranslate ? "" : "none";
       buildTranslationsList(p);
+      // Rebuild the on-image edit overlay for THIS page. Without it, switching
+      // pages left the previous page's draggable text boxes sitting over the
+      // new page (their handlers still bound to the old page's items), so the
+      // old page's text appeared on the next one and any drag/edit silently
+      // went to the wrong page. Drop the stale overlay at once, then rebuild
+      // once the freshly-switched result image actually has its dimensions
+      // (curDims reads them off the image, which may still be loading).
+      moveLayer.innerHTML = "";
+      const rebuildOverlay = () => { if (getActive() === p) buildOverlay(); };
+      if (transFull.complete && transFull.naturalWidth) rebuildOverlay();
+      else transFull.addEventListener("load", rebuildOverlay, { once: true });
       initComparison();
     } else if (p.status === "error") {
       pageResult.style.display = "none";
