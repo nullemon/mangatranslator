@@ -1538,6 +1538,61 @@ class TranslationPipeline:
 
         return items, ann_path, masks
 
+    @staticmethod
+    def _realign_by_ocr(id_to_text: dict, out: dict) -> dict:
+        """Undo a cross-bubble mixup where the model returns a bubble's
+        translation under a DIFFERENT bubble's id (the "box 1's line shows up in
+        box 2" bug). Every returned entry echoes the ORIGINAL text it actually
+        translated; we match that echo back to the bubble whose OCR it really is.
+
+        Deliberately conservative: a reassignment is applied ONLY when the moved
+        entries form a clean, closed permutation among themselves (every
+        displaced line has a home, nothing correct is overwritten) and each move
+        is confident. On a normal page nothing matches a different bubble better
+        than its own, so this is a no-op — and the model's legitimate OCR
+        corrections (a returned original that differs a little from the OCR) do
+        not trip it, because the test is RELATIVE: does the echo fit some OTHER
+        bubble decisively better than the one it was filed under."""
+        import difflib
+        import re
+
+        def norm(s):
+            return re.sub(r"\s+", "", str(s or ""))
+
+        sent_ids = list(id_to_text.keys())
+        if len(sent_ids) < 2:
+            return out
+        best = {}
+        for rid, ent in out.items():
+            if not isinstance(ent, dict):
+                continue
+            echo = norm(ent.get("original"))
+            if len(echo) < 2:
+                continue
+            scored = sorted(
+                ((difflib.SequenceMatcher(None, echo, norm(id_to_text[sid])).ratio(), sid)
+                 for sid in sent_ids), reverse=True)
+            top_s, top_sid = scored[0]
+            second = scored[1][0] if len(scored) > 1 else 0.0
+            best[rid] = (top_sid, top_s, top_s - second)
+        # Entries whose echo clearly belongs to a DIFFERENT bubble.
+        moves = {rid: b for rid, b in best.items()
+                 if b[0] != rid and b[1] >= 0.55 and b[2] >= 0.15}
+        targets = [b[0] for b in moves.values()]
+        # Require a closed permutation: the set of sources == the set of targets,
+        # and the targets are distinct. Anything else is too risky to touch.
+        if not moves or len(set(targets)) != len(targets) \
+                or set(moves.keys()) != set(targets):
+            return out
+        fixed = dict(out)
+        for rid, (sid, sc, _mg) in moves.items():
+            ent = dict(out[rid])
+            ent["id"] = sid
+            fixed[sid] = ent
+            print(f"[pipeline] realign: line returned under id {rid} reads "
+                  f"bubble {sid}'s text (sim {sc:.2f}) -> moved to {sid}")
+        return fixed
+
     def _translate_regions(self, image, regions, annotated, update) -> Dict[int, dict]:
         """Translate each detected bubble. For Japanese, prefer local OCR (reads
         each bubble's OWN text → no cross-bubble mismatch). For any OTHER source
@@ -1591,6 +1646,10 @@ class TranslationPipeline:
             if id_to_text:
                 try:
                     out = self.translator.translate_texts(id_to_text, self.target_lang, image=image)
+                    # Guard against a batched reply putting one bubble's line
+                    # under another bubble's id (box 1's text in box 2). Uses the
+                    # ORIGINAL each entry echoes back, before we fill blanks below.
+                    out = self._realign_by_ocr(id_to_text, out)
                     # keep the OCR'd original text for the editor view
                     for rid, jp in id_to_text.items():
                         out.setdefault(rid, {})
