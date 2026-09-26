@@ -310,6 +310,67 @@ class Compositor:
         cap = k * gp / self.renderer.cap_ratio(font_path or self.renderer.font_path)
         return int(max(self.renderer.min_font_size, round(cap)))
 
+    def _resolve_sealed_balloon(self, gray, bbox, page_area):
+        """Recover the balloon around `bbox` for the rough balloons sounds are
+        lettered in, which _resolve_bubble misses: a brush outline with gaps
+        (the white inside leaks into the page and never reads as enclosed),
+        or a GREY interior (not "paper" to a white threshold). Small outline
+        gaps are sealed by growing the ink, and the balloon's own tone —
+        white or grey, read from inside the box — is its paper. Returns
+        (mask, bbox, dark) like _resolve_bubble, or None."""
+        H, W = gray.shape[:2]
+        x, y, w, h = [int(v) for v in bbox]
+        if w < 8 or h < 8:
+            return None
+        pad = int(max(24, 0.6 * max(w, h)))
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+        g = gray[y0:y1, x0:x1]
+        ink = (g < 90).astype(np.uint8)
+        inside = g[y - y0:y - y0 + h, x - x0:x - x0 + w]
+        paper_vals = inside[inside >= 90]
+        if paper_vals.size < 0.15 * w * h:
+            return None
+        hist = np.bincount(paper_vals.ravel() // 8, minlength=32)
+        tone = int(np.argmax(hist)) * 8 + 4          # the balloon's own paper tone
+        best = None
+        for r in (2, 4):                            # seal gaps up to ~2r px wide
+            sealed = cv2.dilate(ink, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+            paper = ((np.abs(g.astype(np.int16) - tone) <= 28) & (sealed == 0)).astype(np.uint8)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(paper, 8)
+            rh, rw = g.shape
+            border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]])))
+            sub = lab[y - y0:y - y0 + h, x - x0:x - x0 + w].ravel()
+            counts = np.bincount(sub, minlength=n)
+            counts[0] = 0
+            for bl in border:
+                counts[bl] = 0
+            k = int(np.argmax(counts)) if counts.size else 0
+            if k and counts[k] >= 0.12 * w * h:
+                best = (lab == k).astype(np.uint8) * 255, r
+                break
+        if best is None:
+            return None
+        comp, r = best
+        cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        filled = np.zeros_like(comp)
+        cv2.drawContours(filled, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
+        # give back what sealing took from the inside of the outline
+        filled = cv2.dilate(filled, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+        area = int(cv2.countNonZero(filled))
+        if area < page_area * 0.0003 or area > page_area * 0.30:
+            return None
+        bx, by, bw, bh = cv2.boundingRect(filled)
+        if area / float(max(bw * bh, 1)) < 0.45:
+            return None
+        full = np.zeros((H, W), np.uint8)
+        full[y0:y1, x0:x1] = filled
+        return full, (x0 + bx, y0 + by, bw, bh), tone < 110
+
     @staticmethod
     def _iou(a, b):
         ax, ay, aw, ah = a; bx_, by_, bw_, bh_ = b

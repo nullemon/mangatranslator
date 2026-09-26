@@ -1951,12 +1951,22 @@ class TranslationPipeline:
             x, y, w, h = [int(v) for v in box]
             if w < 6 or h < 6:
                 return False
-            rec = comp._resolve_bubble(gray, (x, y, w, h), gray.size)
+            # Sound balloons are drawn rougher than speech balloons — a brush
+            # outline with gaps, or a grey fill — so the sealed/toned finder
+            # is tried when the ordinary one comes back empty.
+            rec = (comp._resolve_bubble(gray, (x, y, w, h), gray.size)
+                   or comp._resolve_sealed_balloon(gray, (x, y, w, h), gray.size))
             if rec is None:
                 return False
             rmask, rbb, _dark = rec
-            enclosed = cv2.countNonZero(rmask[max(0, y):y + h, max(0, x):x + w]) / float(w * h)
-            if enclosed < 0.85 or rbb[2] * rbb[3] > 9.0 * w * h:
+            # The text box hugs the balloon's OUTLINE, so judge it against the
+            # balloon's outer extent, not its interior mask (a sound filling
+            # its balloon measured only 63-66% "inside" the interior).
+            ox0, oy0 = rbb[0] - 8, rbb[1] - 8
+            ox1, oy1 = rbb[0] + rbb[2] + 8, rbb[1] + rbb[3] + 8
+            ix = max(0, min(x + w, ox1) - max(x, ox0))
+            iy = max(0, min(y + h, oy1) - max(y, oy0))
+            if ix * iy < 0.75 * w * h or rbb[2] * rbb[3] > 9.0 * w * h:
                 return False
             # The balloon test reads the compositor's page stroke mask, which
             # is only set when a page is COMPOSED — during detection it still
