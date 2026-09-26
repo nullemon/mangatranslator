@@ -215,17 +215,62 @@ class TextSegmenter:
                   f"(eyes/ornaments) from the stroke mask")
         return out
 
-    def mask(self, image: np.ndarray) -> np.ndarray:
-        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes.
-        Cached per page so an editor re-render doesn't re-run the model."""
+    def _analyze(self, image: np.ndarray):
+        """Run the model ONCE per page and keep everything derived from it:
+        the raw stroke mask, the same mask with solid blobs stripped, and the
+        text-block boxes. Cached, so mask() / text_mask() / detect_blocks()
+        on the same page cost one inference between them."""
         h, w = image.shape[:2]
         key = self._sig(image)
         hit = _MASK_CACHE.get(key)
-        if hit is not None and hit.shape == (h, w):
+        if hit is not None and hit["raw"].shape == (h, w):
             return hit
         ran = self._run(image)
         if ran is None:
+            return None
+        raw = self._stroke_mask(ran, h, w)
+        stripped = self._strip_nontext_blobs(raw)
+        blocks = self._blocks(ran, h, w)
+        # Text-block footprint, padded so edge strokes and the furigana running
+        # beside a column fall inside it.
+        foot = np.zeros((h, w), np.uint8)
+        for (bx, by, bw, bh) in blocks:
+            p = int(8 + 0.06 * min(bw, bh))
+            cv2.rectangle(foot, (max(0, bx - p), max(0, by - p)),
+                          (min(w - 1, bx + bw + p), min(h - 1, by + bh + p)), 255, -1)
+        hit = {"raw": raw, "stripped": stripped, "blocks": blocks, "foot": foot}
+        _MASK_CACHE[key] = hit
+        if len(_MASK_CACHE) > 8:
+            _MASK_CACHE.pop(next(iter(_MASK_CACHE)))
+        return hit
+
+    def mask(self, image: np.ndarray) -> np.ndarray:
+        """Binary mask (uint8 0/255, same HxW as `image`) of text strokes.
+
+        The blob-stripped mask, plus every stroke that sits inside a detected
+        TEXT BLOCK even if the strip removed it: inside a block of lettering a
+        solid-looking lump is a bold glyph (者 and が in a shouted line were
+        being stripped as "eyes" and survived the erase), while the strip still
+        protects eyes and ornaments everywhere else."""
+        h, w = image.shape[:2]
+        a = self._analyze(image)
+        if a is None:
             return np.zeros((h, w), np.uint8)
+        return cv2.bitwise_or(a["stripped"], cv2.bitwise_and(a["raw"], a["foot"]))
+
+    def text_mask(self, image: np.ndarray) -> np.ndarray:
+        """Strokes of dialogue / narration ONLY: the stroke mask restricted to
+        detected text blocks. The block head is trained on lettering blocks and
+        does not box sound effects, so this leaves every SFX on the page
+        exactly as drawn — the stroke head alone marks SFX in pieces, and
+        erasing those pieces is what left half-wiped, smeared SFX behind."""
+        h, w = image.shape[:2]
+        a = self._analyze(image)
+        if a is None:
+            return np.zeros((h, w), np.uint8)
+        return cv2.bitwise_and(a["raw"], a["foot"])
+
+    def _stroke_mask(self, ran, h, w) -> np.ndarray:
         outs, scale, nw, nh = ran
 
         # The stroke mask is the 4-D single-channel output with the largest
@@ -250,10 +295,6 @@ class TextSegmenter:
         m = m[:nh, :nw]
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
         _, binary = cv2.threshold(m, 60, 255, cv2.THRESH_BINARY)
-        binary = self._strip_nontext_blobs(binary)
-        _MASK_CACHE[key] = binary
-        if len(_MASK_CACHE) > 8:
-            _MASK_CACHE.pop(next(iter(_MASK_CACHE)))
         return binary
 
     def detect_blocks(self, image: np.ndarray, conf_thresh: float = 0.45,
@@ -264,9 +305,15 @@ class TextSegmenter:
         miss. Callers verify each box with OCR, so a stray detection is
         harmless — it just reads as no Japanese and gets dropped."""
         h, w = image.shape[:2]
+        if (conf_thresh, nms_thresh) == (0.45, 0.35):
+            a = self._analyze(image)
+            return list(a["blocks"]) if a is not None else []
         ran = self._run(image)
         if ran is None:
             return []
+        return self._blocks(ran, h, w, conf_thresh, nms_thresh)
+
+    def _blocks(self, ran, h, w, conf_thresh: float = 0.45, nms_thresh: float = 0.35):
         outs, scale, nw, nh = ran
 
         # Detection head: the 3-D output of (1, N, 5+nc) decoded predictions.

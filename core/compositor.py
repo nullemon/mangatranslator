@@ -102,7 +102,10 @@ class Compositor:
         text_mask = np.zeros((h, w), np.uint8)
         if self.text_seg is not None and self.text_seg.ok:
             try:
-                text_mask = self.text_seg.mask(src)
+                # Dialogue / narration strokes only — sound effects are part of
+                # the art and are never touched (a half-erased, smeared SFX is
+                # the worst of both worlds).
+                text_mask = self.text_seg.text_mask(src)
             except Exception as e:
                 print(f"[compositor] clean: text-seg mask failed: {e}")
 
@@ -130,6 +133,7 @@ class Compositor:
         # Inpaint only the remaining text strokes (free text sitting over artwork).
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         text_mask = cv2.dilate(text_mask, k, iterations=2)   # cover antialiased halos
+        text_mask = self._absorb_glow(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), text_mask)
         if self.lama is not None and self.lama.ok:
             # Per REGION, never the whole frame. LaMa synthesizes every pixel
             # it is handed, so healing 2% of a 12-megapixel page used to cost
@@ -158,12 +162,103 @@ class Compositor:
                 if out.shape[:2] != crop.shape[:2]:
                     out = cv2.resize(out, (crop.shape[1], crop.shape[0]),
                                      interpolation=cv2.INTER_CUBIC)
+                out = self._snap_lineart(out, crop, cm)
                 sel = cm > 0
                 crop[sel] = out[sel]           # writes through into `result`
                 healed += 1
             if healed:
                 return result
         return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
+
+    @staticmethod
+    def _snap_lineart(out, crop, mask):
+        """Inpainting over black-and-white line art invents soft grey shading
+        (the model averages lines and paper into mush). When the art AROUND the
+        hole is genuinely two-tone — white paper and black ink, few mid-greys —
+        push the healed pixels back to that palette: light greys to paper
+        white, while dark strokes it rebuilt stay dark. Tone / screentone /
+        painted areas have plenty of mid-greys and are left exactly as the
+        model made them."""
+        sel = mask > 0
+        if not sel.any() or out.shape[:2] != crop.shape[:2]:
+            return out
+        ctx = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)[~sel]
+        if ctx.size < 200:
+            return out
+        mid = float(np.mean((ctx > 70) & (ctx < 200)))
+        paper = float(np.mean(ctx >= 200))
+        if mid > 0.12 or paper < 0.55:
+            return out
+        o = out.astype(np.float32)
+        # Levels: black point 40, white point 175 — lines keep their weight,
+        # the grey haze between them goes to paper. "Paper" is THIS scan's
+        # paper tone measured around the hole, not pure white: most raws are a
+        # touch off-white, and a 255 fill shows up as a bright patch.
+        paper_lvl = float(np.median(ctx[ctx >= 200]))
+        snapped = np.clip((o - 40.0) * (paper_lvl / 135.0), 0, paper_lvl)
+        res = out.copy()
+        res[sel] = snapped[sel].astype(np.uint8)
+        return res
+
+    @staticmethod
+    def _absorb_glow(gray, mask):
+        """Grow a text-stroke mask over the white GLOW a letterer paints behind
+        lines set on artwork. Masking only the strokes hands the inpainter the
+        glow as "background", so it fills each letter with grey mush between
+        white halos — the blotchy columns left where text sat on a face or a
+        landscape. With the glow in the mask too, the inpainter rebuilds from
+        the real art around it.
+
+        Only near-white pixels within a stroke-scaled reach of the strokes, and
+        connected to them, are taken, so art further out is never touched. On
+        plain paper or in a balloon this is white refilled as white — free."""
+        if cv2.countNonZero(mask) == 0:
+            return mask
+        H, W = gray.shape[:2]
+        dist = cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, 3)
+        vals = dist[dist > 0]
+        half = float(np.median(vals)) if vals.size else 2.0
+        r = int(np.clip(6.0 * half, 10, 36))
+        ell = lambda d: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))
+        reach = cv2.dilate(mask, ell(r))
+        # Glow is judged RELATIVE to the tone around each block of lettering:
+        # a white glow on a light-grey face (225 vs 250) must be taken, while
+        # the face itself must not. So group the strokes into blocks, read the
+        # tone in a ring just beyond the reach, and take only what is clearly
+        # brighter than it. On plain white paper nothing qualifies — and
+        # nothing needs to.
+        groups = cv2.dilate(mask, ell(max(6, r // 2)))
+        n, lab, st, _ = cv2.connectedComponentsWithStats((groups > 0).astype(np.uint8), 8)
+        glow = np.zeros((H, W), bool)
+        for i in range(1, n):
+            x, y, w, h = st[i, 0], st[i, 1], st[i, 2], st[i, 3]
+            pad = r + 14
+            x0, y0 = max(0, x - pad), max(0, y - pad)
+            x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+            g = gray[y0:y1, x0:x1]
+            comp = (lab[y0:y1, x0:x1] == i).astype(np.uint8) * 255
+            rch = cv2.bitwise_and(reach[y0:y1, x0:x1], cv2.dilate(comp, ell(r)))
+            ring = cv2.subtract(cv2.dilate(rch, ell(10)), rch)
+            rv = g[ring > 0]
+            if rv.size < 30:
+                continue
+            bg = float(np.median(rv))
+            if bg >= 238:
+                continue                       # white paper: nothing to take
+            thr = max(bg + 14.0, 200.0)
+            bright = ((g >= thr) & (rch > 0)).astype(np.uint8)
+            if not bright.any():
+                continue
+            seed = cv2.bitwise_or(bright * 255, mask[y0:y1, x0:x1])
+            _n2, lab2 = cv2.connectedComponents((seed > 0).astype(np.uint8), connectivity=8)
+            touch = np.unique(lab2[mask[y0:y1, x0:x1] > 0])
+            sel = np.isin(lab2, touch[touch > 0]) & (bright > 0)
+            glow[y0:y1, x0:x1] |= sel
+        if not glow.any():
+            return mask
+        # close pinholes in the glow so no speckle of it is left behind
+        g8 = cv2.morphologyEx((glow * 255).astype(np.uint8), cv2.MORPH_CLOSE, ell(2))
+        return cv2.bitwise_or(mask, cv2.bitwise_and(g8, reach))
 
     @staticmethod
     def _bg_is_smooth(crop, mask):
@@ -1346,26 +1441,8 @@ class Compositor:
         gate = max(localbg + 10.0, 160.0)
         halo = np.where((band > 0) & (gsrc.astype(np.float32) > gate), 255, 0).astype(np.uint8)
         mask = cv2.bitwise_or(strokes, halo)
-        # White text-BACKING: a letterer sets shouted/narration lines on busy
-        # art over a painted white glow so they stay readable. That backing is
-        # far wider than the thin halo band above — left behind, it survives as
-        # the ugly white blob around the re-lettered text (the "erase isn't
-        # working" complaint). Absorb the whole near-white region that HUGS the
-        # strokes: take near-white components within a stroke-scaled reach that
-        # actually touch the lettering. Speckle (paper showing between tone
-        # dots) is scattered and doesn't touch the strokes, so it is left. And
-        # over-including white costs nothing — white refills as white.
-        back_reach = int(np.clip(6.0 * float(np.median(vals)), 10, 70)) if vals.size else 12
-        reach = cv2.dilate(strokes, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * back_reach + 1, 2 * back_reach + 1)))
-        nearwhite = ((gsrc >= 205) & (reach > 0)).astype(np.uint8) * 255
-        if cv2.countNonZero(nearwhite) > 0:
-            # keep only near-white blobs the strokes actually touch
-            seed = cv2.bitwise_or(nearwhite, (strokes > 0).astype(np.uint8) * 255)
-            n2, lab2, _s2, _c2 = cv2.connectedComponentsWithStats(seed, 8)
-            touch = np.unique(lab2[strokes > 0])
-            backing = np.isin(lab2, touch[touch > 0]) & (nearwhite > 0)
-            mask = cv2.bitwise_or(mask, (backing * 255).astype(np.uint8))
+        # (The wide white BACKING some lettering wears over art is absorbed by
+        # _absorb_glow in the caller, judged relative to the surrounding tone.)
         return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
                           iterations=1)
 
@@ -1488,6 +1565,20 @@ class Compositor:
                     tight = cv2.bitwise_and(tight, keep)
                 else:
                     tight[:] = 0
+            # Take the white glow a letterer paints behind lines set on art,
+            # judged against the tone around it (needs context beyond the ROI
+            # to read that tone). Left in place it survives as a white blob,
+            # and masking only the strokes makes the inpainter fill each letter
+            # with grey mush between white halos.
+            if cv2.countNonZero(tight) > 0:
+                cp = 48
+                cx0, cy0 = max(0, x0 - cp), max(0, y0 - cp)
+                cx1, cy1 = min(W, x1 + cp), min(H, y1 + cp)
+                big = np.zeros((cy1 - cy0, cx1 - cx0), np.uint8)
+                big[y0 - cy0:y1 - cy0, x0 - cx0:x1 - cx0] = tight
+                big = self._absorb_glow(
+                    cv2.cvtColor(result[cy0:cy1, cx0:cx1], cv2.COLOR_BGR2GRAY), big)
+                tight = big[y0 - cy0:y1 - cy0, x0 - cx0:x1 - cx0].copy()
         if cv2.countNonZero(tight) == 0:
             return touched
 
@@ -1538,6 +1629,7 @@ class Compositor:
                 out = self.lama.inpaint(sub, mwin) if use_lama else None
                 if out is None:
                     out = cv2.inpaint(sub, mwin, 5, cv2.INPAINT_TELEA)
+                out = self._snap_lineart(out, sub, mwin)
             m = mwin > 0
             sub[m] = out[m]
             dsub |= tsub
