@@ -125,7 +125,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;
   color:var(--text-faint);font-weight:600;
 }
-.setting-group input,.setting-group select,.prompt-group textarea,#enhanceModel{
+/* .opt select: the GPU-cap dropdown in the Options grid was the one control
+   left as a bare native select — a white box in the dark panel. */
+.setting-group input,.setting-group select,.opt select,.prompt-group textarea,#enhanceModel{
   background:var(--surface-2);border:1px solid var(--border);color:var(--text);
   padding:.3rem .55rem;border-radius:var(--r-sm);font-size:.78rem;line-height:1.3;outline:none;
   font-family:inherit;transition:border-color .15s,box-shadow .15s;width:100%;
@@ -133,7 +135,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .setting-group input:hover,.setting-group select:hover{border-color:var(--border-strong)}
 .setting-group input:focus,.setting-group select:focus,
 .prompt-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--ring)}
-.setting-group select{cursor:pointer;appearance:none;
+.setting-group select,.opt select{cursor:pointer;appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.4'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right .6rem center;padding-right:1.9rem}
 .inline-row{display:flex;gap:.5rem;align-items:center}
