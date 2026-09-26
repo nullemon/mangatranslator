@@ -24,3 +24,4 @@ fonts/*.otf
 # Browser-test scratch (generated inputs and screenshots)
 tests/ui/_inputs/
 tests/ui/_shots/
+tests/ui/_out/
