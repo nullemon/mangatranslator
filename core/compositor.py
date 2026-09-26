@@ -331,11 +331,21 @@ class Compositor:
         paper_vals = inside[inside >= 90]
         if paper_vals.size < 0.15 * w * h:
             return None
-        hist = np.bincount(paper_vals.ravel() // 8, minlength=32)
-        tone = int(np.argmax(hist)) * 8 + 4          # the balloon's own paper tone
+        # The balloon's own paper tone. A GREY balloon holding white letters
+        # (ばっ!) has as much white inside the box as grey, and the page around
+        # it is white too — so when a flat grey band is a real share of the
+        # box, that band is the paper.
+        mid = paper_vals[(paper_vals >= 110) & (paper_vals <= 215)]
+        src = mid if mid.size >= 0.25 * w * h else paper_vals
+        hist = np.bincount(src.ravel() // 8, minlength=32)
+        tone = int(np.argmax(hist)) * 8 + 4
         best = None
-        for r in (2, 4):                            # seal gaps up to ~2r px wide
-            sealed = cv2.dilate(ink, cv2.getStructuringElement(
+        # White balloons leak into the white page through outline gaps, so
+        # gaps are sealed. A GREY balloon can't leak — the page around it is
+        # not its tone — and sealing there cuts its interior into pieces
+        # wherever big letters run edge to edge (ばっ!), so try it unsealed.
+        for r in ((0, 2, 4) if tone < 200 else (2, 4)):  # seal gaps up to ~2r px
+            sealed = ink if r == 0 else cv2.dilate(ink, cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
             paper = ((np.abs(g.astype(np.int16) - tone) <= 28) & (sealed == 0)).astype(np.uint8)
             n, lab, st, _ = cv2.connectedComponentsWithStats(paper, 8)
@@ -358,9 +368,11 @@ class Compositor:
             return None
         filled = np.zeros_like(comp)
         cv2.drawContours(filled, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
-        # give back what sealing took from the inside of the outline
+        # give back what sealing (and the letters' own outlines) took from the
+        # inside of the balloon outline
+        rr = max(r, 2)
         filled = cv2.dilate(filled, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+            cv2.MORPH_ELLIPSE, (2 * rr + 1, 2 * rr + 1)))
         area = int(cv2.countNonZero(filled))
         if area < page_area * 0.0003 or area > page_area * 0.30:
             return None
@@ -370,6 +382,31 @@ class Compositor:
         full = np.zeros((H, W), np.uint8)
         full[y0:y1, x0:x1] = filled
         return full, (x0 + bx, y0 + by, bw, bh), tone < 110
+
+    def _balloon_by_shape(self, gray, box, page_area, min_solid=0.90):
+        """The sealed/toned balloon around `box`, accepted only when it is
+        balloon-shaped: smooth and near-convex (solidity >= min_solid —
+        measured: rough sound balloons 0.94, white patches of art enclosed by
+        lines 0.59-0.80) and holding most of the box within its outline.
+        Returns (mask, dark) or None."""
+        x, y, w, h = [int(v) for v in box]
+        rec = self._resolve_sealed_balloon(gray, (x, y, w, h), page_area)
+        if rec is None:
+            return None
+        m, rbb, dark = rec
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        cnt = max(cnts, key=cv2.contourArea)
+        if cv2.contourArea(cnt) / max(cv2.contourArea(cv2.convexHull(cnt)), 1.0) < min_solid:
+            return None
+        ox0, oy0 = rbb[0] - 8, rbb[1] - 8
+        ox1, oy1 = rbb[0] + rbb[2] + 8, rbb[1] + rbb[3] + 8
+        ix = max(0, min(x + w, ox1) - max(x, ox0))
+        iy = max(0, min(y + h, oy1) - max(y, oy0))
+        if ix * iy < 0.75 * w * h or rbb[2] * rbb[3] > 9.0 * w * h:
+            return None
+        return m, dark
 
     @staticmethod
     def _iou(a, b):
@@ -667,6 +704,10 @@ class Compositor:
                 b = it.get("bbox")
                 if b and len(b) == 4:
                     s = self._glyph_px(gray, strokes_for_size, b)
+                    if not s and self._seg_mask is not None:
+                        # a line the block detector didn't box (a chapter
+                        # title, a cover caption) is still measured
+                        s = self._glyph_px(gray, self._seg_mask, b)
                     if s:
                         sizes[id(it)] = s
                         it["_glyph_px"] = s
@@ -1064,6 +1105,17 @@ class Compositor:
                         strokes = cv2.bitwise_and(self._seg_mask, extra)
                         if cv2.countNonZero(strokes) >= 60:
                             mask, dark = rmask, rdark
+                if mask is None:
+                    # A sound lettered in a ROUGH balloon (a brush outline with
+                    # gaps, or a grey fill: ばっ!, ガチ..) is invisible to the
+                    # ordinary finder, and the line then went down the
+                    # text-on-art path — the whole balloon, outline and all,
+                    # was healed away and the English set huge across the art
+                    # (24,800 px of damage on one page vs TCB). The sealed
+                    # finder recovers it; it must look like a balloon.
+                    sealed = self._balloon_by_shape(gray, (bx, by, bw, bh), page_area)
+                    if sealed is not None:
+                        mask, dark = sealed
 
             if mask is not None:
                 rr = cv2.boundingRect(mask)
@@ -1910,7 +1962,21 @@ class Compositor:
         if not contain and self._dialog_mask is not None:
             # Automatic erase: only dialogue strokes may anchor / permit the
             # erase, so an SFX that falls inside the padded window survives.
-            seg_roi = self._dialog_mask[y0:y1, x0:x1]
+            seg_roi = self._dialog_mask[y0:y1, x0:x1].copy()
+            # ...but this line EXISTS: something read text in this box. When
+            # the block detector didn't box it (a chapter title, a cover
+            # caption, a stylised line), the dialogue mask is empty here and
+            # nothing was erased — the English was drawn over the Japanese.
+            # Take the full stroke mask then, limited to the line's OWN box
+            # (not the padded window), so a neighbouring SFX is still safe.
+            if self._seg_mask is not None:
+                ix0, iy0 = max(0, x) - x0, max(0, y) - y0
+                ix1, iy1 = min(W, x + w) - x0, min(H, y + h) - y0
+                own_d = seg_roi[iy0:iy1, ix0:ix1]
+                own_f = self._seg_mask[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]
+                if (own_f.size and cv2.countNonZero(own_f) >= 40
+                        and cv2.countNonZero(own_d) < 0.5 * cv2.countNonZero(own_f)):
+                    seg_roi[iy0:iy1, ix0:ix1] = cv2.bitwise_or(own_d, own_f)
         if contain:
             # USER-DRAWN region (cover box / item ⌫ / resized box). The intent
             # is to erase the TEXT the user boxed while KEEPING the artwork
