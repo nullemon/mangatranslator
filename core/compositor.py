@@ -288,15 +288,16 @@ class Compositor:
         return out, fill
 
     # English letter height relative to the Japanese glyph it replaces, as
-    # CEILINGS. Measured on TCB's release of One Piece 1194 (44 regions):
-    # dialogue 0.75 (IQR 0.70-0.80), shout 0.79, attack name 0.84, thought
-    # 0.59, text lettered on art 0.59. The ceilings sit a little above the
-    # upper quartile, so they only trim outliers — a two-word shout that the
-    # layout would otherwise blow up to fill a big balloon (measured 2-3x
-    # TCB) — and never shrink ordinary lines.
-    _SIZE_CEIL = {"thought": 0.72, "shout": 1.0, "title": 1.0, "sfx": 1.0}
-    _SIZE_CEIL_DEFAULT = 0.88
-    _SIZE_CEIL_ON_ART = 0.72
+    # CEILINGS. Measured on TCB's release of One Piece 1194 (105 regions,
+    # glyphs measured without furigana): dialogue 0.73 (IQR 0.67-0.78), shout
+    # 0.78 (0.69-0.84), thought 0.57 (0.51-0.61), text lettered on art 0.56
+    # (0.46-0.64). The ceilings sit a little above the upper quartile, so they
+    # only trim outliers — a two-word shout the layout would blow up to fill a
+    # big balloon, a caption growing over the art beside it — and never
+    # shrink ordinary lines.
+    _SIZE_CEIL = {"thought": 0.66, "shout": 0.92, "title": 1.0, "sfx": 1.0}
+    _SIZE_CEIL_DEFAULT = 0.85
+    _SIZE_CEIL_ON_ART = 0.68
 
     def _size_cap(self, it, text, font_path=""):
         """Largest font size (px) for this line, from the measured size of the
@@ -903,11 +904,13 @@ class Compositor:
                 b = it.get("bbox")
                 if b and len(b) == 4:
                     s = self._glyph_px(gray, strokes_for_size, b)
-                    if not s and self._raw_mask is not None:
-                        # a line the block detector didn't box (a chapter
-                        # title, a cover caption, an author name in bold
-                        # solid glyphs) is still measured
-                        s = self._glyph_px(gray, self._raw_mask, b)
+                    # a line the block detector didn't box (a chapter title,
+                    # a cover caption) is still measured — from the filtered
+                    # strokes first: the unstripped ones also hold big solid
+                    # SFX beside the line, which read as huge glyphs
+                    for alt in (self._seg_mask, self._raw_mask):
+                        if not s and alt is not None:
+                            s = self._glyph_px(gray, alt, b)
                     if s:
                         sizes[id(it)] = s
                         it["_glyph_px"] = s
@@ -924,6 +927,27 @@ class Compositor:
         # balloon's lettering instead of being dropped as a collision.
         balloon_owner = []
         used_boxes = []
+
+        def item_offset(item):
+            off = offsets.get(item["id"])
+            if off is None:
+                off = offsets.get(str(item["id"]))
+            if not off:
+                return 0, 0
+            return int(off[0]), int(off[1])
+
+        def offset_shape(item, shape):
+            """The balloon shape the lettering follows, moved with the text.
+            A Move offset shifted the text's box but not this shape, so text in
+            a balloon was laid out back in the balloon — Move did nothing."""
+            if shape is None:
+                return None
+            dx, dy = item_offset(item)
+            if not (dx or dy):
+                return shape
+            m = np.float32([[1, 0, dx], [0, 1, dy]])
+            return cv2.warpAffine(shape, m, (shape.shape[1], shape.shape[0]),
+                                  flags=cv2.INTER_NEAREST, borderValue=0)
 
         def offset_rect(item, rect):
             off = offsets.get(item["id"])
@@ -1438,7 +1462,7 @@ class Compositor:
                             placements.append((offset_rect(it, lrect), part, color, ital, 0,
                                                self._item_scale(it) * role_scale,
                                                self._item_glow(it), bool(it.get("fit_box")),
-                                               lshape if cv2.countNonZero(lshape) >= 200 else None,
+                                               offset_shape(it, lshape) if cv2.countNonZero(lshape) >= 200 else None,
                                                role_font, self._size_cap(it, part, role_font)))
                         it["placed"] = True
                         continue
@@ -1487,7 +1511,7 @@ class Compositor:
                                rotation if it.get("manual_rot") else 0,
                                self._item_scale(it) * role_scale,
                                fglow or self._item_glow(it),
-                               bool(it.get("fit_box")), it.get("_shape"),
+                               bool(it.get("fit_box")), offset_shape(it, it.get("_shape")),
                                role_font, self._size_cap(it, text, role_font)))
             if mask is not None:
                 balloon_owner.append((tuple(int(v) for v in bb), len(placements) - 1,
@@ -2397,7 +2421,9 @@ class Compositor:
         # the block detector didn't box — a caption, a title — is still marked
         # there, as letter-shaped pieces separate from the art); only with
         # neither, the deviation heuristic, which lights up the art as well.
-        for strokes in (self._dialog_mask, getattr(self, "_raw_mask", None), self._seg_mask):
+        # (the unstripped mask last: it also holds big solid SFX next to the
+        # line, which would drag the box over them)
+        for strokes in (self._dialog_mask, self._seg_mask, getattr(self, "_raw_mask", None)):
             if strokes is None:
                 continue
             seg_win = strokes[y0:y1, x0:x1]
@@ -2454,10 +2480,10 @@ class Compositor:
         if strokes is None:
             return None
         H, W = strokes.shape[:2]
-        raw = getattr(self, "_raw_mask", None)
-        if raw is not None and cv2.countNonZero(
-                strokes[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]) < 10:
-            strokes = raw      # a line the block detector didn't box
+        for alt in (self._seg_mask, getattr(self, "_raw_mask", None)):
+            if alt is not None and cv2.countNonZero(
+                    strokes[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]) < 10:
+                strokes = alt      # a line the block detector didn't box
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 <= x0 or y1 <= y0:
@@ -3000,13 +3026,13 @@ class Compositor:
             char_px = gp
         char_px = float(min(max(char_px, 14.0), 110.0))
         # How big the English should be, as a font size. With the Japanese
-        # glyphs MEASURED, match TCB's release: English letter height 0.6x the
-        # Japanese glyph for text lettered on art (median 0.59 over their
+        # glyphs MEASURED, match TCB's release: English letter height 0.56x the
+        # Japanese glyph for text lettered on art (median 0.56 over their
         # chapter 1194), converted through this face's own cap height. The
         # old 0.70x-as-point-size came out at ~0.49x letter height — the
         # "text on art is too small" measured against TCB at ~0.65x of theirs.
         if gp >= 8.0:
-            size_k = 0.60 / self.renderer.cap_ratio(self.renderer.font_path)
+            size_k = 0.56 / self.renderer.cap_ratio(self.renderer.font_path)
         else:
             size_k = 0.70
         em = self._em_ratio()
