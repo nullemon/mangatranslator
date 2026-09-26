@@ -258,6 +258,16 @@ class TextSegmenter:
             return np.zeros((h, w), np.uint8)
         return cv2.bitwise_or(a["stripped"], cv2.bitwise_and(a["raw"], a["foot"]))
 
+    def raw_mask(self, image: np.ndarray) -> np.ndarray:
+        """Every stroke the model marks, with NO solid-blob stripping. Only for
+        use inside a known line's own box: there a solid-looking lump is a bold
+        glyph (the long 一 of a title-page author name), not an eye."""
+        h, w = image.shape[:2]
+        a = self._analyze(image)
+        if a is None:
+            return np.zeros((h, w), np.uint8)
+        return a["raw"]
+
     def text_mask(self, image: np.ndarray) -> np.ndarray:
         """Strokes of dialogue / narration ONLY: the stroke mask restricted to
         detected text blocks. The block head is trained on lettering blocks and

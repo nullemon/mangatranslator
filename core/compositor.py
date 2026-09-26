@@ -69,6 +69,8 @@ class Compositor:
         # Optional — when absent, the ink-deviation heuristic is used alone.
         self.text_seg = None
         self._seg_mask = None
+        self._dialog_mask = None
+        self._raw_mask = None
         try:
             from .text_seg import TextSegmenter
             self.text_seg = TextSegmenter()
@@ -628,9 +630,21 @@ class Compositor:
         j = cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_CLOSE,
                              np.ones((3, 3), np.uint8))
         n, _lab, st, _ = cv2.connectedComponentsWithStats(j, 8)
-        sizes = [max(st[k, 2], st[k, 3]) for k in range(1, n) if st[k, 4] >= 12]
+        # Glyph-shaped pieces only: a long thin run is a panel border or an
+        # art line crossing the box, not a character.
+        sizes = [max(st[k, 2], st[k, 3]) for k in range(1, n)
+                 if st[k, 4] >= 12 and max(st[k, 2], st[k, 3]) <= 3 * min(st[k, 2], st[k, 3])]
         if len(sizes) < 3:
             return 0.0
+        # Furigana (the small reading beside kanji) and punctuation are well
+        # under half a base glyph; when a line carries more furigana than
+        # base glyphs — a title-page author name, 尾田栄一郎 with its reading
+        # おだえいいちろう — they swamped the percentile and a 100 px name
+        # measured as 33 px.
+        big = float(np.percentile(sizes, 95))
+        base = [v for v in sizes if v >= 0.5 * big]
+        if len(base) >= 3:
+            sizes = base
         return float(np.percentile(sizes, 85))
 
     @staticmethod
@@ -811,10 +825,12 @@ class Compositor:
         # line is never pulled into its box and erased with it. The full
         # mask stays for the user's own erase box (they boxed it: it goes).
         self._dialog_mask = None
+        self._raw_mask = None
         if self.text_seg is not None and self.text_seg.ok:
             try:
                 self._seg_mask = self.text_seg.mask(image)
                 self._dialog_mask = self.text_seg.text_mask(image)
+                self._raw_mask = self.text_seg.raw_mask(image)
             except Exception as e:
                 print(f"[compositor] text-seg mask failed: {e}")
         # Every region we actually edit. At the end we restore ALL other pixels
@@ -887,10 +903,11 @@ class Compositor:
                 b = it.get("bbox")
                 if b and len(b) == 4:
                     s = self._glyph_px(gray, strokes_for_size, b)
-                    if not s and self._seg_mask is not None:
+                    if not s and self._raw_mask is not None:
                         # a line the block detector didn't box (a chapter
-                        # title, a cover caption) is still measured
-                        s = self._glyph_px(gray, self._seg_mask, b)
+                        # title, a cover caption, an author name in bold
+                        # solid glyphs) is still measured
+                        s = self._glyph_px(gray, self._raw_mask, b)
                     if s:
                         sizes[id(it)] = s
                         it["_glyph_px"] = s
@@ -918,6 +935,9 @@ class Compositor:
             return (rect[0] + dx, rect[1] + dy, rect[2], rect[3])
 
         for it in items:
+            if it.pop("_joined", False):
+                it["placed"] = True        # lettered as part of another line
+                continue
             it["placed"] = False
             kind = (it.get("type") or "").lower().replace(" ", "_")
 
@@ -1236,10 +1256,16 @@ class Compositor:
                 # a light caption fill (clean paper behind) stays plain.
                 fglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
+                opts = {"max": self._size_cap(it, text, role_font)}
+                # A chapter title on a wide strip is set on ONE line across it,
+                # as a release does — wrapping it made a two-line block.
+                trole = lettering.normalise(it.get("tone", "")) or (it.get("type") or "")
+                if trole == "title" and rect[2] >= 3 * rect[3] and abs(rotation) < 2:
+                    text = " ".join(text.split())
+                    opts["single_line"] = True
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
                                self._item_scale(it) * role_scale, fglow,
-                               bool(it.get("fit_box")), None, role_font,
-                               self._size_cap(it, text, role_font)))
+                               bool(it.get("fit_box")), None, role_font, opts))
                 it["placed"] = True
                 continue
 
@@ -1387,6 +1413,18 @@ class Compositor:
                 # as one merged block across the pair.
                 lobes = self._lobes(mask, self._seg_mask)
                 if lobes:
+                    # Other lines filed with the SAME box (one detected block
+                    # read as two) belong to this balloon too: join them in
+                    # order before dividing across the lobes — otherwise the
+                    # second found the balloon taken and was dropped.
+                    for o in items:
+                        if (o is not it and not o.get("placed") and o.get("bbox")
+                                and len(o["bbox"]) == 4
+                                and self._iou(tuple(int(v) for v in o["bbox"]), (bx, by, bw, bh)) >= 0.85
+                                and (o.get("translation") or "").strip()):
+                            text = text + " " + " ".join(o["translation"].split())
+                            o["placed"] = True
+                            o["_joined"] = True
                     parts = self._split_for_lobes(text, lobes, self._seg_mask)
                     if parts:
                         color = self._pick_color(dark, it)
@@ -1476,6 +1514,7 @@ class Compositor:
                 opts = mx if isinstance(mx, dict) else {"max": mx}
                 self.renderer._max_font = int(opts.get("max") or 0)
                 self.renderer._keep_case = bool(opts.get("keep_case"))
+                self.renderer._single_line = bool(opts.get("single_line"))
                 # Swap the face for this line only, then put it back — the
                 # renderer caches by path, so switching costs nothing.
                 was = self.renderer.font_path
@@ -1489,6 +1528,7 @@ class Compositor:
                     self.renderer._shape_mask = None
                     self.renderer._max_font = 0
                     self.renderer._keep_case = False
+                    self.renderer._single_line = False
                     self.renderer.font_path = was
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
@@ -2200,14 +2240,16 @@ class Compositor:
                 ix0, iy0 = max(0, x) - x0, max(0, y) - y0
                 ix1, iy1 = min(W, x + w) - x0, min(H, y + h) - y0
                 own_d = seg_roi[iy0:iy1, ix0:ix1]
-                own_f = self._seg_mask[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]
+                # unstripped: in the line's own box a solid lump is a glyph
+                own_src = self._raw_mask if self._raw_mask is not None else self._seg_mask
+                own_f = own_src[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]
                 if (own_f.size and cv2.countNonZero(own_f) >= 40
                         and cv2.countNonZero(own_d) < 0.5 * cv2.countNonZero(own_f)):
                     # Only strokes that lie (almost) wholly INSIDE the line's
                     # box belong to it. A big SFX glyph that merely crosses
                     # into the box (あ / ブル beside a caption) runs well
                     # outside it — erasing its inside part cut the SFX up.
-                    full_win = self._seg_mask[y0:y1, x0:x1]
+                    full_win = own_src[y0:y1, x0:x1]
                     n_, lab_, _st, _c = cv2.connectedComponentsWithStats(
                         (full_win > 0).astype(np.uint8), 8)
                     inside = np.zeros(full_win.shape, bool)
@@ -2355,7 +2397,7 @@ class Compositor:
         # the block detector didn't box — a caption, a title — is still marked
         # there, as letter-shaped pieces separate from the art); only with
         # neither, the deviation heuristic, which lights up the art as well.
-        for strokes in (self._dialog_mask, self._seg_mask):
+        for strokes in (self._dialog_mask, getattr(self, "_raw_mask", None), self._seg_mask):
             if strokes is None:
                 continue
             seg_win = strokes[y0:y1, x0:x1]
@@ -2412,6 +2454,10 @@ class Compositor:
         if strokes is None:
             return None
         H, W = strokes.shape[:2]
+        raw = getattr(self, "_raw_mask", None)
+        if raw is not None and cv2.countNonZero(
+                strokes[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]) < 10:
+            strokes = raw      # a line the block detector didn't box
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 <= x0 or y1 <= y0:

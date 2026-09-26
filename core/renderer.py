@@ -868,6 +868,10 @@ class TextRenderer:
         If the text contains explicit line breaks, those are HONORED exactly (so
         you can lay a line out by hand in the editor); a manual line that's still
         too wide is wrapped, but your breaks are kept."""
+        if getattr(self, "_single_line", False):
+            # A chapter title on its strip is ONE line, sized to fit the width
+            # (TCB: "CHAPTER 1194: THE IMPERMANENCE OF ALL THINGS").
+            return [" ".join((text or "").split())]
         if "\n" in text:
             out = []
             for seg in text.split("\n"):
