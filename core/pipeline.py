@@ -905,6 +905,10 @@ class TranslationPipeline:
             provider, api_key, model, style_prompt,
             source_lang=self.source_lang, translate_sfx=self.translate_sfx,
             webtoon=self.webtoon)
+        # The FULL style prompt, glossary and all. A pasted wiki glossary can
+        # run to thousands of names; each page is sent only the ones it needs
+        # (see _focus_glossary), always cut down from this original.
+        self._full_style = getattr(self.translator, "style", None)
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
                                      translate_sfx=self.translate_sfx,
                                      replace_watermark=self.replace_watermark,
@@ -943,6 +947,28 @@ class TranslationPipeline:
 
         self.components = self._component_status()
         self._log_component_banner()
+
+    def _focus_glossary(self, page_text: str = "") -> None:
+        """Point the translator at the glossary names this page needs.
+
+        With no page text yet (start of a page) a huge glossary is just capped;
+        once the bubbles are read, only names that appear on the page (or
+        mostly appear — an attack called out a character per bubble) are
+        kept. Every non-glossary instruction is always kept. A glossary bug
+        must never fail a page, so any error falls back to the full style."""
+        tr = self.translator
+        full = getattr(self, "_full_style", None)
+        if tr is None or full is None or not hasattr(tr, "style"):
+            return
+        try:
+            from . import glossary
+            tr.style = glossary.focus_style(full, page_text or "")
+        except Exception as e:
+            print(f"[pipeline] glossary focus skipped: {e}")
+            try:
+                tr.style = full
+            except Exception:
+                pass
 
     def _credit_item(self, w: int, h: int, next_id: int) -> dict:
         """A TL/scanlation credit drawn as an overlay (no erase), movable/editable
@@ -1068,6 +1094,7 @@ class TranslationPipeline:
                 self.translator.on_wait = _waiting
             except Exception:
                 pass
+        self._focus_glossary("")
 
         image = cv2.imread(image_path)
         if image is None:
@@ -1223,6 +1250,7 @@ class TranslationPipeline:
             if pct >= 100:
                 usage.report_page(os.path.basename(image_path) + " (strip)")
 
+        self._focus_glossary("")
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Cannot load image: {image_path}")
@@ -1358,6 +1386,7 @@ class TranslationPipeline:
             if pct >= 100:
                 usage.report_page(os.path.basename(image_path) + " (pieces)")
 
+        self._focus_glossary("")
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Cannot load image: {image_path}")
@@ -1615,6 +1644,8 @@ class TranslationPipeline:
                 # the whole page falls through to the vision model below.
                 if jp and _has_japanese(jp):
                     id_to_text[r.id] = jp
+            # Now the page's text is known: send only the glossary names it uses.
+            self._focus_glossary("".join(id_to_text.values()))
             update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
             if id_to_text and self.one_by_one:
                 # BETA one-by-one: each bubble is its own translate call with

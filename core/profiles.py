@@ -161,7 +161,10 @@ def prompt_block(profile: dict) -> str:
     if gloss:
         lines.append("\nGLOSSARY — use these canonical renderings; never "
                      "re-translate or re-spell these terms:")
-        for g in gloss[:120]:
+        # Generous cap: the pipeline trims this to the names each page
+        # actually uses (core/glossary.focus_style), so a big pasted wiki
+        # glossary no longer needs cutting here.
+        for g in gloss[:2000]:
             term = g.get("term", "")
             tr = g.get("translation", "")
             note = g.get("notes", "")
