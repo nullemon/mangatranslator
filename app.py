@@ -2900,16 +2900,29 @@ async def rescan(task_id: str, request: Request):
     # The offline engine has no key to give — every other editor endpoint
     # already exempts it; this one was the odd man out.
     if not api_key and provider not in ("local", "offline"):
-        raise HTTPException(400, "api_key is required")
+        raise HTTPException(400, _NO_KEY_MSG)
     target_lang = payload.get("target_lang", "English")
     model = payload.get("model", "")
     style_prompt = payload.get("style_prompt", "")
+    offline = provider in ("local", "offline")
 
     def work():
         from core.pipeline import TranslationPipeline
         img = cv2.imread(base)
         if img is None:
             raise ValueError("Base image missing")
+        if offline:
+            # The offline engine reads with manga-ocr and nothing else. Without
+            # it the full pass used to die inside the pipeline with "needs a
+            # vision model — leave Smart Detection off", advice about a switch
+            # this button doesn't have. Run the detector alone instead, so the
+            # answer can say how many spots it found and why they stay unread.
+            ocr = _get_ocr()
+            src = (t.get("source_lang") or "Japanese").strip().lower()
+            if not (ocr and ocr.ok and src in ("japanese", "ja", "jp")):
+                from core.detector import BubbleDetector
+                regions = BubbleDetector().detect(img)
+                return "unread", [[int(v) for v in r.bbox] for r in regions]
         pipe = TranslationPipeline(
             api_key=api_key, target_lang=target_lang, provider=provider, model=model,
             use_smart_detection=True,  # smart pass is the most thorough finder
@@ -2933,6 +2946,23 @@ async def rescan(task_id: str, request: Request):
     from core.pipeline import _boxes_overlap
     existing = r.get("items", [])
     existing_boxes = [it["bbox"] for it in existing if it.get("bbox")]
+    if items == "unread":
+        # Detector-only pass (offline, no OCR): count what is new and say so.
+        boxes = [b for b in masks
+                 if not any(_boxes_overlap(list(b), list(eb)) for eb in existing_boxes)]
+        n = len(boxes)
+        src = (t.get("source_lang") or "Japanese").strip()
+        why = ("the offline engine needs the manga-ocr model (python "
+               "setup_models.py)" if src.lower() in ("japanese", "ja", "jp")
+               else f"the offline engine's manga-ocr reads Japanese only, not {src}")
+        notice = ((f"Found {n} possible text region{'s' if n != 1 else ''}, but "
+                   if n else "Found no new text regions, and ")
+                  + f"nothing on this PC can read them: {why}. Pick Claude/Gemini "
+                    "with an API key, or use Type text / Point translate and key "
+                    "the line in yourself.")
+        print(f"[rescan] {task_id[:8]} offline without OCR: {n} unread region(s)")
+        return {"added_count": 0, "added": [], "items": existing,
+                "unread": n, "notice": notice}
     next_id = max([it["id"] for it in existing if isinstance(it.get("id"), int)] + [0]) + 1
     task_masks = MASKS.setdefault(task_id, {})
 
@@ -2970,6 +3000,12 @@ async def rescan(task_id: str, request: Request):
 
 
 _OCR_INSTANCE = None
+
+# What the editor tools say when a Claude/Gemini engine is picked and the key
+# field is empty. "api_key is required" is a message for a programmer.
+_NO_KEY_MSG = ("No API key entered — add your Claude/Gemini key in Settings, "
+               "or switch the engine to Offline.")
+
 
 def _get_ocr():
     global _OCR_INSTANCE
@@ -3009,7 +3045,7 @@ async def ocr_translate(task_id: str, request: Request):
     if not bbox or len(bbox) != 4:
         raise HTTPException(400, "bbox must be [x, y, w, h]")
     if not api_key and provider not in ("local", "offline"):
-        raise HTTPException(400, "api_key is required")
+        raise HTTPException(400, _NO_KEY_MSG)
 
     x, y, w, h = [int(v) for v in bbox]
 
@@ -3022,7 +3058,8 @@ async def ocr_translate(task_id: str, request: Request):
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 <= x0 or y1 <= y0:
-            return {"original": "", "translation": ""}
+            return {"original": "", "translation": "",
+                    "reason": "That box lies outside the page."}
 
         crop = img[y0:y1, x0:x1]
         # Point-selected outline: white out everything OUTSIDE the polygon so
@@ -3045,6 +3082,12 @@ async def ocr_translate(task_id: str, request: Request):
 
         # Vision read+translate — works for ANY language (Japanese, Arabic, …),
         # so weird-shaped / non-Japanese regions translate too.
+        #
+        # Whatever stops the read is reported back as `reason`, because an
+        # empty answer with no reason left the editor saying "couldn't read
+        # this" for a missing model or a dead key — which looks like the tool
+        # is broken, not like something the user can fix.
+        reason = ""
         try:
             res = translator.translate_crop(crop, target_lang)
             if (res.get("translation") or "").strip():
@@ -3052,17 +3095,34 @@ async def ocr_translate(task_id: str, request: Request):
                         "translation": res.get("translation", "")}
         except Exception as e:
             print(f"[ocr-translate] vision crop failed: {e}")
+            reason = str(e)
 
         # Fallback: local Japanese OCR + text translate.
         original = ""
         ocr = _get_ocr()
-        if ocr and ocr.ok:
+        ocr_ok = bool(ocr and ocr.ok)
+        if ocr_ok:
             padded = cv2.copyMakeBorder(crop, 12, 12, 12, 12,
                                         cv2.BORDER_CONSTANT, value=(255, 255, 255))
             original = ocr.read(padded)
         if not original:
-            return {"original": "", "translation": ""}
-        out = translator.translate_texts({"0": original}, target_lang, image=crop)
+            if not reason:
+                if ocr_ok:
+                    reason = "No readable text was found in that spot."
+                elif getattr(translator, "has_vision", True):
+                    reason = ("The model read nothing there, and the local "
+                              "manga-ocr model isn't installed for a second try.")
+                else:
+                    reason = ("Nothing on this PC can read it: the offline engine "
+                              "needs the manga-ocr model (python setup_models.py), "
+                              "or switch to Claude/Gemini with an API key.")
+            return {"original": "", "translation": "", "reason": reason}
+        try:
+            out = translator.translate_texts({"0": original}, target_lang, image=crop)
+        except Exception as e:
+            # Read fine, translate didn't (no offline pack, bad key, offline).
+            print(f"[ocr-translate] translate failed: {e}")
+            return {"original": original, "translation": "", "reason": str(e)}
         entry = out.get(0) or out.get("0") or {}
         return {"original": original, "translation": entry.get("translation", original)}
 
@@ -3093,7 +3153,7 @@ async def retranslate_ordered(task_id: str, request: Request):
     if not items:
         raise HTTPException(400, "No items to re-translate")
     if not api_key and payload.get("provider") not in ("local", "offline"):
-        raise HTTPException(400, "api_key is required")
+        raise HTTPException(400, _NO_KEY_MSG)
 
     provider = payload.get("provider", "claude")
     model = payload.get("model", "")
@@ -3159,7 +3219,7 @@ async def translate_text(request: Request):
     if not text:
         raise HTTPException(400, "Type some text to translate")
     if not api_key and payload.get("provider") not in ("local", "offline"):
-        raise HTTPException(400, "api_key is required")
+        raise HTTPException(400, _NO_KEY_MSG)
 
     provider = payload.get("provider", "claude")
     model = payload.get("model", "")

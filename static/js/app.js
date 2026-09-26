@@ -2307,12 +2307,14 @@ document.addEventListener("DOMContentLoaded", () => {
       compLabelLeft.textContent  = leftLabel;
       compLabelRight.textContent = rightLabel;
       tabTranslated.textContent  = tabLabel;
-      detailsTab.style.display   = noTranslate ? "none" : "";
-      // A page with no text has no Details. If that tab was the one open
-      // (from the previous page), hiding it left its panel showing — the text
-      // size slider and an empty list over a page that has neither, and no
-      // tab lit up at all. Fall back to Compare.
-      if (noTranslate && detailsTab.classList.contains("active")) {
+      // A page with no text has no Details — until text is added by hand
+      // (Type text, Point translate…): those lines are edited, given a font
+      // and exported from the Details tab like any other. If the tab is
+      // hidden while it was the open one (from the previous page), its panel
+      // stayed showing with no tab lit — fall back to Compare.
+      const hideDetails = noTranslate && !(p.added && p.added.length);
+      detailsTab.style.display   = hideDetails ? "none" : "";
+      if (hideDetails && detailsTab.classList.contains("active")) {
         const compare = document.querySelector('.tab[data-tab="compare"]');
         if (compare) compare.click();
       }
@@ -2596,7 +2598,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ── Transcript: a readable original → translation dump (great for SBS pages) ──
   function buildTranscript(page) {
-    const items = (page && page.items || []).filter(it => (it.translation || "").trim());
+    // Detected lines, then the ones added by hand (Add / Type text / Point
+    // translate) — those were left out, so a typed-in line never made it
+    // into the .txt.
+    const items = (page && page.items || []).concat(page && page.added || [])
+      .filter(it => (it.translation || "").trim());
     if (!items.length) return "";
     const head = `${page.name || "page"} — ${items.length} lines\n${"=".repeat(40)}\n\n`;
     return head + items.map((it, i) => {
@@ -2722,7 +2728,8 @@ document.addEventListener("DOMContentLoaded", () => {
           covers: page.covers || [],
           rotations: page.rotations || {},
           colors: page.colors || {},
-          added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, poly: a.poly || null, translation: a.translation })),
+          added: (page.added || []).map(a => ({ id: a.id, bbox: a.bbox, poly: a.poly || null,
+                                                original: a.original || "", translation: a.translation })),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
@@ -2947,13 +2954,24 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "re-scan failed");
-      if (data.items) page.items = data.items;
+      if (data.items) {
+        // The server echoes its items as of the LAST Apply; text edited since
+        // then lives only here. "Keeps your edits" — so keep them.
+        const mine = {};
+        (page.items || []).forEach(it => { mine[String(it.id)] = it.translation; });
+        page.items = data.items.map(it => {
+          const v = mine[String(it.id)];
+          return (v !== undefined && v !== it.translation)
+            ? Object.assign({}, it, { translation: v }) : it;
+        });
+      }
       buildTranslationsList(page);
       if (data.added_count > 0) {
         editHint.textContent = `Found ${data.added_count} missed region(s) — re-rendering…`;
         await applyChanges(rescanBtn);
       } else {
-        editHint.textContent = "No missed text found on this page.";
+        // e.g. offline with no OCR: the detector ran but nothing could be read.
+        editHint.textContent = data.notice || "No missed text found on this page.";
       }
     } catch (e) {
       editHint.textContent = "Re-scan failed: " + (e.message || e);
@@ -3261,6 +3279,7 @@ document.addEventListener("DOMContentLoaded", () => {
     box.addEventListener("pointercancel", end);
   }
 
+
   function addItemBox(it, page, W, H, isAdded) {
     const [bx, by, bw, bh] = itemRect(page, it);
     const box = makeBox(bx, by, bw, bh, W, H,
@@ -3390,6 +3409,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const rotVal = pop.querySelector(".epop-rot-val");
     const fsEl = pop.querySelector(".epop-fs");
     const fsVal = pop.querySelector(".epop-fs-val");
+    // Only a tilt the user actually set is saved. Saving the slider's resting
+    // value (0) as a manual tilt froze every edited line upright — a Point
+    // translate item lost the tilt it takes from its outline the moment its
+    // wording was corrected here.
+    let rotTouched = false;
     if (rotEl) {
       const ghost = document.createElement("div");
       ghost.className = "tilt-ghost";
@@ -3414,12 +3438,13 @@ document.addEventListener("DOMContentLoaded", () => {
         v = Math.max(-180, Math.min(180, Math.round(parseFloat(v) || 0)));
         rotEl.value = v;
         if (numEl) numEl.value = v;
+        rotTouched = true;
         sync();
       };
       rotEl.addEventListener("input", () => setRot(rotEl.value));
       if (numEl) numEl.addEventListener("input", () => {
         const v = parseFloat(numEl.value);
-        if (!isNaN(v)) { rotEl.value = Math.max(-180, Math.min(180, v)); sync(); }
+        if (!isNaN(v)) { rotEl.value = Math.max(-180, Math.min(180, v)); rotTouched = true; sync(); }
       });
       pop.querySelectorAll(".epop-ra").forEach(b =>
         b.addEventListener("click", () => setRot(b.dataset.a)));
@@ -3437,9 +3462,9 @@ document.addEventListener("DOMContentLoaded", () => {
       page.colors = page.colors || {};
       page.colors[it.id] = pickedClr;
       const rotSave = pop.querySelector(".epop-rot");
-      if (rotSave) {
+      page.rotations = page.rotations || {};
+      if (rotSave && (rotTouched || page.rotations[it.id] != null)) {
         const rv = parseFloat(rotSave.value);
-        page.rotations = page.rotations || {};
         if (!isNaN(rv)) page.rotations[it.id] = rv;
       }
       const fsSave = pop.querySelector(".epop-fs");
@@ -3555,8 +3580,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const h = Math.round(Math.abs(cy - sy) / r.height * H);
       if (w < 6 || h < 6) return;
       page.covers = page.covers || []; page.added = page.added || [];
-      pushUndo(page);
+      // The add tools take their undo snapshot in placeAdded, once the
+      // text is actually placed — a read that fails or is cancelled must
+      // not leave an entry Undo has to step over.
       if (tool === "cover") {
+        pushUndo(page);
         page.covers.push([x, y, w, h]);
         buildOverlay();
       } else if (tool === "type-add") {
@@ -3757,13 +3785,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
       if (pts.length < 3) { pts = []; return; }
-      pushUndo(page);
       const [W, H] = dims;
       const polyImg = pts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
       const wasAdd = tool === "lasso-add";
       const wasKeep = tool === "keep";
       const wasRestore = tool === "restore";
       pts = [];
+      if (!wasAdd) pushUndo(page);   // an add snapshots in placeAdded, on success
       if (wasRestore) {
         // Restore eraser: original pixels come back inside this outline.
         page.covers = page.covers || [];
@@ -3779,14 +3807,17 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (wasAdd) {
-        // Free-form add: OCR + translate the shape's bbox, and erase the exact
-        // outlined shape (content-aware) so odd-shaped backgrounds stay clean.
+        // Free-form add: OCR reads ONLY inside the outline (a neighbouring
+        // line can't bleed into the reading), the translation is typeset
+        // inside it, and the exact shape is content-aware erased so
+        // odd-shaped backgrounds stay clean. The outline used to be sent as
+        // a bare bbox, and the erase cover went in before anything was read
+        // — so a failed read left a red ghost that Apply healed out.
         const xs = polyImg.map(p => p[0]), ys = polyImg.map(p => p[1]);
         const x = Math.min(...xs), y = Math.min(...ys);
         const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
-        page.covers = page.covers || [];
-        page.covers.push({ poly: polyImg });
-        if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h]);
+        const outline = thinPoly(polyImg);
+        if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h], outline, false, { poly: outline });
         else buildOverlay();
       } else {
         page.covers = page.covers || [];
@@ -3838,7 +3869,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const myPts = pts;
       reset();
       if (!page || !dims || myPts.length < 3) return;
-      pushUndo(page);
       const [W, H] = dims;
       const polyImg = myPts.map(([px, py]) => [Math.round(px / 100 * W), Math.round(py / 100 * H)]);
       const xs = polyImg.map(p => p[0]), ys = polyImg.map(p => p[1]);
@@ -3847,6 +3877,7 @@ document.addEventListener("DOMContentLoaded", () => {
       page.covers = page.covers || [];
       if (toneMode) {
         // Screentone patch: density is measured from the art around it.
+        pushUndo(page);
         page.covers.push({ fill_poly: polyImg, tone: true });
         buildOverlay();
         editHint.textContent = "Tone patch outlined — hit Apply & Re-render.";
@@ -3854,12 +3885,15 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (fillMode) {
         // Redraw: ask which colour to flood the shape with (pre-sampled from
-        // the art just outside it), then store it as a fill cover.
+        // the art just outside it), then store it as a fill cover (the undo
+        // snapshot is taken there, on OK — not for a cancelled picker).
         openFillPicker(page, polyImg);
         return;
       }
-      page.covers.push({ poly: polyImg });   // erase the original inside the shape
-      if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h], polyImg);
+      // Point translate: the outline goes to OCR (reads only inside it) and
+      // onto the placed item (text stays inside, tilted with the shape); the
+      // erase cover for the shape is added only once the text is placed.
+      if (w >= 6 && h >= 6) autoTranslate(page, [x, y, w, h], polyImg, false, { poly: polyImg });
       else buildOverlay();
     }
     moveLayer.addEventListener("pointerdown", e => {
@@ -4330,6 +4364,7 @@ document.addEventListener("DOMContentLoaded", () => {
       close(); buildOverlay();
     });
     back.querySelector("#fillOk").addEventListener("click", () => {
+      pushUndo(page);
       page.covers = page.covers || [];
       page.covers.push({ fill_poly: poly, color: colour });
       close();
@@ -4372,8 +4407,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   /* Place a region whose ORIGINAL text the user keys in by hand. */
-  function typeTranslate(page, bbox, poly, vertical) {
-    if (!window.MangaIME) { autoTranslate(page, bbox, poly, vertical); return; }
+  function typeTranslate(page, bbox, poly, vertical, cover) {
+    if (!window.MangaIME) { autoTranslate(page, bbox, poly, vertical, cover); return; }
     editHint.textContent = "Type the original text, then place it.";
     window.MangaIME.open({
       title: "Type the original text",
@@ -4381,14 +4416,41 @@ document.addEventListener("DOMContentLoaded", () => {
       translate: translateTyped,
       onCancel: () => { editHint.textContent = HINTS[tool] || HINTS.add; },
       onUse: ({ original, translation }) => {
-        placeAdded(page, bbox, poly, original, translation, vertical);
+        placeAdded(page, bbox, poly, original, translation, vertical, cover);
       },
     });
   }
 
-  /* Shared placement used by every add path. */
-  function placeAdded(page, bbox, poly, original, translation, vertical) {
+  /* A freehand lasso records a point per pointer event — hundreds on a slow
+     drag. Keep the shape, drop the near-duplicates, so the outline that goes
+     to OCR and onto the item stays a sane size. */
+  function thinPoly(pts, minGap) {
+    const gap = minGap || 3;
+    const out = [];
+    for (const p of pts) {
+      const last = out[out.length - 1];
+      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) >= gap) out.push(p);
+    }
+    while (out.length > 240) {
+      for (let i = out.length - 2; i > 0; i -= 2) out.splice(i, 1);
+    }
+    return out.length >= 3 ? out : pts.slice();
+  }
+
+  /* Shared placement used by every add path.
+
+     This is the ONE place an add commits to the page, so it is also where the
+     undo snapshot is taken and where the lasso/pen erase outline (`cover`)
+     joins page.covers. Before, the drawing surfaces pushed the outline and
+     the undo entry the moment the shape was closed, before anything had been
+     read — so a read that failed (no key, no OCR) or was cancelled left a red
+     erase polygon on the page that Apply would then heal out of the art, and
+     Undo had to be pressed twice to get past the no-op entry. */
+  function placeAdded(page, bbox, poly, original, translation, vertical, cover) {
+    pushUndo(page);
     page.added = page.added || [];
+    page.covers = page.covers || [];
+    if (cover) page.covers.push(cover);
     page.addSeq = (page.addSeq || 0) + 1;
     const nid = "m" + page.addSeq;
     page.added.push({
@@ -4400,19 +4462,25 @@ document.addEventListener("DOMContentLoaded", () => {
       page.rotations[nid] = -90;
     }
     buildOverlay();
+    buildTranslationsList(page);
+    if (detailsTab) detailsTab.style.display = "";   // a Clean page gains its list here
     editHint.textContent = "Added! Hit Apply & Re-render when ready.";
   }
 
-  async function autoTranslate(page, bbox, poly, vertical) {
+  async function autoTranslate(page, bbox, poly, vertical, cover) {
     editHint.textContent = "Reading & translating…";
     let data = { original: "", translation: "" };
+    // Why nothing came back — shown to the user instead of a bare "couldn't
+    // read this". A missing key or an uninstalled OCR model used to be
+    // swallowed here, which read as the tool being broken.
+    let reason = "";
     try {
       const resp = await fetch(`/api/ocr-translate/${page.taskId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bbox,
-          poly: poly || null,   // pen outline: OCR reads ONLY inside the shape
+          poly: poly || null,   // pen/lasso outline: OCR reads ONLY inside the shape
           api_key: apiKeyInput.value.trim(),
           provider: engineSelect.value,
           model: modelSelect.value,
@@ -4420,22 +4488,40 @@ document.addEventListener("DOMContentLoaded", () => {
           style_prompt: styleText(),
         }),
       });
-      if (resp.ok) data = await resp.json();
-    } catch (_) { /* fall through to manual entry */ }
+      if (resp.ok) {
+        data = await resp.json();
+        reason = (data.reason || "").trim();
+      } else {
+        let m = resp.statusText || ("HTTP " + resp.status);
+        try { m = (await resp.json()).detail || m; } catch (_) {}
+        reason = String(m);
+      }
+    } catch (e) {
+      reason = "Couldn't reach the server — " + (e.message || e);
+    }
 
     // Nothing readable here: hand over to the built-in keyboard so the user
     // can key the ORIGINAL in themselves (no system IME needed) and get a
     // proper translation — far better than guessing at the English.
     const suggested = (data.translation || "").trim();
-    if (!suggested && window.MangaIME) {
+    if (!suggested) {
+      const why = reason || "Nothing readable was found in that spot.";
+      editHint.textContent = "Couldn't read this: " + why;
+      if (!window.MangaIME) return;
+      // A slow read coming back while the keyboard is already up for
+      // ANOTHER line must not take it over: open() swaps the callbacks and
+      // clears the text box, wiping what the user has typed so far. The
+      // reason stays in the hint; they can draw the box again.
+      if (window.MangaIME.isOpen && window.MangaIME.isOpen()) return;
       window.MangaIME.open({
         title: "Couldn't read this — type the original text",
+        msg: why + " You can also type the English straight into the Translation box.",
         text: (data.original || "").trim(),
         sourceLang: sourceLang ? sourceLang.value : "Japanese",
         translate: translateTyped,
         onCancel: () => { editHint.textContent = HINTS[tool] || HINTS.add; },
         onUse: ({ original, translation }) => {
-          placeAdded(page, bbox, poly, original, translation, vertical);
+          placeAdded(page, bbox, poly, original, translation, vertical, cover);
         },
       });
       return;
@@ -4443,7 +4529,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const label = "Edit translation (read: " + data.original + "):";
     const txt = prompt(label, suggested);
     if (txt && txt.trim()) {
-      placeAdded(page, bbox, poly, data.original || "", txt, vertical);
+      placeAdded(page, bbox, poly, data.original || "", txt, vertical, cover);
     } else {
       editHint.textContent = HINTS[tool] || HINTS.add;
     }

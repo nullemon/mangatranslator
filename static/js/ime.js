@@ -214,7 +214,9 @@
     src.value = o.text || "";
     out.value = o.translation || "";
     romaji.value = "";
-    msg.textContent = "";
+    // Why the caller landed here (no key, no OCR…) — the user must never
+    // have to guess whether the tool is broken.
+    msg.textContent = o.msg || "";
 
     // Korean pages open on the Korean pad — that's what they'll need.
     let mode = (o.sourceLang || "").toLowerCase().startsWith("korean")
@@ -337,5 +339,10 @@
     setTimeout(() => (mode === "ko" ? src : romaji).focus(), 30);
   }
 
-  window.MangaIME = { open, romajiToKana, composeHangul, toKatakana };
+  // Whether the keyboard is up right now. A second open() would replace the
+  // callbacks and blank the text box, so callers check before opening it
+  // over a line the user is already typing.
+  const isOpen = () => !!el && el.style.display !== "none";
+
+  window.MangaIME = { open, isOpen, romajiToKana, composeHangul, toKatakana };
 })();

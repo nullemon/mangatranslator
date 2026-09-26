@@ -352,8 +352,14 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .trans-stage{position:relative;display:block;line-height:0}
 .move-layer{position:absolute;inset:0;display:none}
 .move-layer.on{display:block}
-.move-layer[data-tool="cover"],.move-layer[data-tool="add"]{cursor:crosshair}
-.move-box{position:absolute;border:2px dashed var(--accent);background:rgba(59,130,246,.10);
+.move-layer[data-tool="cover"],.move-layer[data-tool="add"],.move-layer[data-tool="vert-add"],
+.move-layer[data-tool="type-add"],.move-layer[data-tool="lasso"],.move-layer[data-tool="lasso-add"],
+.move-layer[data-tool="pen-add"],.move-layer[data-tool="keep"],.move-layer[data-tool="restore"],
+.move-layer[data-tool="fill-poly"],.move-layer[data-tool="tone-poly"]{cursor:crosshair}
+/* Item boxes sit ABOVE the erase/lasso outlines (svg, z-index 4): a Point-translated
+   line shares its exact outline, and a click meant for its text used to hit the outline
+   and delete the erase instead of opening the editor. */
+.move-box{position:absolute;z-index:5;border:2px dashed var(--accent);background:rgba(59,130,246,.10);
   border-radius:4px;touch-action:none;transition:background .12s,border-color .12s}
 .move-box.draggable{cursor:grab}
 .move-box.editable{cursor:pointer}
@@ -371,7 +377,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .add-box{position:absolute;border:2px dashed #16a34a;background:rgba(22,163,74,.14);border-radius:3px;touch-action:none}
 .add-box.drawing{pointer-events:none}
 /* resize tool: a box with 8 drag handles */
-.resize-box{position:absolute;border:2px solid var(--accent);background:rgba(59,130,246,.10);
+.resize-box{position:absolute;z-index:5;border:2px solid var(--accent);background:rgba(59,130,246,.10);
   border-radius:3px;cursor:move;touch-action:none}
 .resize-box.dragging{background:rgba(59,130,246,.22)}
 .resize-box.added-box{border-color:#16a34a;background:rgba(22,163,74,.12)}
