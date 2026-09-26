@@ -1824,7 +1824,10 @@ class TranslationPipeline:
                 continue
             if not self.translate_sfx:
                 if _is_sfx(it.get("original", "")):
-                    continue
+                    if not self._keep_balloon_sound(image, it.get("bbox"), it.get("original", "")):
+                        continue
+                    it["in_bubble"] = True
+                    it["type"] = "dialogue"
                 if it.get("type") in ("sfx", "sound", "onomatopoeia"):
                     # The label alone isn't trusted: detectors tag big dramatic
                     # display lines (未知の新種!!!, 強敵現るッ!!) as "sfx", but
@@ -1933,6 +1936,51 @@ class TranslationPipeline:
             print(f"[pipeline] free det {f.get('original', '')[:12]!r} dropped: "
                   f"degenerate box {f['bbox']}")
         return out
+
+    def _in_real_balloon(self, image, box) -> bool:
+        """Does `box` sit inside a genuine speech balloon? A sound lettered
+        IN a balloon (ばっ!, にゅっ, パキパキ) is a line of dialogue — release
+        letterers translate every one — while the same sound drawn on the art
+        is SFX and left alone. Judged with the compositor's own balloon test,
+        so the answer matches how the balloon will be wiped and lettered."""
+        comp = getattr(self, "compositor", None)
+        if comp is None or not box or len(box) != 4:
+            return False
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            x, y, w, h = [int(v) for v in box]
+            if w < 6 or h < 6:
+                return False
+            rec = comp._resolve_bubble(gray, (x, y, w, h), gray.size)
+            if rec is None:
+                return False
+            rmask, rbb, _dark = rec
+            enclosed = cv2.countNonZero(rmask[max(0, y):y + h, max(0, x):x + w]) / float(w * h)
+            if enclosed < 0.85 or rbb[2] * rbb[3] > 9.0 * w * h:
+                return False
+            # The balloon test reads the compositor's page stroke mask, which
+            # is only set when a page is COMPOSED — during detection it still
+            # holds the previous page's (same size in a chapter, so it would
+            # pass the shape check). Use this page's own mask for the test.
+            prev = comp._seg_mask
+            try:
+                ts = getattr(self, "text_seg", None)
+                comp._seg_mask = ts.mask(image) if ts is not None and ts.ok else None
+                return bool(comp._is_real_balloon(gray, rmask, True))
+            finally:
+                comp._seg_mask = prev
+        except Exception as e:
+            print(f"[pipeline] balloon check failed: {e}")
+            return False
+
+    def _keep_balloon_sound(self, image, box, label="") -> bool:
+        """A reading that looks like SFX, with SFX translation off: keep it
+        only when it is lettered inside a balloon."""
+        if self._in_real_balloon(image, box):
+            print(f"[pipeline] sound {label[:12]!r} at {list(box)} is inside a "
+                  f"balloon — translated as a line, not skipped as SFX")
+            return True
+        return False
 
     def _box_text_evidence(self, image, box) -> bool:
         """Positive evidence that a claimed region contains LETTERING: the
@@ -2210,8 +2258,11 @@ class TranslationPipeline:
             # the old `or label` here dropped every such line outright, which
             # left big vertical display columns untranslated on the page.
             is_sfx = _is_sfx(jp)
+            balloon_sound = False
             if is_sfx and not self.translate_sfx:
-                continue
+                if not self._keep_balloon_sound(image, [bx, by, bw, bh], jp):
+                    continue
+                balloon_sound = True
             if typ in ("sfx", "sound", "onomatopoeia") and not is_sfx:
                 typ = "narration"
             if not tr:
@@ -2242,7 +2293,9 @@ class TranslationPipeline:
                 pass
 
             allowed = ("title", "credit", "narration", "caption")
-            if self.translate_sfx and is_sfx:
+            if balloon_sound:
+                out_type = "dialogue"
+            elif self.translate_sfx and is_sfx:
                 out_type = "sfx"
             else:
                 out_type = typ if typ in allowed else "narration"
@@ -2252,7 +2305,7 @@ class TranslationPipeline:
                 "original": jp,
                 "translation": tr,
                 "type": out_type,
-                "in_bubble": False,
+                "in_bubble": balloon_sound,
                 "dark": False,
                 "rotation": rotation,
             })
@@ -2291,6 +2344,7 @@ class TranslationPipeline:
 
         id_to_text: Dict[int, str] = {}
         box_map: Dict[int, tuple] = {}
+        in_balloon = set()       # ids whose "SFX" reading sits in a balloon
         for box in boxes:
             if any(_boxes_overlap(list(box), tb) for tb in taken):
                 continue
@@ -2298,7 +2352,9 @@ class TranslationPipeline:
             if not jp or not _has_source_text(jp, self.source_lang):
                 continue
             if _is_sfx(jp) and not self.translate_sfx:
-                continue
+                if not self._keep_balloon_sound(image, box, jp):
+                    continue
+                in_balloon.add(next_id)
             # Same text already found by another pass (LLM box was off but
             # close enough that both versions would be placed = doubled text).
             if any(_texts_match(jp, t) for t in known_texts):
@@ -2330,8 +2386,8 @@ class TranslationPipeline:
                 "bbox": [int(v) for v in box_map[fid]],
                 "original": jp,
                 "translation": text,
-                "type": tr.get("type", "narration"),
-                "in_bubble": False,
+                "type": "dialogue" if fid in in_balloon else tr.get("type", "narration"),
+                "in_bubble": fid in in_balloon,
                 "dark": False,
             })
         if items:
@@ -2354,6 +2410,7 @@ class TranslationPipeline:
         next_id = max((r.id for r in bubble_regions), default=0) + 1
         id_to_text: Dict[int, str] = {}
         box_map: Dict[int, tuple] = {}
+        in_balloon = set()       # ids whose "SFX" reading sits in a balloon
 
         for box in free_boxes:
             if not self._box_text_evidence(image, box):
@@ -2361,10 +2418,15 @@ class TranslationPipeline:
             jp = self.ocr.read_region(image, box, None)
             if not jp:
                 continue
+            balloon_sound = False
             if _is_sfx(jp) and not self.translate_sfx:
-                continue
+                if not self._keep_balloon_sound(image, box, jp):
+                    continue
+                balloon_sound = True
             fid = next_id
             next_id += 1
+            if balloon_sound:
+                in_balloon.add(fid)
             id_to_text[fid] = jp
             box_map[fid] = box
 
@@ -2386,8 +2448,8 @@ class TranslationPipeline:
                 "bbox": [int(v) for v in box_map[fid]],
                 "original": jp,
                 "translation": tr.get("translation", ""),
-                "type": tr.get("type", "narration"),
-                "in_bubble": False,
+                "type": "dialogue" if fid in in_balloon else tr.get("type", "narration"),
+                "in_bubble": fid in in_balloon,
                 "dark": False,
             })
         if items:
