@@ -1675,6 +1675,13 @@ class TranslationPipeline:
         if not ocr_usable and self.ocr is not None and self.ocr.ok:
             print(f"[pipeline] source={self.source_lang}: skipping Japanese "
                   f"manga-ocr, reading bubbles with the vision model")
+        if self.one_by_one and not ocr_usable:
+            # One-by-one sends each bubble's OCR reading on its own; with no
+            # reading to send, the page goes to the model in one call. Say so
+            # rather than let the toggle look like it did nothing.
+            print("[pipeline] one-by-one needs the manga-ocr reading of each "
+                  "bubble (Japanese, manga-ocr installed) — translating this "
+                  "page in one vision call instead")
         if ocr_usable:
             from .ocr import _has_japanese
             update(2, "Reading bubbles with manga-ocr...", 30)
@@ -1738,6 +1745,29 @@ class TranslationPipeline:
                     if not getattr(self.translator, "has_vision", True):
                         raise
                     print(f"[pipeline] text translation failed, using vision path: {e}")
+
+        if not getattr(self.translator, "has_vision", True):
+            # The offline engine reads bubbles with manga-ocr and nothing
+            # else. Falling through to the vision path below used to fail the
+            # page with "needs a vision model — leave Smart Detection off",
+            # advice about a switch that was already off; say what is
+            # actually missing instead.
+            if ocr_usable:
+                # It read the bubbles and found no Japanese in any of them:
+                # nothing to translate, which is not a failure.
+                print("[pipeline] offline: manga-ocr read no Japanese in "
+                      f"{len(regions)} balloon(s) — left as they are")
+                return {}
+            if src not in ("japanese", "ja", "jp"):
+                why = (f"it reads balloons with manga-ocr, which reads "
+                       f"Japanese only, not {self.source_lang}")
+            else:
+                why = ("it reads balloons with the manga-ocr model, which "
+                       "isn't installed on this PC (run: python "
+                       "setup_models.py)")
+            raise RuntimeError(
+                f"The Offline engine can't read this page — {why}. Switch "
+                "the Translation Engine to Gemini or Claude to translate it.")
 
         update(2, "Translating bubbles...", 32)
         out = self.translator.translate_regions(

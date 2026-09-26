@@ -412,7 +412,20 @@ class GeminiTranslator:
         text = "".join(p.get("text", "") for p in parts)
         if not text.strip():
             reason = cands[0].get("finishReason")
-            raise RuntimeError(f"Gemini returned no text (finishReason={reason})")
+            # The bare finishReason told the user nothing they could act on.
+            hint = {
+                "MAX_TOKENS": " — it used up its whole output allowance (mostly "
+                              "on thinking) before answering. Retry the page, or "
+                              "pick a Flash model for dense pages",
+                "SAFETY": " — Google's safety filter blocked the reply. Retry, "
+                          "or translate this page with Claude",
+                "PROHIBITED_CONTENT": " — Google refused this page's content. "
+                                      "Translate it with Claude instead",
+                "RECITATION": " — Google stopped the reply as a possible "
+                              "copyright recitation. Retry the page",
+            }.get(str(reason or "").upper(), "")
+            raise RuntimeError(
+                f"Gemini returned no text (finishReason={reason}){hint}.")
         return text
 
     def translate_regions(
