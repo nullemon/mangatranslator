@@ -2516,6 +2516,16 @@ async def rerender(task_id: str, request: Request):
                 pass
         return default
 
+    # What the detector found, kept apart from what the editor overrides. The
+    # stored result must go on describing the DETECTED box and tilt: the
+    # editor sends its overrides (boxes / rotations) with every re-render and
+    # draws them on top of these, so once an override was written back here
+    # as the item's own box, undoing it changed nothing — the next re-render
+    # started from the overridden box again. (The compositor also grows
+    # it["bbox"] in place while placing, which would drift the same way.)
+    detected = {str(it["id"]): (list(it["bbox"]), it.get("rotation", 0))
+                for it in r.get("items", [])}
+
     items = []
     for it in r.get("items", []):
         nid = str(it["id"])
@@ -2716,11 +2726,13 @@ async def rerender(task_id: str, request: Request):
     # Reflect new placement / edits back into the stored result.
     r["items"] = [
         {
-            "id": it["id"], "bbox": it["bbox"], "original": it["original"],
+            "id": it["id"],
+            "bbox": detected.get(str(it["id"]), (it["bbox"], 0))[0],
+            "original": it["original"],
             "translation": it["translation"], "type": it["type"],
             "in_bubble": it["in_bubble"], "dark": it.get("dark", False),
             "placed": it.get("placed", False),
-            "rotation": it.get("rotation", 0),
+            "rotation": detected.get(str(it["id"]), (None, it.get("rotation", 0)))[1],
             "src_rect": it.get("src_rect"),
             "title_caption": it.get("title_caption", False),
         }

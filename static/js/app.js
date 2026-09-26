@@ -2556,12 +2556,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     el.querySelectorAll(".tl-del").forEach(btn => {
       btn.addEventListener("click", () => {
+        pushUndo(page);
+        collectEdits(page);
         page.added = (page.added || []).filter(a => String(a.id) !== btn.dataset.id);
         buildTranslationsList(page);
       });
     });
     el.querySelectorAll(".tl-font").forEach(s => {
       s.addEventListener("change", () => {
+        pushUndo(page);
         page.fonts = page.fonts || {};
         if (s.value) page.fonts[s.dataset.id] = s.value;
         else delete page.fonts[s.dataset.id];
@@ -2570,6 +2573,7 @@ document.addEventListener("DOMContentLoaded", () => {
     el.querySelectorAll(".tl-color").forEach(grp => {
       grp.querySelectorAll(".tl-clr").forEach(btn => {
         btn.addEventListener("click", () => {
+          pushUndo(page);
           page.colors = page.colors || {};
           page.colors[grp.dataset.id] = btn.dataset.c;
           grp.querySelectorAll(".tl-clr").forEach(b => b.classList.toggle("on", b === btn));
@@ -2685,7 +2689,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Only harvest the on-screen textareas when they actually belong to this
     // page — a batch re-render (find & replace) walks pages that aren't
     // rendered, and reading another page's boxes would clobber the new text.
-    if (!pageArg || pageArg.uid === activeUid) collectEdits(page);
+    // Judged by the PAGE, not by how it was passed: "no pageArg" only meant
+    // the page was active when the click happened, and the user can switch
+    // pages while the request is in flight (see the second harvest below).
+    if (page.uid === activeUid) collectEdits(page);
     const edits = {};
     (page.items || []).forEach(it => { edits[it.id] = it.translation; });
 
@@ -2901,6 +2908,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   document.addEventListener("keydown", e => {
     if (!betaOn()) return;
+    // Inside a text field the shortcut is the field's own undo: hijacking it
+    // there threw away what was just typed AND rolled the page back a step.
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     const k = (e.key || "").toLowerCase();
     const mod = e.ctrlKey || e.metaKey;
     if (mod && k === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); }
@@ -3139,13 +3150,17 @@ document.addEventListener("DOMContentLoaded", () => {
       moveLayer.appendChild(box);
     });
 
+    // An emptied ("Empty" / ⌫) region has no text to move, reshape or edit,
+    // so it gets no box — it used to keep one, and opening it offered to
+    // Empty it again.
+    const gone = it => page.excluded.has(String(it.id)) || (page.erased && page.erased.has(String(it.id)));
     if (tool === "move" || tool === "edit") {
       for (const it of (page.items || [])) {
-        if (!it.placed || !it.bbox || page.excluded.has(String(it.id))) continue;
+        if (!it.placed || !it.bbox || gone(it)) continue;
         addItemBox(it, page, W, H, false);
       }
       for (const it of (page.added || [])) {
-        if (!it.bbox) continue;
+        if (!it.bbox || gone(it)) continue;
         addItemBox(it, page, W, H, true);
       }
     }
@@ -3153,20 +3168,33 @@ document.addEventListener("DOMContentLoaded", () => {
     if (tool === "resize") {
       page.boxes = page.boxes || {};
       for (const it of (page.items || [])) {
-        if (!it.bbox || page.excluded.has(String(it.id))) continue;
+        if (!it.bbox || gone(it)) continue;
         addResizeBox(it, page, W, H, false);
       }
       for (const it of (page.added || [])) {
-        if (it.bbox) addResizeBox(it, page, W, H, true);
+        if (it.bbox && !gone(it)) addResizeBox(it, page, W, H, true);
       }
     }
+  }
+
+  // Where an item sits in the editor right now: a hand-resized box beats the
+  // detected one, and a Move offset shifts either. Every tool shows and
+  // measures from THIS rect, so what Move dragged is what Resize and Edit
+  // then see. Each used to read only its own field: after a Move, Resize
+  // showed the box back where it started and a resize-drag stored that old
+  // spot as the new box — which the server then shifted by the offset again,
+  // so the text landed twice as far as it was dragged.
+  function itemRect(page, it) {
+    const b = ((page.boxes || {})[it.id] || it.bbox).slice();
+    const off = (page.offsets || {})[it.id] || [0, 0];
+    return [b[0] + off[0], b[1] + off[1], b[2], b[3]];
   }
 
   // A box with 8 Photoshop-style handles: drag the body to move it, drag a
   // handle to reshape it. The new rect is stored as an absolute-pixel override
   // in page.boxes[id] and applied on Apply & Re-render.
   function addResizeBox(it, page, W, H, isAdded) {
-    const base = (page.boxes[it.id] || it.bbox).slice();
+    const base = itemRect(page, it);
     const box = makeBox(base[0], base[1], base[2], base[3], W, H,
                         "resize-box" + (isAdded ? " added-box" : ""));
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>` +
@@ -3183,19 +3211,22 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function bindResize(box, it, page, W, H) {
-    const cur = () => (page.boxes[it.id] || it.bbox).slice();
+    const MIN = 10;
     function apply(b) {
+      // The rect is absolute, so a Move offset is folded into it — keeping
+      // both would move the text twice on the server.
       page.boxes[it.id] = b;
+      delete page.offsets[it.id];
       box.style.left = (b[0] / W * 100) + "%";
       box.style.top = (b[1] / H * 100) + "%";
       box.style.width = (b[2] / W * 100) + "%";
       box.style.height = (b[3] / H * 100) + "%";
     }
-    let mode = null, sx, sy, base;
+    let mode = null, sx, sy, base, pushed;
     function down(e, m) {
       e.preventDefault(); e.stopPropagation();
-      pushUndo(page);
-      mode = m; sx = e.clientX; sy = e.clientY; base = cur();
+      mode = m; sx = e.clientX; sy = e.clientY; base = itemRect(page, it);
+      pushed = false;         // the undo step is taken on the first real move
       box.classList.add("dragging");
       try { box.setPointerCapture(e.pointerId); } catch (_) {}
     }
@@ -3205,18 +3236,21 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     box.addEventListener("pointermove", e => {
       if (!mode) return;
+      if (!pushed) { pushUndo(page); pushed = true; }
       const rect = transFull.getBoundingClientRect();
       const dx = (e.clientX - sx) * (W / rect.width);
       const dy = (e.clientY - sy) * (H / rect.height);
       let [x, y, w, h] = base;
       if (mode === "move") { x += dx; y += dy; }
       else {
-        if (mode.includes("w")) { x += dx; w -= dx; }
+        // A west/north handle pushed past the minimum used to keep sliding
+        // the box along while the size stayed clamped; the far edge is fixed.
+        if (mode.includes("w")) { x = Math.min(x + dx, x + w - MIN); w = base[0] + base[2] - x; }
         if (mode.includes("e")) { w += dx; }
-        if (mode.includes("n")) { y += dy; h -= dy; }
+        if (mode.includes("n")) { y = Math.min(y + dy, y + h - MIN); h = base[1] + base[3] - y; }
         if (mode.includes("s")) { h += dy; }
       }
-      w = Math.max(10, w); h = Math.max(10, h);
+      w = Math.max(MIN, w); h = Math.max(MIN, h);
       apply([Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
     });
     const end = e => {
@@ -3228,9 +3262,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function addItemBox(it, page, W, H, isAdded) {
-    const [bx, by, bw, bh] = it.bbox;
-    const off = page.offsets[it.id] || [0, 0];
-    const box = makeBox(bx + off[0], by + off[1], bw, bh, W, H,
+    const [bx, by, bw, bh] = itemRect(page, it);
+    const box = makeBox(bx, by, bw, bh, W, H,
                         "move-box" + (isAdded ? " added-box" : ""));
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>`;
     // Axis-aligned like the resize box — tilt is set in the Edit popover,
@@ -3246,25 +3279,29 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function bindDrag(box, it, page, W, H) {
-    let startX, startY, baseX, baseY, dragging = false;
+    let startX, startY, baseX, baseY, bx, by, dragging = false, pushed = false;
     box.addEventListener("pointerdown", e => {
       e.preventDefault();
-      pushUndo(page);
       dragging = true;
+      // The undo step is taken on the first real move, not here: a plain
+      // click used to push a no-op step, so the next Undo seemed to do
+      // nothing.
+      pushed = false;
       box.classList.add("dragging");
       try { box.setPointerCapture(e.pointerId); } catch (_) {}
       startX = e.clientX; startY = e.clientY;
       const off = page.offsets[it.id] || [0, 0];
       baseX = off[0]; baseY = off[1];
+      [bx, by] = page.boxes && page.boxes[it.id] ? page.boxes[it.id] : it.bbox;
     });
     box.addEventListener("pointermove", e => {
       if (!dragging) return;
+      if (!pushed) { pushUndo(page); pushed = true; }
       const rect = transFull.getBoundingClientRect();
       const sx = W / rect.width, sy = H / rect.height;
       const dx = Math.round(baseX + (e.clientX - startX) * sx);
       const dy = Math.round(baseY + (e.clientY - startY) * sy);
       page.offsets[it.id] = [dx, dy];
-      const [bx, by] = it.bbox;
       box.style.left = ((bx + dx) / W * 100) + "%";
       box.style.top = ((by + dy) / H * 100) + "%";
     });
@@ -3289,13 +3326,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const dims = curDims();
     if (!dims) return;
     const [W, H] = dims;
-    const off = page.offsets[it.id] || [0, 0];
-    const [bx, by, , bh] = it.bbox;
+    const [bx, by, bw, bh] = itemRect(page, it);
     const pop = document.createElement("div");
     pop.className = "edit-pop";
-    pop.style.left = Math.min((bx + off[0]) / W * 100, 62) + "%";
-    pop.style.top = Math.min((by + off[1] + bh) / H * 100 + 1, 82) + "%";
+    pop.style.left = Math.min(bx / W * 100, 62) + "%";
+    pop.style.top = Math.min((by + bh) / H * 100 + 1, 82) + "%";
     const curClr = (page.colors || {})[it.id] || "auto";
+    // The colour pick is held here until Save — Cancel must leave the page
+    // as it was, and it used to keep a colour clicked before cancelling.
+    let pickedClr = curClr;
     pop.innerHTML = `
       ${it.original ? `<div class="edit-pop-orig">${esc(it.original)}</div>` : ""}
       <textarea class="edit-pop-text" rows="3">${esc(it.translation || "")}</textarea>
@@ -3354,10 +3393,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (rotEl) {
       const ghost = document.createElement("div");
       ghost.className = "tilt-ghost";
-      ghost.style.left = (bx + off[0]) / W * 100 + "%";
-      ghost.style.top = (by + off[1]) / H * 100 + "%";
-      ghost.style.width = it.bbox[2] / W * 100 + "%";
-      ghost.style.height = it.bbox[3] / H * 100 + "%";
+      ghost.style.left = bx / W * 100 + "%";
+      ghost.style.top = by / H * 100 + "%";
+      ghost.style.width = bw / W * 100 + "%";
+      ghost.style.height = bh / H * 100 + "%";
       ghost.textContent = ((it.translation || "TILT") + "").replace(/\s+/g, " ");
       moveLayer.appendChild(ghost);
       const sync = () => {
@@ -3365,7 +3404,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const fscale = fsEl ? (parseFloat(fsEl.value) || 100) / 100 : 1;
         ghost.style.transform = "rotate(" + v + "deg)";
         ghost.style.fontSize =
-          Math.max(6, (it.bbox[3] / H) * moveLayer.clientHeight * 0.45 * fscale) + "px";
+          Math.max(6, (bh / H) * moveLayer.clientHeight * 0.45 * fscale) + "px";
         if (rotVal) rotVal.textContent = v + "\u00B0";
         if (fsVal) fsVal.textContent = Math.round(fscale * 100) + "%";
       };
@@ -3391,7 +3430,12 @@ document.addEventListener("DOMContentLoaded", () => {
     ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
     pop.querySelector(".epop-cancel").addEventListener("click", closeEditor);
     pop.querySelector(".epop-save").addEventListener("click", () => {
+      // One undo step for the whole popover — Save never took one, so Undo
+      // after it stepped back over some EARLIER change instead.
+      pushUndo(page);
       it.translation = ta.value;
+      page.colors = page.colors || {};
+      page.colors[it.id] = pickedClr;
       const rotSave = pop.querySelector(".epop-rot");
       if (rotSave) {
         const rv = parseFloat(rotSave.value);
@@ -3423,12 +3467,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     pop.querySelectorAll(".clr-opt").forEach(btn => {
       btn.addEventListener("click", () => {
-        page.colors = page.colors || {};
-        page.colors[it.id] = btn.dataset.c;
+        pickedClr = btn.dataset.c;
         pop.querySelectorAll(".clr-opt").forEach(b => b.classList.toggle("active", b === btn));
       });
     });
     pop.querySelector(".epop-remove").addEventListener("click", () => {
+      pushUndo(page);
       if (isAdded) {
         page.added = (page.added || []).filter(a => String(a.id) !== String(it.id));
       } else {
