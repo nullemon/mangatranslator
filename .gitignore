@@ -21,3 +21,6 @@ fonts/*.otf
 
 # Local agent/tooling worktrees — never part of the project
 .claude/
+# Browser-test scratch (generated inputs and screenshots)
+tests/ui/_inputs/
+tests/ui/_shots/
