@@ -24,7 +24,14 @@ def _ensure_dir():
 
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
-    return s or "series"
+    if s:
+        return s
+    # A name with no latin letters at all — ワンピース, 나 혼자만 레벨업 — used
+    # to become "series", so every such series shared ONE file and training
+    # the second one overwrote the first. Keep its own letters instead
+    # (\w never matches a path separator or a dot).
+    u = re.sub(r"[^\w]+", "-", (name or "").strip().lower()).strip("-_")
+    return u or "series"
 
 
 def _path(slug: str) -> str:

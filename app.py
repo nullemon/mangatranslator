@@ -949,6 +949,26 @@ async def get_strip(strip_id: str):
     return FileResponse(p, media_type="image/png")
 
 
+def _with_profile(style_prompt, profile) -> str:
+    """The style instructions with the trained series profile folded in.
+
+    Every path that asks the model for a translation goes through this — the
+    page run AND the editor's re-translate tools (Find missed text, Reading
+    order, Add / Point translate, Type text). Those used to send the style
+    box alone, so a re-translated line came back with the series' names
+    spelled however the model liked instead of the way the profile says."""
+    style_prompt = str(style_prompt or "")
+    slug = str(profile or "").strip()
+    if not slug:
+        return style_prompt
+    from core import profiles as _profiles
+    prof = _profiles.load(slug)
+    block = _profiles.prompt_block(prof) if prof else ""
+    if not block:
+        return style_prompt
+    return (block + "\n\n" + style_prompt).strip() if style_prompt.strip() else block
+
+
 @app.post("/api/translate")
 async def translate(
     file: UploadFile = File(...),
@@ -1006,13 +1026,7 @@ async def translate(
 
     # Trained series profile: fold the learned glossary + house style into the
     # style instructions so this chapter matches the team's established style.
-    style_prompt = style_prompt or ""
-    if profile.strip():
-        from core import profiles as _profiles
-        _prof = _profiles.load(profile.strip())
-        if _prof:
-            block = _profiles.prompt_block(_prof)
-            style_prompt = (block + "\n\n" + style_prompt).strip() if style_prompt.strip() else block
+    style_prompt = _with_profile(style_prompt, profile)
 
     task_id = str(uuid.uuid4())
     global LAST_TRANSLATE_TASK
@@ -2411,33 +2425,10 @@ async def profiles_list():
     return {"profiles": profiles.list_profiles()}
 
 
-@app.get("/api/profile/{slug}")
-async def profile_get(slug: str):
-    from core import profiles
-    p = profiles.load(slug)
-    if not p:
-        raise HTTPException(404, "Profile not found")
-    return p
-
-
-@app.post("/api/profile/{slug}")
-async def profile_save(slug: str, request: Request):
-    """Save an edited profile (the review step)."""
-    from core import profiles
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(400, "Invalid JSON body")
-    saved = profiles.save(profiles.normalize(body))
-    return saved
-
-
-@app.delete("/api/profile/{slug}")
-async def profile_delete(slug: str):
-    from core import profiles
-    return {"deleted": profiles.delete(slug)}
-
-
+# Registered BEFORE the /api/profile/{slug} routes: FastAPI matches in
+# order, and POST /api/profile/{slug} (save) used to catch "learn" first —
+# every "Learn from these pages" click answered "Invalid JSON body", so a
+# style profile could never be learned from pages at all.
 @app.post("/api/profile/learn")
 async def profile_learn(
     name: str = Form(...),
@@ -2496,6 +2487,33 @@ async def profile_learn(
     except Exception as e:
         raise HTTPException(500, f"Learning failed: {e}")
     return {"profile": prof, "pages_seen": total, "pages_studied": studied}
+
+
+@app.get("/api/profile/{slug}")
+async def profile_get(slug: str):
+    from core import profiles
+    p = profiles.load(slug)
+    if not p:
+        raise HTTPException(404, "Profile not found")
+    return p
+
+
+@app.post("/api/profile/{slug}")
+async def profile_save(slug: str, request: Request):
+    """Save an edited profile (the review step)."""
+    from core import profiles
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    saved = profiles.save(profiles.normalize(body))
+    return saved
+
+
+@app.delete("/api/profile/{slug}")
+async def profile_delete(slug: str):
+    from core import profiles
+    return {"deleted": profiles.delete(slug)}
 
 
 @app.get("/api/status/{task_id}")
@@ -3016,7 +3034,8 @@ async def rescan(task_id: str, request: Request):
         raise HTTPException(400, _NO_KEY_MSG)
     target_lang = payload.get("target_lang", "English")
     model = payload.get("model", "")
-    style_prompt = payload.get("style_prompt", "")
+    style_prompt = _with_profile(payload.get("style_prompt", ""),
+                                 payload.get("profile", ""))
     offline = provider in ("local", "offline")
 
     def work():
@@ -3152,7 +3171,8 @@ async def ocr_translate(task_id: str, request: Request):
     provider = payload.get("provider", "claude")
     model = payload.get("model", "")
     target_lang = payload.get("target_lang", "English")
-    style_prompt = payload.get("style_prompt", "")
+    style_prompt = _with_profile(payload.get("style_prompt", ""),
+                                 payload.get("profile", ""))
     poly = payload.get("poly")   # optional point-selected outline (image coords)
 
     if not bbox or len(bbox) != 4:
@@ -3272,7 +3292,8 @@ async def retranslate_ordered(task_id: str, request: Request):
     model = payload.get("model", "")
     target_lang = payload.get("target_lang", "English")
     source_lang = payload.get("source_lang", t.get("source_lang", "Japanese"))
-    style_prompt = payload.get("style_prompt", "")
+    style_prompt = _with_profile(payload.get("style_prompt", ""),
+                                 payload.get("profile", ""))
 
     # Sequential keys preserve the user's order for the model, while `back`
     # maps each one home again — the region ids themselves may be any value.
@@ -3338,7 +3359,8 @@ async def translate_text(request: Request):
     model = payload.get("model", "")
     target_lang = payload.get("target_lang", "English")
     source_lang = payload.get("source_lang", "Japanese")
-    style_prompt = payload.get("style_prompt", "")
+    style_prompt = _with_profile(payload.get("style_prompt", ""),
+                                 payload.get("profile", ""))
 
     def work():
         from core.translator import make_translator

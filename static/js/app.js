@@ -3049,6 +3049,8 @@ document.addEventListener("DOMContentLoaded", () => {
           api_key: key, target_lang: targetLang.value,
           provider: engineSelect.value, model: modelSelect.value,
           style_prompt: styleText(),
+          // The trained series style, so a re-translate keeps its names.
+          profile: profileSelect ? profileSelect.value : "",
         }),
       });
       const data = await res.json();
@@ -4146,6 +4148,8 @@ document.addEventListener("DOMContentLoaded", () => {
             target_lang: targetLang.value,
             source_lang: sourceLang ? sourceLang.value : "Japanese",
             style_prompt: styleText(),
+          // The trained series style, so a re-translate keeps its names.
+          profile: profileSelect ? profileSelect.value : "",
           }),
         });
         if (!res.ok) {
@@ -4495,6 +4499,8 @@ document.addEventListener("DOMContentLoaded", () => {
         target_lang: targetLang.value,
         source_lang: sourceLang ? sourceLang.value : "Japanese",
         style_prompt: styleText(),
+          // The trained series style, so a re-translate keeps its names.
+          profile: profileSelect ? profileSelect.value : "",
       }),
     });
     if (!resp.ok) {
@@ -4585,6 +4591,8 @@ document.addEventListener("DOMContentLoaded", () => {
           model: modelSelect.value,
           target_lang: targetLang.value,
           style_prompt: styleText(),
+          // The trained series style, so a re-translate keeps its names.
+          profile: profileSelect ? profileSelect.value : "",
         }),
       });
       if (resp.ok) {
@@ -4981,7 +4989,16 @@ document.addEventListener("DOMContentLoaded", () => {
     refreshProfiles();
   }
 
+  // The slug of the profile open in the modal, as the SERVER named it. The
+  // client used to re-derive it from the name with an ASCII-only rule, so a
+  // series called ワンピース got the slug "" — Save posted to /api/profile/
+  // (no such route) and Delete silently did nothing.
+  let trainSlug = "";
+  const slugOf = name => trainSlug
+    || name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+    || "series";
   function fillProfile(p) {
+    trainSlug = p.slug || "";
     trainName.value = p.name || "";
     trainStyle.value = p.style_guide || "";
     trainHon.value = p.honorifics || "";
@@ -5006,6 +5023,7 @@ document.addEventListener("DOMContentLoaded", () => {
     trainProfileSel.value = "";
     trainName.value = ""; trainFiles.value = ""; trainStatus.textContent = "";
     trainResult.style.display = "none"; trainDelete.style.display = "none";
+    trainSlug = "";
     trainModal.style.display = "flex";
   });
   if (trainClose) trainClose.addEventListener("click", () => { trainModal.style.display = "none"; });
@@ -5175,7 +5193,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (trainProfileSel) trainProfileSel.addEventListener("change", async () => {
     const slug = trainProfileSel.value;
-    if (!slug) { trainName.value = ""; trainResult.style.display = "none"; trainDelete.style.display = "none"; return; }
+    if (!slug) { trainSlug = ""; trainName.value = ""; trainResult.style.display = "none"; trainDelete.style.display = "none"; return; }
     try {
       const p = await (await fetch(`/api/profile/${slug}`)).json();
       fillProfile(p);
@@ -5186,6 +5204,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const name = trainName.value.trim();
     if (!name) { trainStatus.textContent = "Enter a series name first."; trainName.focus(); return; }
     if (!trainFiles.files.length) { trainStatus.textContent = "Pick a ZIP or some translated pages."; return; }
+    // The Offline engine hides the key field, so "add your key" pointed at
+    // a box that wasn't there; and it cannot study pages anyway (that needs
+    // a vision model). Say which switch to flip.
+    if ((ENGINE_CONFIG[engineSelect.value] || {}).offline) {
+      trainStatus.textContent = "Learning a style reads the pages with an AI model — switch the Translation Engine to Gemini or Claude (with its API key) first.";
+      return;
+    }
     if (!apiKeyInput.value.trim()) { trainStatus.textContent = "Add your translation API key in settings first."; return; }
     const f = new FormData();
     f.append("name", name);
@@ -5219,12 +5244,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!body.name) { trainStatus.textContent = "A series name is required."; return; }
     trainSave.disabled = true;
     try {
-      const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      const res = await fetch(`/api/profile/${slug}`, {
+      // The server names the file from body.name; the URL only has to
+      // reach the route, so it must never be empty.
+      const res = await fetch(`/api/profile/${encodeURIComponent(slugOf(body.name))}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
       const saved = await res.json();
+      trainSlug = saved.slug;
       await refreshProfiles(saved.slug);
       if (profileSelect) { profileSelect.value = saved.slug; localStorage.setItem("manga_profile", saved.slug); }
       trainStatus.textContent = `Saved “${saved.name}”. It's now selected for translation.`;
@@ -5238,10 +5265,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (trainDelete) trainDelete.addEventListener("click", async () => {
     const name = trainName.value.trim();
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const slug = trainSlug || (name ? slugOf(name) : "");
     if (!slug || !confirm(`Delete the “${name}” profile?`)) return;
     try {
-      await fetch(`/api/profile/${slug}`, { method: "DELETE" });
+      await fetch(`/api/profile/${encodeURIComponent(slug)}`, { method: "DELETE" });
+      trainSlug = "";
       await refreshProfiles("");
       trainName.value = ""; trainResult.style.display = "none"; trainProfileSel.value = "";
       trainStatus.textContent = "Profile deleted.";
