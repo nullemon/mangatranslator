@@ -2342,6 +2342,22 @@ class TranslationPipeline:
                     next_id += 1
                 continue
 
+            # Magazine promo / editorial notices (an anime announcement down
+            # the margin, "next issue on break"): erased, never translated.
+            if typ in ("promo", "notice", "ad", "advert"):
+                pbox = [bx, by, bw, bh]
+                if (not any(_boxes_overlap(pbox, bb) for bb in bubble_boxes)
+                        and not any(_boxes_overlap(pbox, u) for u in used)
+                        and self._box_text_evidence(image, pbox)):
+                    used.append(pbox)
+                    items.append({
+                        "id": next_id, "bbox": pbox, "original": jp,
+                        "translation": "", "type": "watermark", "erase": True,
+                        "in_bubble": False, "dark": False, "rotation": 0.0,
+                    })
+                    next_id += 1
+                continue
+
             # Only keep regions the model actually read as Japanese — guards
             # against boxes dropped on already-English text or bare artwork.
             # The "sfx" label alone isn't trusted: the LLM tags big dramatic
@@ -2398,7 +2414,13 @@ class TranslationPipeline:
             except (ValueError, TypeError):
                 pass
 
-            allowed = ("title", "credit", "narration", "caption")
+            # "credit" is NOT passed through: to the compositor a credit is
+            # the team's own TL-credit overlay, drawn with no erase at all, so
+            # a cover credit the model labelled that way (扉絵リクエスト…) kept
+            # its Japanese under the English. Page text is always a caption.
+            allowed = ("title", "narration", "caption")
+            if typ == "credit":
+                typ = "caption"
             if balloon_sound:
                 out_type = "dialogue"
             elif self.translate_sfx and is_sfx:

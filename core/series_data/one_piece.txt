@@ -1,0 +1,99 @@
+# One Piece — how TCB renders it. Used automatically when the Manga title is
+# One Piece. Add to it as you release chapters: one line each,
+#     Japanese = ENGLISH        # optional note
+# [glossary] lines are used EXACTLY (names, places, attacks).
+# [phrasebook] lines are TCB's usual renderings of sounds and reactions; the
+# translator follows them but may adapt to the scene.
+# Source: TCB's release of chapter 1194 (all 118 lettered regions).
+
+[glossary]
+覇王色の覇気 = Conqueror's Haki
+覇王色 = Conqueror's Haki
+覇王色を纏う = Conqueror's Coating        # "coating" a blow/blade in Conqueror's
+武装色の覇気 = Armament Haki
+武装色 = Armament Haki
+見聞色の覇気 = Observation Haki
+見聞色 = Observation Haki
+覇気 = Haki
+魔気 = Omen                               # read オーメン
+四皇 = Four Emperors
+王下七武海 = Seven Warlords of the Sea
+七武海 = Seven Warlords
+五老星 = Five Elders
+天竜人 = Celestial Dragons
+神の騎士団 = God's Knights
+下民 = surface-dweller                    # Summers' insult for Zoro
+海軍 = Marines
+元帥 = Fleet Admiral
+大将 = Admiral
+海賊王 = King of the Pirates
+悪魔の実 = Devil Fruit
+能力者 = Devil Fruit user
+麦わらの一味 = Straw Hat Pirates
+麦わら = Straw Hat
+一味 = crew
+ひとつなぎの大秘宝 = One Piece
+新世界 = New World
+偉大なる航路 = Grand Line
+エルバフ = Elbaph
+三刀流 = Three Sword Style
+二刀流 = Two Sword Style
+一刀流 = One Sword Style
+豹琴玉 = Leopard... Spinning... Balls   # Zoro, split across balloons: 豹 LEOPARD / 琴 SPINNING / 玉 BALLS
+千八十煩悩 = 1080 Pound                  # read ポンド
+鳳 = Phoenix
+牙竜 = Dragon's Fang
+イバランチャー = Thorn Launcher
+イバ憤怒剣 = Thorn Gram                  # read グラム
+イバ乱 = Thorn Riot                       # read ラン
+ルフィ = Luffy
+ゾロ = Zoro
+ロロノア・ゾロ = Roronoa Zoro
+サンジ = Sanji
+ナミ = Nami
+ウソップ = Usopp
+チョッパー = Chopper
+ロビン = Robin
+フランキー = Franky
+ブルック = Brook
+ジンベエ = Jinbe
+シャンクス = Shanks
+ミホーク = Mihawk
+ティーチ = Teach
+黒ひげ = Blackbeard
+ロジャー = Roger
+ロックス = Rocks
+イム = Imu
+ソマーズ = Summers
+尾田栄一郎 = Oda Eiichiro                 # on the cover: "ODA EIICHIRO", its own line
+
+[phrasebook]
+ハァ ハァ = HUFF... HUFF...               # panting
+ハァ… = HUFF...
+ブハァ!! = BWAHH!!                        # gasping out after holding breath
+ゲホ = KOFF!!                             # coughing; ゲホ ゴホ = KOFF!! KOFF!!
+ゲフッ = KOFF!
+スー… = FSSH!                             # slow breath in/out
+おうえエ〜 = OUEEHH!!!                    # retching
+ひぇェエぇ〜 = GYAAAAH!!!                 # terrified scream
+あああア〜 = AAAH!!!
+うわ!! = UWAH!!
+はっ!! = HUH?!                             # sudden realisation
+痛ってェ〜 = OW, OW, OW, OW!
+痛… = OW...
+ナシィ―― = NOPE!!
+違う = WRONG!
+やめろォ―― = STOP THAT!!
+くそったれ!! = DAMN BASTARD!!
+しまったァ―― = DAMN IT!!
+マズイ マズイ!! = THIS IS BAD!! THIS IS BAD!!
+バカ野郎 = YOU BASTARD                    # or ASSHOLE / YOU IDIOT by tone
+ギハハ = GIHA HA                          # Summers' laugh; ギ〜ハハハハハ = GIIHA HAHAHAHAHA
+…… = ...                                   # silent balloon: one row of dots
+しーん = ...                               # silence
+ばっ! = FWOOSH!!                          # a quick burst of motion, in a balloon
+ばっ!! = BAM!                             # an impact, in a balloon
+ガチ… = BITE...                           # jaws / blade clamping down
+にゅっ = SCHLOOP!                         # a limb regrowing; にゅ / にゅるん too
+パキパキ = CRUNCH                         # thorns cracking / growing
+ダン!! = CRASH!!                          # a heavy landing, in a balloon

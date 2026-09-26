@@ -603,6 +603,11 @@ def make_translator(provider: str, api_key: str, model: str = "", style: str = "
                     webtoon: bool = False):
     provider = (provider or "claude").lower().strip()
     model = (model or "").strip()
+    # A known series (the Manga title setting) brings its built-in preset:
+    # official names and the house conventions of a release team, ahead of
+    # the user's own style lines.
+    from . import series as _series
+    style = _series.apply(style)
 
     if provider in ("claude", "anthropic"):
         # Guard against a stale Gemini model id being sent for Claude.
