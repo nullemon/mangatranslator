@@ -4860,9 +4860,13 @@ document.addEventListener("DOMContentLoaded", () => {
     apiKeyInput.style.borderColor = "";
     translateScanBtn.disabled = true; translateScanBtn.textContent = "Loading scan...";
     try {
-      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}`);
+      // The CLEAN scan (?watermark=0): the stamped one put the mark into
+      // the page being translated, and the translation run stamped it a
+      // second time on top.
+      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}&watermark=0`);
+      if (!res.ok) throw new Error("Couldn't load the scan");
       const blob = await res.blob();
-      const file = new File([blob], "scan_" + (p.name || "page.png"), { type: "image/png" });
+      const file = new File([blob], "scan_" + (p.name || "page.png"), { type: blob.type || "image/png" });
       setWorkflow("raw-translate");
       p.file = file;
       try { URL.revokeObjectURL(p.thumb); } catch (_) {}
@@ -4886,7 +4890,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!p || p.status !== "done") return;
     reuseBtn.disabled = true; reuseBtn.textContent = "Loading…";
     try {
-      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}`);
+      // The unstamped result: the next step stamps its own output, so
+      // feeding it the watermarked page baked one mark into the art and
+      // put a second on top (Upscale HD -> Raw -> Scan came out marked
+      // twice, the first mark upscaled and AI-redrawn).
+      const res = await fetch(`/api/result/${p.taskId}?t=${p.rev}&watermark=0`);
+      if (!res.ok) throw new Error("Couldn't load the result");
       const blob = await res.blob();
       const name = "edited_" + (p.name || "page.png");
       const file = new File([blob], name, { type: blob.type || "image/png" });
