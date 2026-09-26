@@ -385,10 +385,20 @@ def _clear_spot(img, tw, th, place, keepout):
         if hits(x, y) == 0:
             return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
 
-    # Nowhere clear in a corner — sweep the page and take the emptiest spot.
+    # Nowhere clear in a corner — take the emptiest spot in the QUARTER of the
+    # page the user's corner is in. This used to sweep the whole page, and on
+    # a busy action page (where the keep-out covers most of it and no corner
+    # is ever free) "bottom right" came out beside the SFX at the top left.
+    # A mark that crosses a little art but sits where it was put is the
+    # lesser wrong; the user chose the corner, not the page's emptiest inch.
+    home = place if place in corners else "br"
+    x_lo = w // 2 if home in ("br", "tr") else m
+    x_hi = w - tw - m if home in ("br", "tr") else w // 2 - tw
+    y_lo = h // 2 if home in ("br", "bl") else m
+    y_hi = h - th - m if home in ("br", "bl") else h // 2 - th
     best, score = corners.get(place, (m, m)), None
-    for y in range(m, max(m + 1, h - th - m), max(8, th // 2)):
-        for x in range(m, max(m + 1, w - tw - m), max(8, tw // 3)):
+    for y in range(y_lo, max(y_lo + 1, y_hi), max(8, th // 2)):
+        for x in range(x_lo, max(x_lo + 1, x_hi), max(8, tw // 3)):
             s = hits(x, y)
             if score is None or s < score:
                 score, best = s, (x, y)
