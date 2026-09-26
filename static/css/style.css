@@ -494,6 +494,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 
 /* ── Result actions ── */
 .result-actions{display:flex;gap:.7rem;margin-top:1.35rem;justify-content:center}
+.page-cost{text-align:center;font-size:.74rem;margin-top:.55rem}
 
 /* ── Error ── */
 .error-box{text-align:center;padding:2.25rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-sm)}

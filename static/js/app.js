@@ -2380,6 +2380,14 @@ document.addEventListener("DOMContentLoaded", () => {
                    : wf === "endcard" ? "End page"
                    : "Translated";
 
+    // What this page cost to make — shown once it is done, for the page on
+    // screen. Only translate runs report one (a clean or scan has no bill).
+    const costEl = document.getElementById("pageCost");
+    if (costEl) {
+      const note = (p.status === "done" && p.result && p.result.cost_note) || "";
+      costEl.textContent = note ? `This page: ${note} (estimate)` : "";
+      costEl.style.display = note ? "" : "none";
+    }
     if (p.status === "done") {
       pageProcessing.style.display = "none";
       pageResult.style.display = "";

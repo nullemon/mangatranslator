@@ -1322,6 +1322,14 @@ async def _run(
                 lambda: pipeline.process(translate_source, output_path, on_progress),
             )
         MASKS[task_id] = getattr(pipeline, "last_masks", {}) or {}
+        # What this page cost, read now while the tally is still this page's.
+        # The pipeline put it on its last progress line, but the "Complete!"
+        # below replaced that line, so the price only ever reached the log.
+        try:
+            from core import usage as _usage
+            cost_note = _usage.short_note()
+        except Exception:
+            cost_note = ""
         # Bound memory: full-page bubble masks are ~MBs each at high res and
         # accumulate every page — a long batch quietly eats gigabytes and lags
         # the machine. Keep only the most recent pages' masks; older pages
@@ -1371,7 +1379,8 @@ async def _run(
         update = {
             "status": "done",
             "progress": 100,
-            "message": "Complete!",
+            "message": "Complete!" + (f"  ({cost_note})" if cost_note else ""),
+            "cost_note": cost_note,
             "result": result,
             "output_url": f"/api/result/{task_id}",
             "original_url": f"/api/original/{task_id}",
