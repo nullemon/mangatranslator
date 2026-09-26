@@ -983,7 +983,9 @@ class TranslationPipeline:
         away from the centre where faces/art sit) so thieves can't batch-crop it
         off a fixed corner. The chosen spot is saved with the page, so re-render
         is stable and you can still drag it if it lands awkwardly."""
-        cw, ch = int(w * 0.30), max(int(h * 0.033), 18)
+        # Height from a PAGE-shaped slice of the image: on a 20000px webtoon
+        # strip 3.3% of the full height is a 660px-tall box.
+        cw, ch = int(w * 0.30), max(int(min(h, 1.6 * w) * 0.033), 18)
         mx, my = int(w * 0.02), int(h * 0.02)            # edge margin
         # Anchor to a random edge band, then jitter ALONG that edge so it never
         # repeats from page to page. Centre is deliberately excluded.
@@ -1302,6 +1304,7 @@ class TranslationPipeline:
         all_items, all_masks = [], {}
         next_id = 1
         placed = []          # (box, text) of everything accepted so far
+        tried, failures = 0, []
 
         def _iou(a, b):
             ax, ay, aw, ah = a
@@ -1321,10 +1324,12 @@ class TranslationPipeline:
             band = image[y0:y1].copy()
             if band.shape[0] < 40:
                 continue
+            tried += 1
             try:
                 items, _ann, masks = detect(band, tmp_out, noop)
             except Exception as e:
                 print(f"[webtoon] section {i + 1} failed: {e}")
+                failures.append(e)
                 continue
             masks = masks or {}
             for it in items:
@@ -1371,6 +1376,14 @@ class TranslationPipeline:
                 placed.append((gbox, txt))
                 next_id += 1
 
+        # Every section failed the same way (no key, no network, the offline
+        # engine unable to read): that is the page failing, not a strip with
+        # nothing on it. It used to come back "Done — 0 translations" with the
+        # strip untouched and the reason only in the server log.
+        if tried and len(failures) == tried:
+            raise failures[0]
+        if self.credit:
+            all_items.append(self._credit_item(w, h, next_id))
         update(4, f"Composing the full strip ({len(all_items)} translations)...", 88)
         result = self.compositor.compose(image.copy(), all_items, all_masks)
         result = apply_finish(result, self.finish)
@@ -1446,6 +1459,7 @@ class TranslationPipeline:
         all_items, all_masks = [], {}
         covered = np.zeros((h, w), np.uint8)
         next_id = 1
+        tried, failures = 0, []
 
         for i, poly in enumerate(polys):
             update(2, f"Translating piece {i + 1} of {len(polys)}...",
@@ -1458,10 +1472,12 @@ class TranslationPipeline:
             crop = image[y:y2, x:x2].copy()
             region_mask = np.zeros((h, w), np.uint8)
             cv2.fillPoly(region_mask, [poly], 255)
+            tried += 1
             try:
                 items, _ann, masks = detect(crop, tmp_out, noop)
             except Exception as e:
                 print(f"[pieces] piece {i + 1} failed: {e}")
+                failures.append(e)
                 continue
             masks = masks or {}
             for it in items:
@@ -1512,6 +1528,12 @@ class TranslationPipeline:
                 except Exception as e:
                     print(f"[pieces] leftover pass failed: {e}")
 
+        # As in process_webtoon: every piece failing is the page failing.
+        if tried and len(failures) == tried:
+            raise failures[0]
+        if self.credit:
+            all_items.append(self._credit_item(
+                w, h, max([it["id"] for it in all_items] + [0]) + 1))
         update(4, "Merging translated pieces...", 92)
         result = self.compositor.compose(image.copy(), all_items, all_masks)
         result = apply_finish(result, self.finish)
