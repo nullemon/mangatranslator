@@ -1954,11 +1954,26 @@ class TranslationPipeline:
             # Sound balloons are drawn rougher than speech balloons — a brush
             # outline with gaps, or a grey fill — so the sealed/toned finder
             # is tried when the ordinary one comes back empty.
-            rec = (comp._resolve_bubble(gray, (x, y, w, h), gray.size)
-                   or comp._resolve_sealed_balloon(gray, (x, y, w, h), gray.size))
+            rec = comp._resolve_bubble(gray, (x, y, w, h), gray.size)
+            min_solid = 0.70
+            if rec is None:
+                rec = comp._resolve_sealed_balloon(gray, (x, y, w, h), gray.size)
+                # Sealing gaps MANUFACTURES closure, so a sealed find must also
+                # look like a balloon: a smooth, near-convex shape. Measured on
+                # One Piece 1194: sound balloons 0.94 vs white patches of art
+                # that lines happen to enclose (hatching, cover calligraphy)
+                # 0.59-0.80.
+                min_solid = 0.90
             if rec is None:
                 return False
             rmask, rbb, _dark = rec
+            cnts, _h = cv2.findContours(rmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                return False
+            cnt = max(cnts, key=cv2.contourArea)
+            solidity = cv2.contourArea(cnt) / max(cv2.contourArea(cv2.convexHull(cnt)), 1.0)
+            if solidity < min_solid:
+                return False
             # The text box hugs the balloon's OUTLINE, so judge it against the
             # balloon's outer extent, not its interior mask (a sound filling
             # its balloon measured only 63-66% "inside" the interior).
