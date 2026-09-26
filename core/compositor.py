@@ -899,7 +899,7 @@ class Compositor:
         # quiet line, so the English keeps the emphasis the letterer drew.
         strokes_for_size = self._dialog_mask if self._dialog_mask is not None else self._seg_mask
         if strokes_for_size is not None:
-            sizes = {}
+            sizes, fallback = {}, []
             for it in items:
                 b = it.get("bbox")
                 if b and len(b) == 4:
@@ -908,12 +908,28 @@ class Compositor:
                     # a cover caption) is still measured — from the filtered
                     # strokes first: the unstripped ones also hold big solid
                     # SFX beside the line, which read as huge glyphs
-                    for alt in (self._seg_mask, self._raw_mask):
-                        if not s and alt is not None:
-                            s = self._glyph_px(gray, alt, b)
+                    if not s:
+                        for alt in (self._seg_mask, self._raw_mask):
+                            if not s and alt is not None:
+                                s = self._glyph_px(gray, alt, b)
+                        if s:
+                            fallback.append(it)
                     if s:
                         sizes[id(it)] = s
                         it["_glyph_px"] = s
+            # Those fallback strokes are unfiltered: a teaser squeezed beside
+            # a big sound effect (☆至る!!! next to ブル) measured the SFX
+            # and came out 87 px, so the English grew over the chapter-end
+            # badge. Only a title may measure far above the page's ordinary
+            # boxed lettering; anything else is held near it.
+            boxed = [v for k, v in sizes.items()
+                     if k not in {id(f) for f in fallback}]
+            if fallback and len(boxed) >= 3:
+                ceil = 1.4 * float(np.median(boxed))
+                for it in fallback:
+                    role = lettering.normalise(it.get("tone", "")) or (it.get("type") or "")
+                    if role != "title" and sizes[id(it)] > ceil:
+                        sizes[id(it)] = it["_glyph_px"] = ceil
             if len(sizes) >= 3:
                 med = float(np.median(list(sizes.values())))
                 for it in items:
@@ -2254,6 +2270,23 @@ class Compositor:
             # Automatic erase: only dialogue strokes may anchor / permit the
             # erase, so an SFX that falls inside the padded window survives.
             seg_roi = self._dialog_mask[y0:y1, x0:x1].copy()
+            # ...and only the strokes of THIS line: the padded window can
+            # reach another block of lettering (a caption above a chapter's
+            # end badge took the badge's "ONE PIECE" and Luffy icon with it).
+            # A stroke is ours when a real share of it lies in our own box;
+            # a glyph poking past the box edge still is.
+            n_, lab_, _st, _c = cv2.connectedComponentsWithStats(
+                (seg_roi > 0).astype(np.uint8), 8)
+            if n_ > 1:
+                inbox = np.zeros(seg_roi.shape, bool)
+                inbox[max(0, y) - y0:min(H, y + h) - y0,
+                      max(0, x) - x0:min(W, x + w) - x0] = True
+                tot = np.bincount(lab_.ravel(), minlength=n_)
+                ins = np.bincount(lab_.ravel(), weights=inbox.ravel().astype(np.float64),
+                                  minlength=n_)
+                mine = ins >= 0.25 * np.maximum(tot, 1)
+                mine[0] = False
+                seg_roi = (mine[lab_] * 255).astype(np.uint8)
             # ...but this line EXISTS: something read text in this box. When
             # the block detector didn't box it (a chapter title, a cover
             # caption, a stylised line), the dialogue mask is empty here and
@@ -2317,7 +2350,14 @@ class Compositor:
             if seg_roi is not None:
                 if cv2.countNonZero(seg_roi) >= 40:
                     allow = cv2.dilate(seg_roi, np.ones((9, 9), np.uint8))
-                    glow = (gray_roi >= 200).astype(np.uint8) * 255
+                    # the glow hugs the letters: past a band around them,
+                    # "near-white" is just paper or another element's white
+                    # frame (a chapter-end badge's edge was being re-inpainted)
+                    gb = int(np.clip(min(w, h) // 4, 15, 61)) | 1
+                    near = cv2.dilate(seg_roi, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (gb, gb)))
+                    glow = cv2.bitwise_and(
+                        (gray_roi >= 200).astype(np.uint8) * 255, near)
                     keep = cv2.bitwise_or(allow, glow)
                     tight = cv2.bitwise_and(tight, keep)
                 else:
