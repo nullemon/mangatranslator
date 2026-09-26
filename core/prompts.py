@@ -241,6 +241,11 @@ For each text region, return its bounding box as PERCENTAGE coordinates:
   The bounding box must be the AXIS-ALIGNED rectangle that fully contains
   all the text at the reported angle.
 
+- in_balloon: true ONLY when the text is lettered INSIDE a speech balloon
+  (a drawn outline around it, white or grey-filled — including a small balloon
+  holding just a sound like ばっ! or にゅっ); false for anything drawn directly
+  on the artwork (big sound effects, captions, signs, titles).
+
 Make each box cover the FULL extent of the text — every character from start to
 end, including any trailing punctuation (!!!, …, etc.). For vertical columns,
 the box must cover the entire column top to bottom. For diagonal bars, include
@@ -258,7 +263,8 @@ Return ONLY a JSON array — no markdown fences:
     "rotation_deg": 0,
     "original": "第1163話 \\"約束\\"",
     "translation": "CHAPTER 1163: \\"THE PROMISE\\"",
-    "type": "title"
+    "type": "title",
+    "in_balloon": false
   }}
 ]
 

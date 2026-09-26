@@ -1894,7 +1894,10 @@ class TranslationPipeline:
                 continue
             if not self.translate_sfx:
                 if _is_sfx(it.get("original", "")):
-                    if not self._keep_balloon_sound(image, it.get("bbox"), it.get("original", "")):
+                    said = it.get("in_balloon")
+                    if not ((said is True or str(said).lower() == "true")
+                            and self._keep_balloon_sound(image, it.get("bbox"),
+                                                         it.get("original", ""))):
                         continue
                     it["in_bubble"] = True
                     it["type"] = "dialogue"
@@ -2355,6 +2358,14 @@ class TranslationPipeline:
             is_sfx = _is_sfx(jp)
             balloon_sound = False
             if is_sfx and not self.translate_sfx:
+                # Kept only on DOUBLE confirmation: the vision model says it is
+                # lettered in a balloon AND the balloon test agrees. Geometry
+                # alone also "found" balloons around white patches of art (a
+                # katakana SFX like ズバ in a gap between lines) — erasing a
+                # real SFX is the worse mistake.
+                said = det.get("in_balloon")
+                if not (said is True or str(said).lower() == "true"):
+                    continue
                 if not self._keep_balloon_sound(image, [bx, by, bw, bh], jp):
                     continue
                 balloon_sound = True
@@ -2439,7 +2450,6 @@ class TranslationPipeline:
 
         id_to_text: Dict[int, str] = {}
         box_map: Dict[int, tuple] = {}
-        in_balloon = set()       # ids whose "SFX" reading sits in a balloon
         for box in boxes:
             if any(_boxes_overlap(list(box), tb) for tb in taken):
                 continue
@@ -2447,9 +2457,10 @@ class TranslationPipeline:
             if not jp or not _has_source_text(jp, self.source_lang):
                 continue
             if _is_sfx(jp) and not self.translate_sfx:
-                if not self._keep_balloon_sound(image, box, jp):
-                    continue
-                in_balloon.add(next_id)
+                # No model judgement on this path, and geometry alone can't
+                # tell a sound balloon from a white patch of art reliably —
+                # leave it alone rather than risk erasing an SFX.
+                continue
             # Same text already found by another pass (LLM box was off but
             # close enough that both versions would be placed = doubled text).
             if any(_texts_match(jp, t) for t in known_texts):
@@ -2481,8 +2492,8 @@ class TranslationPipeline:
                 "bbox": [int(v) for v in box_map[fid]],
                 "original": jp,
                 "translation": text,
-                "type": "dialogue" if fid in in_balloon else tr.get("type", "narration"),
-                "in_bubble": fid in in_balloon,
+                "type": tr.get("type", "narration"),
+                "in_bubble": False,
                 "dark": False,
             })
         if items:
@@ -2505,7 +2516,6 @@ class TranslationPipeline:
         next_id = max((r.id for r in bubble_regions), default=0) + 1
         id_to_text: Dict[int, str] = {}
         box_map: Dict[int, tuple] = {}
-        in_balloon = set()       # ids whose "SFX" reading sits in a balloon
 
         for box in free_boxes:
             if not self._box_text_evidence(image, box):
@@ -2513,15 +2523,10 @@ class TranslationPipeline:
             jp = self.ocr.read_region(image, box, None)
             if not jp:
                 continue
-            balloon_sound = False
             if _is_sfx(jp) and not self.translate_sfx:
-                if not self._keep_balloon_sound(image, box, jp):
-                    continue
-                balloon_sound = True
+                continue      # no model judgement here: see _free_text_seg
             fid = next_id
             next_id += 1
-            if balloon_sound:
-                in_balloon.add(fid)
             id_to_text[fid] = jp
             box_map[fid] = box
 
@@ -2543,8 +2548,8 @@ class TranslationPipeline:
                 "bbox": [int(v) for v in box_map[fid]],
                 "original": jp,
                 "translation": tr.get("translation", ""),
-                "type": "dialogue" if fid in in_balloon else tr.get("type", "narration"),
-                "in_bubble": fid in in_balloon,
+                "type": tr.get("type", "narration"),
+                "in_bubble": False,
                 "dark": False,
             })
         if items:
