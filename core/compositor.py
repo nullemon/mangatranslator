@@ -2399,9 +2399,15 @@ class Compositor:
             return 0.0
         em = self._em_ratio()
         n = max(len(t), 1)
+        # A line is never narrower than its longest word: without this cap a
+        # tall sliver (a vertical JP column, 41 x 244) "fit" 24 characters at
+        # 25px by area alone, when "QUICK..." needs ~70px of width at that
+        # size — so the box was never grown and the English came out at 10px.
+        longest = max((len(wd) for wd in t.split()), default=1)
+        word_cap = w / (max(longest, 1) * em)
         best = 0.0
         for lines in range(1, 13):
-            f = min(h / (lines * 1.22), w * lines / (n * em))
+            f = min(h / (lines * 1.22), w * lines / (n * em), word_cap)
             best = max(best, f)
         return best
 
@@ -2564,16 +2570,25 @@ class Compositor:
         # other text still blocks it.
         bx0, by0 = wx0 + 4, wy0 + 4
         bx1, by1 = wx1 - 4, wy1 - 4
+        longest = max((len(wd) for wd in t.split()), default=1)
+        # Keep the SHAPE of the source block: a tall column stays a column,
+        # a wide caption stays wide. Taking the fewest lines (the widest box)
+        # turned a vertical monologue into a long strip across the art that
+        # crowded the next column.
+        src_aspect = max(sw, 1) / float(max(sh, 1))
+        fits = []
         for lines in range(1, 13):
-            nw = int(len(t) * em * target / lines) + 4
+            nw = max(int(len(t) * em * target / lines),
+                     int(longest * em * target)) + 4
             nh = int(lines * 1.22 * target) + 4
             if nw <= bx1 - bx0 and nh <= by1 - by0:
-                nx = int(min(max(bx0, cx - nw / 2.0), bx1 - nw))
-                ny = int(min(max(by0, cy - nh / 2.0), by1 - nh))
-                cand2 = (nx, ny, int(nw), int(nh))
-                if clear_of_others(cand2):
-                    return cand2
-                break
+                fits.append((abs(np.log((nw / float(nh)) / src_aspect)), nw, nh))
+        for _d, nw, nh in sorted(fits):
+            nx = int(min(max(bx0, cx - nw / 2.0), bx1 - nw))
+            ny = int(min(max(by0, cy - nh / 2.0), by1 - nh))
+            cand2 = (nx, ny, int(nw), int(nh))
+            if clear_of_others(cand2):
+                return cand2
         return best
 
     def _widen_vertical_rect(self, rect, result, used_boxes, own_boxes=()):
