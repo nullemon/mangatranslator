@@ -409,6 +409,189 @@ class Compositor:
         return m, dark
 
     @staticmethod
+    def _lobes(mask, strokes):
+        """Split a JOINED balloon (two or more balloons drawn touching) into
+        one mask per lobe that holds text; None when it is one balloon.
+
+        Lobes separate when the shape is shrunk (its distance transform is
+        thresholded); a convex balloon never splits that way. The split is
+        only accepted when at least two lobes hold text AND almost no text
+        crosses the cut — a single peanut-shaped balloon with one column
+        running through its waist stays whole."""
+        H, W = mask.shape[:2]
+        x, y, w, h = cv2.boundingRect(mask)
+        if w < 40 or h < 40 or strokes is None:
+            return None
+        crop = (mask[y:y + h, x:x + w] > 0).astype(np.uint8)
+        st = (strokes[y:y + h, x:x + w] > 0) & (crop > 0)
+        total = int(st.sum())
+        if total < 80:
+            return None
+        dist = cv2.distanceTransform(crop, cv2.DIST_L2, 5)
+        top = float(dist.max())
+        if top < 10:
+            return None
+        area = float(crop.sum())
+        for frac in (0.35, 0.45, 0.55, 0.65, 0.75):
+            n, lab = cv2.connectedComponents((dist > frac * top).astype(np.uint8), connectivity=8)
+            if n <= 2:
+                continue
+            sizes = np.bincount(lab.ravel(), minlength=n)
+            ks = [k for k in range(1, n) if sizes[k] >= 0.02 * area]
+            if len(ks) < 2:
+                continue
+            dm = np.stack([cv2.distanceTransform((lab != k).astype(np.uint8), cv2.DIST_L2, 5)
+                           for k in ks])
+            owner = np.argmin(dm, axis=0)
+            def big_enough(i):
+                ys, xs = np.nonzero((owner == i) & (crop > 0))
+                return (xs.size >= 0.15 * area and xs.size > 0
+                        and min(xs.max() - xs.min(), ys.max() - ys.min()) >= 50)
+            text_lobes = [i for i in range(len(ks))
+                          if int((st & (owner == i)).sum()) >= max(40, 0.10 * total)
+                          and big_enough(i)]
+            if len(text_lobes) < 2:
+                continue
+            # re-assign using only the lobes that hold text
+            dm2 = dm[text_lobes]
+            owner = np.argmin(dm2, axis=0)
+            # text crossing the cut => one balloon, not two
+            edge = np.zeros_like(crop)
+            edge[:, 1:] |= (owner[:, 1:] != owner[:, :-1]).astype(np.uint8)
+            edge[1:, :] |= (owner[1:, :] != owner[:-1, :]).astype(np.uint8)
+            edge = cv2.dilate(edge & crop, np.ones((7, 7), np.uint8)) > 0
+            if float((st & edge).sum()) > 0.04 * total:
+                return None
+            out = []
+            for i in range(len(text_lobes)):
+                m = np.zeros((H, W), np.uint8)
+                m[y:y + h, x:x + w][(owner == i) & (crop > 0)] = 255
+                out.append(m)
+            return out
+        return None
+
+    @staticmethod
+    def _split_for_lobes(text, lobes, strokes):
+        """Divide one line of English across a joined balloon's lobes.
+        Lobes go in manga reading order (side by side: right first; stacked:
+        top first). Each gets a share of the words proportional to how much
+        Japanese it held, and the cut is moved to the nearest natural break —
+        after "...", "!", "?", "." or ",", else between words. Returns
+        (lobes_in_order, parts) or None when the text can't be divided."""
+        words = (text or "").split()
+        if len(lobes) < 2 or len(words) < len(lobes):
+            return None
+        boxes = [cv2.boundingRect(m) for m in lobes]
+
+        def before(a, b):
+            ax, ay, aw, ah = a
+            bx_, by_, bw_, bh_ = b
+            ov = min(ay + ah, by_ + bh_) - max(ay, by_)
+            if ov > 0.5 * min(ah, bh_):             # side by side: right first
+                return ax + aw / 2.0 > bx_ + bw_ / 2.0
+            return ay < by_                        # stacked: top first
+        order = list(range(len(lobes)))
+        for i in range(len(order)):
+            for j in range(len(order) - 1 - i):
+                if not before(boxes[order[j]], boxes[order[j + 1]]):
+                    order[j], order[j + 1] = order[j + 1], order[j]
+        lobes = [lobes[k] for k in order]
+        ink = [max(1, int(cv2.countNonZero(cv2.bitwise_and(m, strokes))))
+               if strokes is not None else 1 for m in lobes]
+        total_chars = sum(len(w) + 1 for w in words)
+        # character offset where each word ENDS
+        ends, acc = [], 0
+        for w in words:
+            acc += len(w) + 1
+            ends.append(acc)
+
+        def natural(i):
+            w = words[i]
+            if w.endswith(("...", "…", "!", "?", ".", "—", "--")):
+                return 0
+            if w.endswith((",", ";", ":")):
+                return 1
+            return 3
+        parts, start = [], 0
+        share = 0.0
+        for k in range(len(lobes) - 1):
+            share += ink[k] / float(sum(ink))
+            target = share * total_chars
+            best, best_cost = None, None
+            for i in range(start, len(words) - (len(lobes) - 1 - k)):
+                cost = abs(ends[i] - target) / max(total_chars, 1) * 10 + natural(i)
+                if best_cost is None or cost < best_cost:
+                    best, best_cost = i, cost
+            if best is None:
+                return None
+            parts.append(" ".join(words[start:best + 1]))
+            start = best + 1
+        parts.append(" ".join(words[start:]))
+        if any(not p for p in parts):
+            return None
+        return lobes, parts
+
+    @staticmethod
+    def _split_lobe(mask, mybox, other_boxes):
+        """This line's lobe of a JOINED balloon, or None when the balloon is one
+        piece. Shrinking the shape (thresholding its distance transform)
+        separates lobes at the waist between them; a single convex balloon
+        never splits this way — every level set of a convex shape's distance
+        transform is convex — so ordinary balloons are left whole, and a
+        balloon holding two columns of ONE line still merges them. Every mask
+        pixel then goes to the nearest lobe core, so the cut runs through the
+        waist."""
+        pts = []
+        H, W = mask.shape[:2]
+        x, y, w, h = cv2.boundingRect(mask)
+        if w < 20 or h < 20:
+            return None
+        crop = (mask[y:y + h, x:x + w] > 0).astype(np.uint8)
+
+        def centre(b):
+            cx, cy = int(b[0] + b[2] / 2.0) - x, int(b[1] + b[3] / 2.0) - y
+            if 0 <= cx < w and 0 <= cy < h and crop[cy, cx]:
+                return cx, cy
+            return None
+
+        mine = centre(mybox)
+        if mine is None:
+            return None
+        for b in other_boxes:
+            c = centre(b)
+            if c is not None and abs(c[0] - mine[0]) + abs(c[1] - mine[1]) > 12:
+                pts.append(c)
+        if not pts:
+            return None
+        dist = cv2.distanceTransform(crop, cv2.DIST_L2, 5)
+        top = float(dist.max())
+        if top < 6:
+            return None
+        for frac in (0.35, 0.45, 0.55, 0.65, 0.75):
+            core = (dist > frac * top).astype(np.uint8)
+            n, lab = cv2.connectedComponents(core, connectivity=8)
+            if n <= 2:
+                continue
+            # each lobe core: distance map to it, for nearest-core assignment
+            areas = np.bincount(lab.ravel(), minlength=n)
+            ks = [k for k in range(1, n) if areas[k] >= 0.02 * crop.sum()]
+            if len(ks) < 2:
+                continue
+            dmaps = np.stack([cv2.distanceTransform((lab != k).astype(np.uint8),
+                                                    cv2.DIST_L2, 5) for k in ks])
+            owner = np.argmin(dmaps, axis=0)
+            my_k = int(owner[mine[1], mine[0]])
+            if all(int(owner[c[1], c[0]]) == my_k for c in pts):
+                return None            # every other line shares my lobe: one balloon
+            lobe = (owner == my_k) & (crop > 0)
+            if lobe.sum() < 0.15 * crop.sum():
+                return None
+            out = np.zeros((H, W), np.uint8)
+            out[y:y + h, x:x + w][lobe] = 255
+            return out
+        return None
+
+    @staticmethod
     def _iou(a, b):
         ax, ay, aw, ah = a; bx_, by_, bw_, bh_ = b
         ix = max(0, min(ax + aw, bx_ + bw_) - max(ax, bx_))
@@ -1142,6 +1325,21 @@ class Compositor:
                     continue
                 mask = None
 
+            # JOINED balloons: two speech balloons drawn touching (two circles
+            # with a waist between them) come back from the finder as ONE
+            # mask, and both lines were lettered as one merged block across
+            # the pair. When this mask also holds another line's text, split
+            # it into its lobes and keep only the lobe with THIS line.
+            if mask is not None:
+                others = [o["bbox"] for o in items
+                          if o is not it and o.get("bbox") and len(o["bbox"]) == 4
+                          and o.get("in_bubble") is not False and not o.get("erase")
+                          and (o.get("translation") or "").strip()]
+                if others:
+                    lobe = self._split_lobe(mask, (bx, by, bw, bh), others)
+                    if lobe is not None:
+                        mask = lobe
+
             fglow = False
             if mask is not None:
                 bb = cv2.boundingRect(mask)
@@ -1180,6 +1378,32 @@ class Compositor:
                     cv2.MORPH_ELLIPSE, (9, 9)))
                 if cv2.countNonZero(bshape) >= 200:
                     it["_shape"] = bshape
+                # ONE line read across a JOINED balloon (two balloons drawn
+                # touching, the sentence running from one into the other): the
+                # whole sentence was translated together — that keeps its
+                # meaning — and is now divided at a natural break and set in
+                # reading order, first part in the right-hand (or top) lobe,
+                # the rest in the next, as a letterer does. It used to be set
+                # as one merged block across the pair.
+                lobes = self._lobes(mask, self._seg_mask)
+                if lobes:
+                    parts = self._split_for_lobes(text, lobes, self._seg_mask)
+                    if parts:
+                        color = self._pick_color(dark, it)
+                        edited_rects.append(tuple(int(v) for v in bb))
+                        for lm, part in zip(parts[0], parts[1]):
+                            lb = cv2.boundingRect(lm)
+                            lrect = self._inner_rect(lm) or (lb[0] + 2, lb[1] + 2,
+                                                             max(lb[2] - 4, 10), max(lb[3] - 4, 10))
+                            lshape = cv2.erode(lm, cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (9, 9)))
+                            placements.append((offset_rect(it, lrect), part, color, ital, 0,
+                                               self._item_scale(it) * role_scale,
+                                               self._item_glow(it), bool(it.get("fit_box")),
+                                               lshape if cv2.countNonZero(lshape) >= 200 else None,
+                                               role_font, self._size_cap(it, part, role_font)))
+                        it["placed"] = True
+                        continue
             else:
                 # No reliable balloon. Treat like floating text: framed white
                 # interiors still get a clean caption fill; text over art has
