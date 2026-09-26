@@ -147,7 +147,48 @@ def _neural_keep(small: np.ndarray):
                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (g, g)))
     if int(cv2.countNonZero(keep)) > FULL_FRAME * sh * sw:
         return None
+    # The model finds the SALIENT object, and on a scan that already fills
+    # the frame the salient object is a panel or a figure, not a sheet — it
+    # cut a full-page One Piece scan down to its top panel. A page on a floor
+    # is surrounded by floor; a panel on a page is surrounded by PRINT. So
+    # the region the mask would throw away is checked for ink, and when it
+    # is printed the model's answer is refused and the classical cues take
+    # over (which, on a full-frame scan, leave it alone).
+    if _outside_is_printed(small, keep):
+        print("[pagecut] the model's mask leaves printed page outside it — "
+              "this looks like a scan that already fills the frame, "
+              "not a photo; left to the classical cues")
+        return None
     return keep
+
+
+#: fraction of the outside that is ink against paper before the outside is
+#: called "printed". Measured: 0.10-0.16 outside the model's mask on full-page
+#: scans, 0.0000 outside a page composited onto a carpet with a shadow.
+PRINTED_OUTSIDE = 0.03
+
+
+def _outside_is_printed(small: np.ndarray, keep: np.ndarray) -> bool:
+    """Is the region OUTSIDE `keep` printed paper rather than floor?
+
+    Print is dark ink next to bright paper — a hard edge in a few pixels.
+    A carpet, a desk or the page's own shadow is textured but low-contrast;
+    a fibrous rug measured 4-26 of local deviation, never black-on-white.
+    A band round the mask is ignored: the page's shadow and its own border
+    live there and neither says anything about what lies beyond.
+    """
+    g = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    sh, sw = g.shape[:2]
+    band = max(9, int(min(sh, sw) * 0.03)) | 1
+    near = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                      (band, band))) > 0
+    outside = (keep == 0) & ~near
+    n = int(outside.sum())
+    if n < 0.02 * sh * sw:
+        return False
+    paper = cv2.dilate((g > 170).astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+    ink_edge = (g < 80) & paper & outside
+    return float(ink_edge.sum()) / float(n) >= PRINTED_OUTSIDE
 
 
 def _hull_of(cand: np.ndarray):
