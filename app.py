@@ -1582,7 +1582,11 @@ async def _run(
             finish = "off"
             tasks[task_id]["finish"] = "off"
 
-        pipeline = TranslationPipeline(
+        # Built OFF the event loop: construction loads every model (balloon
+        # detector, OCR, text model, inpainter, upscaler), and doing that
+        # inline froze the whole server — status polls, other pages, the
+        # editor — for 5+ seconds each time a page started.
+        pipeline = await loop.run_in_executor(None, lambda: TranslationPipeline(
             api_key=api_key,
             target_lang=target_lang,
             provider=provider,
@@ -1605,7 +1609,7 @@ async def _run(
             one_by_one=one_by_one,
             style_fonts=style_fonts,
             webtoon=webtoon,
-        )
+        ))
 
         def on_progress(update):
             # A pipeline warning adds to one the scan step left, rather than
@@ -2841,11 +2845,19 @@ async def profile_delete(slug: str):
     return {"deleted": profiles.delete(slug)}
 
 
+# Stored with a task for the server's own use, never sent back out: the
+# status endpoint returned the whole task record, scan API key included, to
+# anything that could reach the port.
+_PRIVATE_TASK_FIELDS = {"enhance_key", "api_key"}
+
+
 @app.get("/api/status/{task_id}")
 async def status(task_id: str):
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
-    return tasks[task_id]
+    t = tasks[task_id]
+    return {k: v for k, v in t.items()
+            if k not in _PRIVATE_TASK_FIELDS and not k.endswith("_key")}
 
 
 _NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
