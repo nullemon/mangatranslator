@@ -2216,7 +2216,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const leftLabel = (wf === "raw-scan" || wf === "scan-upscale") ? "Rough"
                     : wf === "scan-raw" ? "Clean" : "Original";
     // (watermark-only falls through to "Original" / "Watermarked" below)
-    const rightLabel = wf === "local-clean" ? "Cleaned"
+    // "clean" (remove text) had no entry, so its panes said "Translated"
+    // over a page that was never translated.
+    const rightLabel = (wf === "local-clean" || wf === "clean") ? "Cleaned"
                      : wf === "cut-pages" ? "Page only"
                      : wf === "rotate-pages" ? "Turned"
                      : wf === "watermark-only" ? "Watermarked"
@@ -2225,7 +2227,7 @@ document.addEventListener("DOMContentLoaded", () => {
                      : wf === "raw-scan" ? "Manga Scan"
                      : wf === "scan-raw" ? "Raw feel"
                      : "Translated";
-    const tabLabel = wf === "local-clean" ? "Clean"
+    const tabLabel = (wf === "local-clean" || wf === "clean") ? "Clean"
                    : wf === "cut-pages" ? "Cut"
                    : wf === "rotate-pages" ? "Turned"
                    : wf === "watermark-only" ? "Stamped"
@@ -2246,6 +2248,14 @@ document.addEventListener("DOMContentLoaded", () => {
       compLabelRight.textContent = rightLabel;
       tabTranslated.textContent  = tabLabel;
       detailsTab.style.display   = noTranslate ? "none" : "";
+      // A page with no text has no Details. If that tab was the one open
+      // (from the previous page), hiding it left its panel showing — the text
+      // size slider and an empty list over a page that has neither, and no
+      // tab lit up at all. Fall back to Compare.
+      if (noTranslate && detailsTab.classList.contains("active")) {
+        const compare = document.querySelector('.tab[data-tab="compare"]');
+        if (compare) compare.click();
+      }
       translateScanBtn.style.display = noTranslate ? "" : "none";
       buildTranslationsList(p);
       // Rebuild the on-image edit overlay for THIS page. Without it, switching
@@ -2646,8 +2656,13 @@ document.addEventListener("DOMContentLoaded", () => {
       // textareas — the server is echoing back the text as it was when the
       // request left. Harvest it before its items replace ours, or the
       // keystrokes are thrown away.
+      //
+      // Only while THIS page is still the one on screen. The check used to
+      // pass whenever no page was given explicitly, so switching pages during
+      // a re-render harvested the NEXT page's textareas and wrote them into
+      // this page's lines wherever the ids happened to match.
       const live = {};
-      if (!pageArg || pageArg.uid === activeUid) {
+      if (page.uid === activeUid) {
         document.querySelectorAll(".tl-edit").forEach(t => {
           if (!t.classList.contains("add-edit")) live[t.dataset.id] = t.value;
         });
