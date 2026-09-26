@@ -490,9 +490,16 @@ class Compositor:
         # available): tells us exactly which pixels are lettering, so erasure
         # covers whole characters and never guesses at art.
         self._seg_mask = None
+        # Strokes of dialogue / narration only (inside detected text blocks).
+        # Everything AUTOMATIC — box refinement, the erase's art guard, glyph
+        # measurement — keys off this one, so a sound effect drawn next to a
+        # line is never pulled into its box and erased with it. The full
+        # mask stays for the user's own erase box (they boxed it: it goes).
+        self._dialog_mask = None
         if self.text_seg is not None and self.text_seg.ok:
             try:
                 self._seg_mask = self.text_seg.mask(image)
+                self._dialog_mask = self.text_seg.text_mask(image)
             except Exception as e:
                 print(f"[compositor] text-seg mask failed: {e}")
         # Every region we actually edit. At the end we restore ALL other pixels
@@ -558,14 +565,16 @@ class Compositor:
         # compared with the page's ordinary dialogue. The font picker turns a
         # clearly bigger line into a shout and a clearly smaller one into a
         # quiet line, so the English keeps the emphasis the letterer drew.
-        if self.style_fonts and self._seg_mask is not None:
+        strokes_for_size = self._dialog_mask if self._dialog_mask is not None else self._seg_mask
+        if strokes_for_size is not None:
             sizes = {}
             for it in items:
                 b = it.get("bbox")
                 if b and len(b) == 4:
-                    s = self._glyph_px(gray, self._seg_mask, b)
+                    s = self._glyph_px(gray, strokes_for_size, b)
                     if s:
                         sizes[id(it)] = s
+                        it["_glyph_px"] = s
             if len(sizes) >= 3:
                 med = float(np.median(list(sizes.values())))
                 for it in items:
@@ -1729,6 +1738,10 @@ class Compositor:
         touched = (x0, y0, x1 - x0, y1 - y0)
         gray_roi = cv2.cvtColor(result[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
         seg_roi = self._seg_mask[y0:y1, x0:x1] if self._seg_mask is not None else None
+        if not contain and self._dialog_mask is not None:
+            # Automatic erase: only dialogue strokes may anchor / permit the
+            # erase, so an SFX that falls inside the padded window survives.
+            seg_roi = self._dialog_mask[y0:y1, x0:x1]
         if contain:
             # USER-DRAWN region (cover box / item ⌫ / resized box). The intent
             # is to erase the TEXT the user boxed while KEEPING the artwork
@@ -1861,8 +1874,9 @@ class Compositor:
         # lines); fall back to the deviation heuristic when it's absent or
         # finds nothing in the window.
         ink = None
-        if self._seg_mask is not None:
-            seg_win = self._seg_mask[y0:y1, x0:x1]
+        strokes = self._dialog_mask if self._dialog_mask is not None else self._seg_mask
+        if strokes is not None:
+            seg_win = strokes[y0:y1, x0:x1]
             if cv2.countNonZero(seg_win) >= 10:
                 ink = seg_win
         if ink is None:
@@ -1897,14 +1911,15 @@ class Compositor:
         """Bounding box of actual text strokes within (x,y,w,h) from the
         page-level seg mask.  Returns (sx, sy, sw, sh) in page coords, or
         None when the mask is absent or the region is nearly empty."""
-        if self._seg_mask is None:
+        strokes = self._dialog_mask if self._dialog_mask is not None else self._seg_mask
+        if strokes is None:
             return None
-        H, W = self._seg_mask.shape[:2]
+        H, W = strokes.shape[:2]
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(W, x + w), min(H, y + h)
         if x1 <= x0 or y1 <= y0:
             return None
-        roi = self._seg_mask[y0:y1, x0:x1]
+        roi = strokes[y0:y1, x0:x1]
         if cv2.countNonZero(roi) < 10:
             return None
         ys, xs = np.where(roi > 0)
@@ -2433,6 +2448,13 @@ class Compositor:
             return orig
         n_src = max(sum(1 for c in src if not c.isspace()), 1)
         char_px = (max(sw, 1) * max(sh, 1) / n_src) ** 0.5
+        # Prefer the glyph size MEASURED from the strokes. Area-per-character
+        # over-reads badly when a line is two vertical columns with a gap
+        # between them (31 px glyphs read as 58 px, and the English came out
+        # at 40 px across a face); the measured size is what the letterer set.
+        gp = float(it.get("_glyph_px") or 0.0)
+        if gp >= 8.0:
+            char_px = gp
         char_px = float(min(max(char_px, 14.0), 110.0))
         em = self._em_ratio()
         # Pros conserve the source block's FOOTPRINT: cap the target so the
