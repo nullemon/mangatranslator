@@ -71,6 +71,7 @@ class Compositor:
         self._seg_mask = None
         self._dialog_mask = None
         self._raw_mask = None
+        self._line_glyph = 0.0
         try:
             from .text_seg import TextSegmenter
             self.text_seg = TextSegmenter()
@@ -648,6 +649,26 @@ class Compositor:
             sizes = base
         return float(np.percentile(sizes, 85))
 
+    def _drop_giant(self, mask):
+        """`mask` without stroke pieces far bigger than the current line's
+        letters. A line squeezed beside a big sound effect (☆至る!!! next to
+        ブル) has the effect's solid strokes inside its box; taken as the
+        line's own, they dragged its box over the effect and were erased
+        with it. Only for such a line (its measured size had to be held
+        down, see the glyph measurement): elsewhere a whole line's strokes
+        can merge into one long piece that is still all lettering."""
+        g = float(getattr(self, "_line_glyph", 0.0) or 0.0)
+        if g < 8.0 or mask is None or not mask.any():
+            return mask
+        n, lab, st, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), 8)
+        big = np.zeros(n, bool)
+        big[1:] = np.maximum(st[1:, 2], st[1:, 3]) > 2.5 * g
+        if not big.any():
+            return mask
+        out = mask.copy()
+        out[big[lab]] = 0
+        return out
+
     @staticmethod
     def _snap_lineart(out, crop, mask):
         """Inpainting over black-and-white line art invents soft grey shading
@@ -827,6 +848,7 @@ class Compositor:
         # mask stays for the user's own erase box (they boxed it: it goes).
         self._dialog_mask = None
         self._raw_mask = None
+        self._line_glyph = 0.0
         if self.text_seg is not None and self.text_seg.ok:
             try:
                 self._seg_mask = self.text_seg.mask(image)
@@ -930,6 +952,7 @@ class Compositor:
                     role = lettering.normalise(it.get("tone", "")) or (it.get("type") or "")
                     if role != "title" and sizes[id(it)] > ceil:
                         sizes[id(it)] = it["_glyph_px"] = ceil
+                        it["_beside_sfx"] = True
             if len(sizes) >= 3:
                 med = float(np.median(list(sizes.values())))
                 for it in items:
@@ -979,6 +1002,9 @@ class Compositor:
                 it["placed"] = True        # lettered as part of another line
                 continue
             it["placed"] = False
+            # a line measured beside a big sound effect: its glyph size, for
+            # telling its letters from the effect's strokes inside its box
+            self._line_glyph = float(it.get("_glyph_px") or 0.0) if it.get("_beside_sfx") else 0.0
             kind = (it.get("type") or "").lower().replace(" ", "_")
 
             # Credit / TL name: small clean text in the margin/gutter — NO erase
@@ -2306,7 +2332,7 @@ class Compositor:
                     # box belong to it. A big SFX glyph that merely crosses
                     # into the box (あ / ブル beside a caption) runs well
                     # outside it — erasing its inside part cut the SFX up.
-                    full_win = own_src[y0:y1, x0:x1]
+                    full_win = self._drop_giant(own_src[y0:y1, x0:x1])
                     n_, lab_, _st, _c = cv2.connectedComponentsWithStats(
                         (full_win > 0).astype(np.uint8), 8)
                     inside = np.zeros(full_win.shape, bool)
@@ -2467,6 +2493,8 @@ class Compositor:
             if strokes is None:
                 continue
             seg_win = strokes[y0:y1, x0:x1]
+            if strokes is not self._dialog_mask:
+                seg_win = self._drop_giant(seg_win)
             if cv2.countNonZero(seg_win) >= 10:
                 ink = seg_win
                 break
