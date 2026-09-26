@@ -448,6 +448,12 @@ class TextRenderer:
                     line = pieces[0]
                     taken = len(line) - (1 if line.endswith("-") else 0)
                     rest = word[taken:]
+                    # Only a real word breaks, and never into a stub: at least
+                    # six letters, three kept on each side ("C-/ONQUEROR'S" or
+                    # "WH-/AT" read as mistakes, not lettering).
+                    letters = lambda s_: sum(ch.isalpha() for ch in s_)
+                    if letters(word) < 6 or letters(line) < 3 or (rest and letters(rest) < 3):
+                        return None
                     if rest:
                         pending[wi] = rest
                     else:
@@ -547,10 +553,15 @@ class TextRenderer:
         if not spans:
             return False
 
-        # Prefer unbroken words; allow hyphenation only if nothing fits whole.
+        # Prefer unbroken words — but not at any price. A release letterer
+        # breaks one long word (CONQ-/UEROR'S) rather than shrink a narrow
+        # balloon's whole text to fit it; only hyphenating when NOTHING fit
+        # whole pinned such balloons to small type. So both are laid out and
+        # the hyphenated one wins when it sets the text clearly bigger.
         got = self._shape_layout(draw, text, spans, rh, allow_hyphen=False)
-        if got is None:
-            got = self._shape_layout(draw, text, spans, rh, allow_hyphen=True)
+        hyp = self._shape_layout(draw, text, spans, rh, allow_hyphen=True)
+        if got is None or (hyp is not None and hyp[0] >= 1.25 * got[0]):
+            got = hyp
         if got is None:
             return False
         size, lines, lh = got
