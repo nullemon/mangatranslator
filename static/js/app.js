@@ -5421,4 +5421,15 @@ document.addEventListener("DOMContentLoaded", () => {
       .join("");
   }
 
+  // Tooltip only: a settings dropdown too narrow for its choice shows the
+  // full text on hover / focus. Dropdowns with their own tooltip keep it.
+  document.querySelectorAll("#settingsBar select:not([title])").forEach(sel => {
+    const show = () => {
+      const o = sel.options[sel.selectedIndex];
+      sel.title = o ? o.text : "";
+    };
+    sel.addEventListener("mouseenter", show);
+    sel.addEventListener("focus", show);
+  });
+
 });

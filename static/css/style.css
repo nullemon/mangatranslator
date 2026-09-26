@@ -91,7 +91,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r-lg);margin-bottom:1rem;box-shadow:var(--shadow-sm);
   overflow:hidden;
+  /* Helper text in here is small, so the "faint" grey is lifted to a
+     readable contrast (~4.5:1 on the panel) — only inside the settings. */
+  --text-faint:#71767e;
 }
+[data-theme="dark"] .settings-bar{--text-faint:#8a9099}
 /* Header bar that collapses / expands the whole panel. */
 .settings-head{
   display:flex;align-items:center;gap:.5rem;cursor:pointer;user-select:none;
@@ -107,67 +111,113 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 /* Each section: a title row + a responsive grid of fields. */
 .settings-section{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:.5rem 1.3rem;align-items:start;padding:.55rem 1.2rem;
+  gap:.8rem 1.3rem;align-items:start;padding:.9rem 1.2rem 1.05rem;
 }
 .settings-section + .settings-section{border-top:1px solid var(--border)}
 .section-title{
-  grid-column:1/-1;margin:0 0 .15rem;
-  font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
-  color:var(--text-dim);
+  grid-column:1/-1;margin:0;display:flex;align-items:baseline;gap:.5rem;
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  color:var(--text);
 }
-.section-title .muted{text-transform:none;letter-spacing:.01em;font-weight:500;font-size:.72rem}
+/* a short accent tick before each heading makes the sections easy to find */
+.section-title::before{content:'';align-self:center;width:3px;height:.8rem;
+  border-radius:2px;background:var(--accent);flex:none}
+.section-title .muted{text-transform:none;letter-spacing:.01em;font-weight:500;font-size:.74rem}
 
 /* Field group: small uppercase label above a control. */
 .setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
-.setting-group.half{grid-column:span 2}
+.setting-group.half,.wm-controls.half{grid-column:span 2}
+/* .wide: two columns on the 4-up grid so long choices ("Natural — read the
+   panel, localize (recommended)") are not cut off; one column on 2-up. */
+.setting-group.wide{grid-column:span 2}
 .setting-group.full{grid-column:1/-1}
 .setting-group>label,.setting-group>.gloss-head>label{
-  font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--text-faint);font-weight:600;
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text-dim);font-weight:600;line-height:1.35;
 }
+.setting-group>label .muted,.setting-group>.gloss-head>label .muted{
+  font-size:.7rem;text-transform:none;letter-spacing:0}
 /* .opt select: the GPU-cap dropdown in the Options grid was the one control
    left as a bare native select — a white box in the dark panel. */
 .setting-group input,.setting-group select,.opt select,.prompt-group textarea,#enhanceModel{
   background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-  padding:.3rem .55rem;border-radius:var(--r-sm);font-size:.78rem;line-height:1.3;outline:none;
+  padding:.36rem .55rem;border-radius:var(--r-sm);font-size:.8rem;line-height:1.3;outline:none;
   font-family:inherit;transition:border-color .15s,box-shadow .15s;width:100%;
 }
-.setting-group input:hover,.setting-group select:hover{border-color:var(--border-strong)}
-.setting-group input:focus,.setting-group select:focus,
+.setting-group input:hover,.setting-group select:hover,.opt select:hover{border-color:var(--border-strong)}
+.setting-group input:focus,.setting-group select:focus,.opt select:focus,
 .prompt-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--ring)}
 .setting-group select,.opt select{cursor:pointer;appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.4'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right .6rem center;padding-right:1.9rem}
 .inline-row{display:flex;gap:.5rem;align-items:center}
+.inline-row .btn-sm{align-self:stretch;padding-top:0;padding-bottom:0}
 
-/* Options: every toggle in one tidy grid — label left, switch right. */
+/* Options: every toggle in one tidy grid of equal tiles — label left,
+   switch right. Tiles instead of ruled rows, so a short last row leaves
+   no ragged line behind. */
 .options-grid{
   grid-column:1/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:0 1.4rem;
+  gap:.5rem .6rem;
 }
 .opt{
-  display:flex;align-items:center;justify-content:space-between;gap:1rem;
-  padding:.5rem .1rem;border-bottom:1px solid var(--border);min-width:0;
+  display:flex;align-items:center;justify-content:space-between;gap:.8rem;
+  padding:.45rem .7rem;min-width:0;
 }
-.opt>span{font-size:.8rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.options-grid .opt{
+  min-height:48px;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--r);transition:border-color .15s;
+}
+.options-grid .opt:hover{border-color:var(--border-strong)}
+.opt>span{font-size:.8rem;color:var(--text);line-height:1.3;min-width:0}
 .opt .toggle{flex:none}
+.opt select{width:auto;flex:none;min-width:84px;padding-top:.26rem;padding-bottom:.26rem}
+/* a "beta" pill and a small second line replace the dim bracketed notes */
+.opt-badge{font-style:normal;font-size:.6rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--accent);background:var(--accent-soft);
+  padding:.08rem .38rem;border-radius:4px;margin-left:.25rem;vertical-align:1px}
+.opt-sub{display:block;font-style:normal;font-size:.7rem;color:var(--text-dim);margin-top:1px}
+
+/* Typesetting: the font-per-mood switch and its style picker on one line. */
+.mood-group{flex-direction:row;align-items:center;flex-wrap:wrap;gap:.5rem 1rem}
+.mood-group .opt{padding:0;justify-content:flex-start;flex:0 1 auto}
+.mood-group .opt>span{color:var(--text)}
+.mood-group .opt .muted{color:var(--text-dim)}
+.mood-group select{width:auto;flex:0 1 360px;min-width:0}
+
+/* Watermark: controls on the left, the live preview framed on the right. */
+.wm-controls{display:flex;flex-direction:column;gap:.8rem;min-width:0}
+.wm-preview-col{align-self:stretch}
+.wm-preview-box{
+  flex:1;display:flex;align-items:center;justify-content:center;min-height:150px;
+  background:var(--surface-2);border:1px dashed var(--border-strong);
+  border-radius:var(--r);padding:.6rem;
+}
+#wmPreview{display:block;width:100%;max-width:340px;max-height:240px;object-fit:contain;
+  border-radius:6px;border:1px solid rgba(128,128,128,.25)}
+.wm-preview-empty{display:none;font-size:.78rem;color:var(--text-dim);text-align:center}
+#wmPreview[style*="none"] + .wm-preview-empty{display:block}
+.unit-hint{font-size:.74rem;color:var(--text-dim);white-space:nowrap;margin-left:-.2rem}
 
 /* Footer actions. */
 .settings-footer{
   display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
   border-top:1px solid var(--border);padding:.8rem 1.2rem;
 }
-.settings-footer .muted{font-size:.76rem;margin-right:auto}
+.settings-footer .muted{font-size:.78rem;margin-right:auto}
 
-/* End page: tidy two-up rows + one controls strip (width-capped). */
-.endpage{max-width:880px}
-.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.5rem}
+/* End page: two-up rows lined up with the two halves of the sections above,
+   plus one controls strip. */
+.endpage-row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem 1.3rem;margin-bottom:.5rem}
 .endpage-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem;margin:.15rem 0 .45rem}
 .endpage-controls .toggle-hint{width:auto;margin:0}
 
 @media(max-width:1100px){
   .settings-section{grid-template-columns:repeat(2,minmax(0,1fr))}
   .options-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .setting-group.wide{grid-column:auto}
+  /* two-up: the mood switch sits beside Page Finish instead of leaving a gap */
+  .setting-group.full.mood-group{grid-column:auto}
 }
 @media(max-width:560px){
   .settings-section,.options-grid{grid-template-columns:1fr}
@@ -205,7 +255,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .toggle-group{flex-direction:row;align-items:center;gap:.5rem;flex-wrap:wrap;position:relative}
 .toggle-group>label:first-child{order:0}
 /* Help text no longer takes a whole line — it shows as a hover tooltip instead. */
-.toggle-hint{font-size:.66rem;color:var(--text-faint);width:100%;line-height:1.35}
+.toggle-hint{font-size:.72rem;color:var(--text-dim);width:100%;line-height:1.4}
 .toggle-group>.toggle-hint,.prompt-group>.toggle-hint{
   position:absolute;left:0;top:calc(100% + 3px);z-index:30;width:max-content;max-width:300px;
   background:var(--surface-2);color:var(--text-dim);border:1px solid var(--border);
@@ -529,6 +579,13 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .train-body .gloss-head{margin-top:.5rem}
 .train-body .gloss-head>label{margin-top:0}
 .gloss-wiki-btn{padding:.18rem .55rem;font-size:.7rem;flex-shrink:0}
+/* In the settings the button must not make the Glossary label row taller
+   than the Translation Style label beside it — the two boxes line up. */
+.setting-group>.gloss-head{height:calc(.66rem * 1.35);overflow:visible}
+.setting-group>.gloss-head .gloss-wiki-btn{padding:.1rem .5rem;font-size:.68rem;font-weight:600;
+  color:var(--text-dim);background:transparent}
+.setting-group>.gloss-head .gloss-wiki-btn:hover{color:var(--text);background:var(--surface-2)}
+#stylePrompt,#glossary{height:5.2rem}
 .wiki-modal{z-index:1002}
 .wiki-card{width:min(680px,96vw)}
 .wiki-card textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.8rem;line-height:1.45}
