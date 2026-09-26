@@ -607,6 +607,9 @@
 
       <!-- active page: result -->
       <div id="pageResult" style="display:none">
+        <!-- Anything the run needs to tell you about the page it produced:
+             a refused or failed AI scan, a missing upscale model. -->
+        <p class="result-note" id="resultNote" style="display:none"></p>
         <div class="result-tabs">
           <button class="tab active" data-tab="compare">Compare</button>
           <button class="tab" data-tab="original">Original</button>

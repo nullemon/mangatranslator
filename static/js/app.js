@@ -2200,7 +2200,7 @@ document.addEventListener("DOMContentLoaded", () => {
       chip.innerHTML = `
         <div class="pg-thumb"><img src="${src}" alt=""></div>
         <span class="pg-idx">${i + 1}</span>
-        <span class="pg-dot ${p.status}"></span>
+        <span class="pg-dot ${p.status}${pageWarning(p) ? " warn" : ""}"${pageWarning(p) ? ` title="${esc(pageWarning(p))}"` : ""}></span>
         <div class="pg-tools">
           <button data-act="left" title="Move left" ${i === 0 ? "disabled" : ""}>‹</button>
           <button data-act="flip" title="Flip this page 180° (upside-down scan)" ${p.file ? "" : "disabled"}>⟳</button>
@@ -2238,6 +2238,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (wasActive) activeUid = pages[Math.min(i, pages.length - 1)].uid;
     }
     renderStrip(); updateBatch(); renderActivePage();
+  }
+
+  // The warning a finished page came back with, "" when there is none.
+  function pageWarning(p) {
+    return (p && p.status === "done" && p.result && p.result.warning) || "";
   }
 
   function updateBatch() {
@@ -2304,6 +2309,14 @@ document.addEventListener("DOMContentLoaded", () => {
       transImg.src = `/api/result/${p.taskId}${bust}`;
       origFull.src = origImg.src;
       transFull.src = transImg.src;
+      // What the run had to say about this page (a refused or failed AI
+      // scan, no upscale model): it used to end up only in the server log.
+      const resultNote = document.getElementById("resultNote");
+      if (resultNote) {
+        const w = pageWarning(p);
+        resultNote.textContent = w;
+        resultNote.style.display = w ? "" : "none";
+      }
       compLabelLeft.textContent  = leftLabel;
       compLabelRight.textContent = rightLabel;
       tabTranslated.textContent  = tabLabel;

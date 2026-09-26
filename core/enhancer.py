@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import time
 import cv2
 import numpy as np
@@ -36,10 +37,17 @@ def is_moderation(msg: str) -> bool:
     model exactly like the violence its filters are built to turn down.
     """
     m = (msg or "").lower()
-    return any(k in m for k in (
-        "content moderation", "moderation", "safety system", "safety_",
-        "content_policy", "content policy", "rejected by", "flagged",
-        "prohibited_content", "responsible ai"))
+    if any(k in m for k in (
+            "content moderation", "moderation", "safety system", "safety_",
+            "content_policy", "content policy", "rejected by", "flagged",
+            "prohibited_content", "responsible ai", "blockreason")):
+        return True
+    # Gemini says no through finishReason rather than an error message:
+    # 'SAFETY' / 'IMAGE_SAFETY' for the artwork, 'RECITATION' /
+    # 'IMAGE_RECITATION' for copyrighted material (a published manga page is
+    # exactly that). None of them contains "safety_", so a Gemini refusal
+    # used to be reported as an ordinary failure.
+    return re.search(r"\b(?:image_)?(?:safety|recitation)\b", m) is not None
 
 
 class ImageEnhancer:
@@ -339,7 +347,9 @@ class ImageEnhancer:
         items = payload.get("data") or []
         if not items or "b64_json" not in items[0]:
             raise RuntimeError(f"OpenAI returned no image: {str(payload)[:300]}")
-        return self._decode(base64.b64decode(items[0]["b64_json"]))
+        # Fixed 1024x1536 / 1536x1024 sizes: same aspect restore as the rest.
+        return self._restore_aspect(
+            self._decode(base64.b64decode(items[0]["b64_json"])), image)
 
     # ── Google Gemini (2.5 Flash Image / "Nano Banana") ──
     def _gemini(self, image, prompt, api_key, model) -> np.ndarray:
@@ -382,8 +392,32 @@ class ImageEnhancer:
             for part in parts:
                 inline = part.get("inlineData") or part.get("inline_data")
                 if inline and inline.get("data"):
-                    return self._decode(base64.b64decode(inline["data"]))
-        raise RuntimeError(f"Gemini returned no image: {str(payload)[:300]}")
+                    outimg = self._decode(base64.b64decode(inline["data"]))
+                    print(f"[enhance] Gemini returned image "
+                          f"{outimg.shape[1]}x{outimg.shape[0]}")
+                    # Gemini answers on its own aspect buckets (832x1248 for
+                    # a 2:3-ish page), so the art comes back stretched a few
+                    # percent — undo it, as for Grok.
+                    return self._restore_aspect(outimg, image)
+        # No picture: say WHY in words, not as a dump of the reply — this
+        # text is what the user reads beside the page. Gemini refuses through
+        # finishReason / blockReason, and sometimes answers in prose instead.
+        why = []
+        block = (payload.get("promptFeedback") or {}).get("blockReason")
+        if block:
+            why.append(f"blockReason {block}")
+        text = ""
+        for cand in payload.get("candidates", []):
+            fr = cand.get("finishReason")
+            if fr and fr != "STOP":
+                why.append(f"finishReason {fr}")
+            for part in cand.get("content", {}).get("parts", []):
+                text += part.get("text", "")
+        if text.strip():
+            why.append(f"it answered: {text.strip()[:140]!r}")
+        raise RuntimeError("Gemini returned no image"
+                           + (f" ({'; '.join(why)})" if why
+                              else f": {str(payload)[:200]}"))
 
     # ── xAI (Grok Imagine) image-to-image edit ──
     def _xai(self, image, prompt, api_key, model) -> np.ndarray:

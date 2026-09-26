@@ -1140,7 +1140,7 @@ async def _run(
                     raise ValueError(f"Cannot load image: {image_path}")
                 tasks[task_id].update(
                     {"progress": 15,
-                     "message": f"Sending to {enhance_provider.title()} (this can take 30-60s)..."}
+                     "message": f"Sending to {_provider_name(enhance_provider)} (this can take 30-60s)..."}
                 )
                 ai_ok = False
                 try:
@@ -1175,18 +1175,23 @@ async def _run(
                         # fight scene reads to an image model like the violence
                         # its filters exist to turn down. Say that plainly and
                         # point at what actually helps.
-                        note = (f"⚠ {enhance_provider.title()} refused this page "
+                        note = (f"⚠ {_provider_name(enhance_provider)} refused this page "
                                 f"(content moderation — bloody or violent panels "
                                 f"usually trip it). Cleaned locally instead; try "
                                 f"the 'Restore rough raw' finish, or another "
                                 f"provider.")
                     else:
-                        note = (f"⚠ {enhance_provider.title()} scan FAILED — "
+                        note = (f"⚠ {_provider_name(enhance_provider)} scan FAILED — "
                                 f"{reason[:160]} — fell back to local cleanup "
                                 f"(not the AI scan you asked for).")
+                    # "warning" outlives the progress message, which the
+                    # pipeline overwrites a moment later and "Complete!"
+                    # replaces for good — the note used to vanish before
+                    # anyone could read it.
                     tasks[task_id].update(
                         {"progress": 35,
                          "enhance_error": reason[:300],
+                         "warning": note,
                          "message": note}
                     )
                     out = scan_cleanup(img)
@@ -1342,6 +1347,15 @@ async def _run(
         _note_job_done()
 
 
+def _provider_name(provider: str) -> str:
+    """How an image provider is named in a message. str.title() made the
+    xAI one read "Xai refused this page"."""
+    p = (provider or "").strip().lower()
+    return {"xai": "Grok (xAI)", "grok": "Grok (xAI)", "gemini": "Gemini",
+            "openai": "OpenAI", "local": "the local scanner"}.get(
+                p, p.title() or "The AI")
+
+
 @app.post("/api/enhance")
 async def enhance_only(
     file: UploadFile = File(...),
@@ -1428,13 +1442,20 @@ async def _run_enhance(
         )
         enhancer = ImageEnhancer()
 
+        # What the user has to hear about. The status message is overwritten
+        # by "ready" when the page lands, and the result view never showed it
+        # anyway, so a refused scan, a bad key or a missing upscaler used to
+        # be visible only in the server console — the page just looked done.
+        # These ride along as the task's "warning", shown beside the result.
+        notes = []
+
         def do_work():
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError(f"Cannot load image: {image_path}")
             tasks[task_id].update(
                 {"progress": 30,
-                 "message": f"Sending to {provider.title()} (this can take 30-60s)..."}
+                 "message": f"Sending to {_provider_name(provider)} (this can take 30-60s)..."}
             )
             ai_ok = False
             try:
@@ -1463,7 +1484,9 @@ async def _run_enhance(
                     nskip = getattr(enhancer, "last_skipped", 0)
                     done_msg = "AI enhancement complete!" if not nskip else (
                         f"AI scan done — {nskip} panel(s) refused by "
-                        f"{provider.title()} and left as drawn.")
+                        f"{_provider_name(provider)} and left as drawn.")
+                    if nskip:
+                        notes.append("⚠ " + done_msg)
                     tasks[task_id].update({"progress": 70, "message": done_msg})
                 else:
                     # Send the RAW page to the AI scanner — like pasting it into Grok.
@@ -1475,12 +1498,14 @@ async def _run_enhance(
                 from core.enhancer import is_moderation
                 reason = str(e).strip() or type(e).__name__
                 if is_moderation(reason):
-                    msg = (f"⚠ {provider.title()} refused this page (content "
+                    msg = (f"⚠ {_provider_name(provider)} refused this page (content "
                            f"moderation — bloody or violent panels usually trip "
                            f"it). Cleaned locally instead.")
                 else:
-                    msg = (f"AI failed ({type(e).__name__}); used local clean "
-                           f"scan")
+                    msg = (f"⚠ {_provider_name(provider)} scan failed — "
+                           f"{reason[:160]} — cleaned locally instead (not the "
+                           f"AI scan you asked for).")
+                notes.append(msg)
                 tasks[task_id].update({"progress": 70, "message": msg,
                                        "enhance_error": reason[:300]})
                 out = scan_cleanup(img)
@@ -1504,51 +1529,90 @@ async def _run_enhance(
                         out = protect_dark_panels(out, img)
                     except Exception as e:
                         print(f"[enhance] dark-panel guard skipped: {e}")
-            # One upscaler pass, to the larger of two goals:
-            #   - the HD toggle's 3600px, when it is on;
-            #   - BIG IN, BIG OUT: the provider tops out ~2.3K, so a big
-            #     source used to come back at a fraction of its own size —
-            #     a paid call that read as a downgrade. The scan is rebuilt
-            #     to the SOURCE's size with MangaJaNai (real detail, not
-            #     interpolation) unless the user picked Compress Output,
-            #     which is the explicit "small is fine".
-            target = 3600 if upscale else 0
-            src_long = int(max(img.shape[:2]))
-            if ai_ok and not compress and src_long > max(out.shape[:2]) + 64:
-                target = max(target, src_long)
-            if target > max(out.shape[:2]):
+            # BIG IN, BIG OUT. The provider answers at its own size — Gemini
+            # on ~1MP aspect buckets (832x1248 for a 1403x2048 page), Grok on
+            # a ~2K grid — so a one-pass AI scan is delivered at the SOURCE's
+            # exact geometry: the same page, the same size, the same shape as
+            # the rest of the chapter. Smaller comes back up with MangaJaNai
+            # (real detail, not interpolation), anything the provider sent
+            # oversized comes down. The HD toggle asks for 3600px instead, on
+            # the page's own aspect. Compress Output is the explicit "small is
+            # fine": the provider's size is kept and the file is a JPEG.
+            # Tile mode already merges at an exact multiple of the source.
+            # The local scan may crop a photo's background, so it only ever
+            # gets the upscale, never a stretch back to the upload's shape.
+            sh, sw = img.shape[:2]
+            src_long = int(max(sh, sw))
+            want = None
+            if ai_ok and provider != "local" and tiles < 2 and not compress:
+                k = max(1.0, 3600 / src_long) if upscale else 1.0
+                want = (int(round(sw * k)), int(round(sh * k)))
+                target = max(want)
+            else:
+                target = 3600 if upscale else 0
+                if ai_ok and not compress and src_long > max(out.shape[:2]) + 64:
+                    target = max(target, src_long)
+            if target > max(out.shape[:2]) + 64:
                 tasks[task_id].update({"progress": 85,
                                        "message": f"Rebuilding to {target}px "
                                                   "(MangaJaNai)..."})
+                upscaled, why = False, ""
                 try:
                     from core.upscale import Upscaler
                     up = Upscaler()
                     if up.ok:
                         out = up.upscale(out, target_long=target)
+                        upscaled = True
                         print(f"[enhance] rebuilt to "
                               f"{out.shape[1]}x{out.shape[0]} "
                               f"(source {img.shape[1]}x{img.shape[0]})")
                     else:
-                        print("[enhance] upscale wanted but no model "
-                              "installed — run ./setup_gpu.sh --mangajanai "
-                              "for big-in big-out")
+                        why = up.why
+                        print(f"[enhance] upscale wanted but unavailable: {why}")
                 except Exception as e:
+                    why = f"the upscale step failed ({e})"
                     print(f"[enhance] upscale step failed: {e}")
+                if not upscaled:
+                    if want and upscale:
+                        # No model means no HD: interpolating a 1K scan up
+                        # to 3600px only magnifies it. Deliver the page at
+                        # its own size instead, and say so.
+                        want = (sw, sh)
+                    notes.append(
+                        "⚠ No HD upscale: " + why + ". "
+                        + ("The scan was resized to the page's own size by "
+                           "plain interpolation instead." if want else
+                           "The HD upscale was skipped."))
+            if want and (out.shape[1], out.shape[0]) != want:
+                shrink = want[0] * want[1] < out.shape[0] * out.shape[1]
+                out = cv2.resize(out, want, interpolation=(
+                    cv2.INTER_AREA if shrink else cv2.INTER_CUBIC))
             cv2.imwrite(output_path, out)
+            return out.shape
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, do_work)
+        shape = await loop.run_in_executor(None, do_work)
+        # Compress Output: a ~2-4MB JPEG, as on every other workflow. The scan
+        # used to ignore it (it only switched big-in-big-out off) and always
+        # handed back a PNG.
+        if compress:
+            output_path = await loop.run_in_executor(
+                None, lambda: compress_output(output_path))
         if wm:
             _stamp_output(output_path, wm["watermark"], wm["wm_place"],
                           wm["wm_opacity"], wm["wm_size"], wm["credit"],
-                       wm.get("wm_style", "clean"))
+                          wm.get("wm_style", "clean"))
 
         tasks[task_id].update(
             {
                 "status": "done",
                 "step": 2,
                 "progress": 100,
-                "message": "Manga scan ready!",
+                "message": (f"Manga scan ready! ({shape[1]}×{shape[0]})"
+                            if not notes else
+                            f"Manga scan ready ({shape[1]}×{shape[0]}) — "
+                            f"with warnings"),
+                "warning": "\n".join(notes),
                 "result": {"output_path": output_path, "translations": {}},
                 "output_url": f"/api/result/{task_id}",
                 "original_url": f"/api/original/{task_id}",

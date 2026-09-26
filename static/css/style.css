@@ -332,6 +332,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .pg-dot.processing{background:var(--warn);animation:pulse 1s infinite}
 .pg-dot.done{background:var(--success)}
 .pg-dot.error{background:var(--danger)}
+.pg-dot.done.warn{background:var(--warn)}
 .pg-tools{position:absolute;bottom:0;left:0;right:0;display:flex;background:rgba(0,0,0,.72);opacity:0;transition:opacity .16s}
 .pg-chip:hover .pg-tools{opacity:1}
 .pg-tools button{flex:1;background:transparent;border:none;color:#fff;cursor:pointer;font-size:.82rem;padding:.22rem 0}
@@ -470,6 +471,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .tl-translation{font-size:.95rem;font-weight:600}
 
 /* ── Result tabs (underline style) ── */
+.result-note{font-size:.82rem;color:var(--warn);margin:0 0 .7rem;white-space:pre-line}
 .result-tabs{display:flex;gap:.25rem;margin-bottom:1.1rem;border-bottom:1px solid var(--border)}
 .tab{padding:.6rem .9rem;font-size:.83rem;font-weight:600;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim);cursor:pointer;transition:.16s;margin-bottom:-1px}
 .tab:hover{color:var(--text)}

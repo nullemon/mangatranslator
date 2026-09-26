@@ -28,6 +28,11 @@ import cv2
 import numpy as np
 
 _CACHE = {}        # weights path -> (descriptor, device)
+#: Why the last load failed, in words a user can act on ("" when it worked).
+#: Every caller used to say "no model installed — run setup_gpu.sh" whatever
+#: the cause, which is the wrong advice when spandrel is missing or the
+#: automatic download could not get through.
+LAST_ERROR = ""
 
 REALESRGAN_PATH = "models/RealESRGAN_x4plus_anime_6B.pth"
 REALESRGAN_URLS = [
@@ -44,8 +49,12 @@ def _device() -> str:
 
 
 def _download_realesrgan(dest: str) -> bool:
+    global LAST_ERROR
     import httpx
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    LAST_ERROR = ("the Real-ESRGAN weights could not be downloaded (no "
+                  "internet?) and no MangaJaNai model is installed — run "
+                  "./setup_gpu.sh --mangajanai")
     for url in REALESRGAN_URLS:
         try:
             print(f"[upscale] downloading Real-ESRGAN weights (~18MB): {url}")
@@ -97,26 +106,37 @@ def _pick_path(height: int):
 
 def _get(path: str):
     """Load + cache the model at `path`. Real-ESRGAN auto-downloads."""
+    global LAST_ERROR
     if path in _CACHE:
         return _CACHE[path]
     try:
         import torch
         from spandrel import ModelLoader
+    except ImportError as e:
+        LAST_ERROR = (f"the upscaler needs torch and spandrel ({e}) — "
+                      f"pip install spandrel")
+        print(f"[upscale] {LAST_ERROR}")
+        return None
+    try:
         if os.path.abspath(path) == os.path.abspath(REALESRGAN_PATH) and not os.path.exists(path):
             if not _download_realesrgan(path):
                 return None
         if not os.path.exists(path):
             print(f"[upscale] model file not found: {path}")
+            if not LAST_ERROR:
+                LAST_ERROR = f"the upscale model file {path} was not found"
             return None
         desc = ModelLoader().load_from_file(path)
         device = _device()
         desc = desc.to(device).eval()
         _CACHE[path] = (desc, device)
+        LAST_ERROR = ""
         print(f"[upscale] loaded {os.path.basename(path)} "
               f"(x{desc.scale}, {desc.input_channels}ch, {device})")
         return _CACHE[path]
     except Exception as e:
         print(f"[upscale] could not load {os.path.basename(path)} ({e})")
+        LAST_ERROR = f"the upscale model {os.path.basename(path)} would not load ({e})"
         return None
 
 
@@ -135,6 +155,11 @@ def _get_best(height: int):
 class Upscaler:
     """Lazy SR wrapper. Tiled inference so a full page fits in VRAM. Picks the
     best installed backend per page; grayscale-aware for MangaJaNai."""
+
+    @property
+    def why(self) -> str:
+        """Why no model is available, for the message the user sees."""
+        return LAST_ERROR or "no upscale model is installed — run ./setup_gpu.sh --mangajanai"
 
     @property
     def ok(self) -> bool:
