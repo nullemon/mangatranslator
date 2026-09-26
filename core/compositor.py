@@ -629,6 +629,30 @@ class Compositor:
                 wbox = it.get("bbox")
                 if wbox:
                     wx, wy, ww, wh = self._clamp_rect([int(v) for v in wbox], w, h)
+                    # "Empty" on a BALLOON: blank the balloon the way a
+                    # translated balloon is blanked — a flat wipe of its
+                    # interior in its own paper tone. Running the free-text
+                    # heal inside the text box instead left the balloon
+                    # darker than before (the heal smeared the outline and
+                    # neighbouring strokes into the paper).
+                    bmask = masks.get(it["id"])
+                    if bmask is None:
+                        bmask = masks.get(str(it["id"]))
+                    if bmask is None and ww >= 6 and wh >= 6:
+                        rec = self._resolve_bubble(gray, (wx, wy, ww, wh), page_area)
+                        if rec is not None:
+                            rmask, rbb, _rd = rec
+                            enclosed = cv2.countNonZero(rmask[wy:wy + wh, wx:wx + ww]) / float(max(ww * wh, 1))
+                            if rbb[2] * rbb[3] <= 9.0 * ww * wh and enclosed >= 0.85:
+                                bmask = rmask
+                    if bmask is not None and self._is_real_balloon(gray, bmask, True):
+                        interior = cv2.erode(bmask, np.ones((5, 5), np.uint8)) > 0
+                        bdark = bool(interior.any() and float(np.median(gray[interior])) < 110)
+                        self._wipe(result, bmask, bdark)
+                        self._clear_residual_strokes(result, (wx, wy, ww, wh), bdark, bmask)
+                        edited_rects.append(tuple(int(v) for v in cv2.boundingRect(bmask)))
+                        it["placed"] = True
+                        continue
                     if ww >= 6 and wh >= 6:
                         cap, bb = self._plan_free_region(gray, wx, wy, ww, wh, refine=True)
                         rect, dark, touched = self._apply_free_region(result, gray, cap, bb, contain=True)
