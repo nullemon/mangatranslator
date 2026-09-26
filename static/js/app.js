@@ -381,7 +381,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const isLocalClean = wf => wf === "local-clean";
   const isCutPages = wf => wf === "cut-pages";
   const isRotatePages = wf => wf === "rotate-pages";
-  const needsTranslate = wf => wf !== "local-clean" && wf !== "cut-pages" && wf !== "rotate-pages" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only";
+  const needsTranslate = wf => wf !== "local-clean" && wf !== "cut-pages" && wf !== "rotate-pages" && wf !== "raw-scan" && wf !== "upscale-only" && wf !== "scan-upscale" && wf !== "clean" && wf !== "scan-raw" && wf !== "watermark-only" && wf !== "endcard";
   const isUpscaleOnly = wf => wf === "upscale-only";
   // Both go to /api/rawify; "watermark-only" just passes style "none", so the
   // page comes back stamped and otherwise untouched.
@@ -1214,7 +1214,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const chapter = (chapterName && chapterName.value.trim()) || "webtoon";
       const file = new File([blob], `${chapter}.png`, { type: "image/png" });
 
-      pages.forEach(p => { try { URL.revokeObjectURL(p.thumb); } catch (_) {} });
+      // End pages are made, not uploaded — they are not slices of the strip
+      // and would be lost with them.
+      const ends = pages.filter(p => p.isEndCard);
+      pages.forEach(p => { if (!p.isEndCard) { try { URL.revokeObjectURL(p.thumb); } catch (_) {} } });
       pages.length = 0;
       pages.push({
         uid: ++uidCounter, file, name: file.name, size: blob.size,
@@ -1225,6 +1228,7 @@ document.addEventListener("DOMContentLoaded", () => {
         colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
         cutRegions: [],
       });
+      pages.push(...ends);
       activeUid = pages[0].uid;
       console.log(`[webtoon] merged ${info.slices} slice(s) -> ${info.width}x${info.height}`);
       return true;
@@ -2364,6 +2368,7 @@ document.addEventListener("DOMContentLoaded", () => {
                      : wf === "scan-upscale" ? "Scan + HD"
                      : wf === "raw-scan" ? "Manga Scan"
                      : wf === "scan-raw" ? "Raw feel"
+                     : wf === "endcard" ? "End page"
                      : "Translated";
     const tabLabel = (wf === "local-clean" || wf === "clean") ? "Clean"
                    : wf === "cut-pages" ? "Cut"
@@ -2372,6 +2377,7 @@ document.addEventListener("DOMContentLoaded", () => {
                    : wf === "raw-scan" ? "Scan"
                    : (wf === "upscale-only" || wf === "scan-upscale") ? "HD"
                    : wf === "scan-raw" ? "Raw"
+                   : wf === "endcard" ? "End page"
                    : "Translated";
 
     if (p.status === "done") {
@@ -2404,7 +2410,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const compare = document.querySelector('.tab[data-tab="compare"]');
         if (compare) compare.click();
       }
-      translateScanBtn.style.display = noTranslate ? "" : "none";
+      // Not on an end page: it has nothing to translate, and the button
+      // used to send it off to be translated like a scan.
+      translateScanBtn.style.display = (noTranslate && wf !== "endcard") ? "" : "none";
       buildTranslationsList(p);
       // Rebuild the on-image edit overlay for THIS page. Without it, switching
       // pages left the previous page's draggable text boxes sitting over the
@@ -5279,9 +5287,17 @@ document.addEventListener("DOMContentLoaded", () => {
         step: 2, message: "End page ready!", result: { items: [] }, items: [],
         excluded: new Set(), erased: new Set(), glows: new Set(),
         offsets: {}, colors: {}, fontScales: {}, boxes: {}, error: "", rev: 0,
-        isEndCard: true,
+        isEndCard: true, workflow: "endcard",
       };
       pages.push(page);                 // last page of the chapter
+      // Pages picked but not run yet: stay on the upload screen, where the
+      // run button is. Jumping to the workspace hid it, and the chapter
+      // could then only be started one page at a time.
+      if (resultSection.style.display === "none"
+          && pages.some(p => p.status === "pending")) {
+        showUploadPreview();
+        return;
+      }
       activeUid = page.uid;
       showSection("result");
       renderStrip(); updateBatch(); renderActivePage();
@@ -5293,9 +5309,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Natural pixel size of a page's image (uploaded file or processed result).
-  function pageDimensions(page) {
+  async function pageDimensions(page) {
+    if (!page) return null;
+    // A page not run yet: measure the FILE. Its thumb is a stand-in shrunk
+    // to 1100px, so an end page made before the run came out at 754x1100
+    // beside 1403x2048 pages.
+    if (!(page.status === "done" && page.taskId) && page.file) {
+      try {
+        const bmp = await createImageBitmap(page.file);
+        const d = { w: bmp.width, h: bmp.height };
+        bmp.close && bmp.close();
+        return d;
+      } catch (_) { /* fall through to the image */ }
+    }
     return new Promise(resolve => {
-      if (!page) return resolve(null);
       const src = (page.status === "done" && page.taskId)
         ? `/api/result/${page.taskId}?t=${page.rev}` : page.thumb;
       if (!src) return resolve(null);
