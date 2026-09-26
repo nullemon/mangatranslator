@@ -751,7 +751,7 @@ class Compositor:
                         color = (255, 255, 255) if dark else (0, 0, 0)
                         placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
                                            color, False, 0, self._item_scale(it),
-                                           False, False, None, ""))
+                                           False, False, None, "", {"keep_case": True}))
                         it["placed"] = True
                 continue
 
@@ -809,7 +809,7 @@ class Compositor:
                             placements.append(((wx_, wy_, ww_, whh_),
                                                " ".join(self.watermark_text.split()),
                                                self._pick_color(dark, it), False, 0, 1.0,
-                                               True, False, None, ""))
+                                               True, False, None, "", {"keep_case": True}))
                             used_boxes.append((int(wx_), int(wy_), int(ww_), int(whh_)))
                         it["placed"] = True
                 continue
@@ -1249,7 +1249,9 @@ class Compositor:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
             for rect, text, color, ital, rot, fscale, glow, fit, shp, ft, mx in placements:
                 self.renderer._shape_mask = shp
-                self.renderer._max_font = int(mx or 0)
+                opts = mx if isinstance(mx, dict) else {"max": mx}
+                self.renderer._max_font = int(opts.get("max") or 0)
+                self.renderer._keep_case = bool(opts.get("keep_case"))
                 # Swap the face for this line only, then put it back — the
                 # renderer caches by path, so switching costs nothing.
                 was = self.renderer.font_path
@@ -1262,6 +1264,7 @@ class Compositor:
                 finally:
                     self.renderer._shape_mask = None
                     self.renderer._max_font = 0
+                    self.renderer._keep_case = False
                     self.renderer.font_path = was
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 

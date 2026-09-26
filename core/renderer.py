@@ -321,7 +321,9 @@ class TextRenderer:
         if glow:
             return self._draw_with_glow(image, rect, text, color, italic,
                                         rotation, scale, fit_box)
-        if self.uppercase:
+        # Lettering case is for DIALOGUE. A credit ("Translations by
+        # wonpe4ce") or the user's own watermark is set exactly as typed.
+        if self.uppercase and not getattr(self, "_keep_case", False):
             text = text.upper()
         text = self._normalize_text(text)
         # Use a font that can actually render every glyph in this text (so ♪, ―
