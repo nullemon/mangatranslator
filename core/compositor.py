@@ -1739,7 +1739,28 @@ class Compositor:
             cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1)))
         ink = cv2.bitwise_and(ink, box)   # dilation must not spill past the box
         cover = cv2.countNonZero(ink) / float(bw * bh)
-        if cover < 0.004 or cover > 0.55:
+        if cover > 0.55:
+            # Deviation saturated: a box holding paper, a black shape and
+            # hatching "deviates" almost everywhere (measured 98% on an SFX
+            # beside a character's hair), and healing the whole box repainted
+            # the hair as a black blob. Fall back to what is actually
+            # lettering-shaped: the text model's strokes plus the thin dark
+            # strokes found above — never the whole box, unless even that
+            # covers most of it (then it really is a solid fill).
+            thin = np.zeros_like(gwin)
+            if dark.any():
+                thin = (keep[lab_] * 255).astype(np.uint8)
+            if seg_roi is not None and cv2.countNonZero(seg_roi) >= 40:
+                seg_full = np.zeros_like(gwin)
+                seg_full[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = seg_roi
+                thin = cv2.bitwise_or(thin, seg_full)
+            thin = cv2.bitwise_and(cv2.dilate(thin, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))), box)
+            cover = cv2.countNonZero(thin) / float(bw * bh)
+            if 0.004 <= cover <= 0.55:
+                return thin[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0].copy()
+            return None
+        if cover < 0.004:
             return None
         return ink[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0].copy()
 
