@@ -48,6 +48,10 @@ class TextRenderer:
         self._reshape_text = False             # True when we pre-shape (no raqm)
         self._mix = False                      # True = per-glyph font fallback (LTR)
         self._size_scale = 1.0                 # per-region font-size multiplier
+        # Per-line size ceiling (px, 0 = none), set by the compositor from the
+        # measured size of the Japanese lettering this line replaces.
+        self._max_font = 0
+        self._cap_ratios = {}
         # "Fit box": allow splitting a word that is too long for the column, so
         # one unbreakable token stops capping the whole block's size.
         self._break_words = False
@@ -485,6 +489,8 @@ class TextRenderer:
             """Largest size that fits the words in exactly n lines."""
             best, lo, hi = None, self.min_font_size, min(400, max(
                 self.min_font_size, rect_h))
+            if self._max_font:
+                hi = max(self.min_font_size, min(hi, int(self._max_font)))
             while lo <= hi:
                 mid = (lo + hi) // 2
                 g = self._fit_lines(draw, words, spans, mid, rect_h, n,
@@ -772,6 +778,25 @@ class TextRenderer:
         )
         image.paste(sheared, (int(ax), int(ay)), sheared)
 
+    def cap_ratio(self, path: str = "") -> float:
+        """Cap height / font size of a face (H measured at 100 px). Sizes are
+        matched to the ORIGINAL lettering by letter height, and faces differ:
+        a condensed display face has much taller caps per point than a comic
+        face does."""
+        path = path or self.font_path or ""
+        r = self._cap_ratios.get(path)
+        if r is None:
+            r = 0.7
+            try:
+                f = ImageFont.truetype(path, 100) if path else self._get_font(100)
+                bb = f.getbbox("H")
+                if bb and bb[3] > bb[1]:
+                    r = float(min(1.0, max(0.4, (bb[3] - bb[1]) / 100.0)))
+            except Exception:
+                pass
+            self._cap_ratios[path] = r
+        return r
+
     def _optimal_size(
         self, text: str, max_w: int, max_h: int, draw: ImageDraw.ImageDraw
     ) -> int:
@@ -779,6 +804,8 @@ class TextRenderer:
         # large (the old 150 cap made titles & one-word lines look tiny). The
         # binary search below still guarantees it fits the width and height.
         upper = min(max_w, max_h, 400)
+        if self._max_font:
+            upper = min(upper, int(self._max_font))
         upper = max(upper, self.min_font_size)
 
         best = self.min_font_size

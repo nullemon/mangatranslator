@@ -285,6 +285,40 @@ class Compositor:
         out[fill] = paper
         return out, fill
 
+    # English letter height relative to the Japanese glyph it replaces, as
+    # CEILINGS. Measured on TCB's release of One Piece 1194 (44 regions):
+    # dialogue 0.75 (IQR 0.70-0.80), shout 0.79, attack name 0.84, thought
+    # 0.59, text lettered on art 0.59. The ceilings sit a little above the
+    # upper quartile, so they only trim outliers — a two-word shout that the
+    # layout would otherwise blow up to fill a big balloon (measured 2-3x
+    # TCB) — and never shrink ordinary lines.
+    _SIZE_CEIL = {"thought": 0.72, "shout": 1.0, "title": 1.0, "sfx": 1.0}
+    _SIZE_CEIL_DEFAULT = 0.88
+    _SIZE_CEIL_ON_ART = 0.72
+
+    def _size_cap(self, it, text, font_path=""):
+        """Largest font size (px) for this line, from the measured size of the
+        Japanese lettering it replaces; 0 when that wasn't measurable."""
+        gp = float(it.get("_glyph_px") or 0.0)
+        if gp < 8.0:
+            return 0
+        role = lettering.normalise(it.get("tone", "")) or lettering.infer_tone(
+            text, it.get("type", ""), bool(it.get("dark")))
+        k = self._SIZE_CEIL.get(role, self._SIZE_CEIL_DEFAULT)
+        if it.get("in_bubble") is False and role not in ("shout", "title", "sfx"):
+            k = min(k, self._SIZE_CEIL_ON_ART)
+        cap = k * gp / self.renderer.cap_ratio(font_path or self.renderer.font_path)
+        return int(max(self.renderer.min_font_size, round(cap)))
+
+    @staticmethod
+    def _iou(a, b):
+        ax, ay, aw, ah = a; bx_, by_, bw_, bh_ = b
+        ix = max(0, min(ax + aw, bx_ + bw_) - max(ax, bx_))
+        iy = max(0, min(ay + ah, by_ + bh_) - max(ay, by_))
+        inter = ix * iy
+        union = aw * ah + bw_ * bh_ - inter
+        return inter / float(union) if union > 0 else 0.0
+
     @staticmethod
     def _glyph_px(gray, seg, bbox):
         """Typical glyph size (px) of the original lettering in `bbox`: the
@@ -582,6 +616,11 @@ class Compositor:
                         it["orig_rel"] = sizes[id(it)] / med
 
         placements = []     # (rect, text, color)
+        # Balloons already lettered this page: (bbox, placement index, x of
+        # the text block that claimed it). A second block of text in the SAME
+        # balloon (two columns — "ブハァ!!" beside "ゲホ!!") joins that
+        # balloon's lettering instead of being dropped as a collision.
+        balloon_owner = []
         used_boxes = []
 
         def offset_rect(item, rect):
@@ -914,7 +953,8 @@ class Compositor:
                          or (cap is not None and cap[4]))
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
                                self._item_scale(it) * role_scale, fglow,
-                               bool(it.get("fit_box")), None, role_font))
+                               bool(it.get("fit_box")), None, role_font,
+                               self._size_cap(it, text, role_font)))
                 it["placed"] = True
                 continue
 
@@ -993,6 +1033,20 @@ class Compositor:
             if mask is not None:
                 bb = cv2.boundingRect(mask)
                 if any(self._overlaps(bb, ub) for ub in used_boxes):
+                    # The same balloon as an earlier line? Then this is a
+                    # second block of text inside it: merge, in reading order
+                    # (manga columns run right to left). Dropping it lost the
+                    # line outright — TCB letters both.
+                    own = next((o for o in balloon_owner
+                                if self._iou(bb, o[0]) >= 0.6), None)
+                    if own is not None:
+                        self._clear_residual_strokes(result, (bx, by, bw, bh), dark, mask)
+                        k = own[1]
+                        pl = list(placements[k])
+                        mine_first = (bx + bw / 2.0) > own[2]
+                        pl[1] = (text + "\n" + pl[1]) if mine_first else (pl[1] + "\n" + text)
+                        placements[k] = tuple(pl)
+                        it["placed"] = True
                     continue
                 used_boxes.append(bb)
                 self._wipe(result, mask, dark)
@@ -1059,22 +1113,30 @@ class Compositor:
                                self._item_scale(it) * role_scale,
                                fglow or self._item_glow(it),
                                bool(it.get("fit_box")), it.get("_shape"),
-                               role_font))
+                               role_font, self._size_cap(it, text, role_font)))
+            if mask is not None:
+                balloon_owner.append((tuple(int(v) for v in bb), len(placements) - 1,
+                                      bx + bw / 2.0))
             it["placed"] = True
 
         # Placement rects must stay on the page — a dragged offset or a loose
         # AI box can push one past the edge, which is how text ended up out of
         # bounds. Clamp every rect to the page before anything is drawn.
+        # Size ceiling: an 11th field on balloon / free-text lines; every other
+        # kind of placement (a box the user drew or resized, titles, credits,
+        # watermarks) has none.
+        placements = [p if len(p) == 11 else tuple(p) + (0,) for p in placements]
         placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft)
-            for r, t, c, i, ro, fs, gl, fb, sh, ft in placements
+            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft, mx)
+            for r, t, c, i, ro, fs, gl, fb, sh, ft, mx in placements
         ]
         placements = [p for p in placements if p[0] is not None]
 
         if placements:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale, glow, fit, shp, ft in placements:
+            for rect, text, color, ital, rot, fscale, glow, fit, shp, ft, mx in placements:
                 self.renderer._shape_mask = shp
+                self.renderer._max_font = int(mx or 0)
                 # Swap the face for this line only, then put it back — the
                 # renderer caches by path, so switching costs nothing.
                 was = self.renderer.font_path
@@ -1086,6 +1148,7 @@ class Compositor:
                                                glow=glow, fit_box=fit)
                 finally:
                     self.renderer._shape_mask = None
+                    self.renderer._max_font = 0
                     self.renderer.font_path = was
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
@@ -1094,7 +1157,7 @@ class Compositor:
         # no "fixing" the art or background. Text placements are included so a
         # dragged/offset line that sits outside its cover box is still kept.
         placement_rects = []
-        for rect, text, color, ital, rot, fscale, glow, fit, shp, ft in placements:
+        for rect, text, color, ital, rot, fscale, glow, fit, shp, ft, _mx in placements:
             placement_rects.append(self._rotated_aabb(rect, rot))
 
         edited = np.zeros((h, w), np.uint8)
@@ -2501,6 +2564,16 @@ class Compositor:
         if gp >= 8.0:
             char_px = gp
         char_px = float(min(max(char_px, 14.0), 110.0))
+        # How big the English should be, as a font size. With the Japanese
+        # glyphs MEASURED, match TCB's release: English letter height 0.6x the
+        # Japanese glyph for text lettered on art (median 0.59 over their
+        # chapter 1194), converted through this face's own cap height. The
+        # old 0.70x-as-point-size came out at ~0.49x letter height — the
+        # "text on art is too small" measured against TCB at ~0.65x of theirs.
+        if gp >= 8.0:
+            size_k = 0.60 / self.renderer.cap_ratio(self.renderer.font_path)
+        else:
+            size_k = 0.70
         em = self._em_ratio()
         # Pros conserve the source block's FOOTPRINT: cap the target so the
         # English occupies at most ~1.5x the source lettering's area. A
@@ -2508,7 +2581,7 @@ class Compositor:
         # full sentence must not become a five-line 76px paragraph.
         n_en = max(len(t), 1)
         f_area = ((1.5 * max(sw, 1) * max(sh, 1)) / (em * 1.22 * n_en)) ** 0.5
-        target = min(0.70 * char_px, f_area)
+        target = min(size_k * char_px, f_area)
         if target < 11:
             return orig
         cur = self._est_fit(t, rw, rh)
