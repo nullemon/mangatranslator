@@ -347,4 +347,24 @@ with Session() as s:
         check_page("scan+translate base", enh, src)
         c.ok(stub_log()[-1]["api"] == "xai", "the scan half went to Grok")
 
+        # a font added while a translated page is open reaches its per-line pickers
+        n_lines = p.evaluate("document.querySelectorAll('#translationsList select.tl-font').length")
+        if n_lines:
+            import shutil
+            import tempfile
+            from _harness import ROOT
+            tmp = tempfile.mkdtemp()
+            face = os.path.join(tmp, "zz-qa-perline-face.ttf")
+            shutil.copyfile(os.path.join(ROOT, "fonts", "Bangers-Regular.ttf"), face)
+            p.set_input_files("#fontUpload", [face])
+            p.wait_for_function("() => [...document.querySelectorAll('#fontSelect option')].some(o => o.value === 'zz-qa-perline-face.ttf')",
+                                timeout=30000)
+            p.wait_for_timeout(300)
+            has = p.evaluate("""() => [...document.querySelectorAll('#translationsList select.tl-font')]
+                .every(sel => [...sel.options].some(o => o.value === 'zz-qa-perline-face.ttf'))""")
+            c.ok(has, f"the new font is offered in all {n_lines} per-line pickers")
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            c.ok(False, "the stub translation produced lines to test the per-line font picker on")
+
 c.finish(s)
