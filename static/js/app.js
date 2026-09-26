@@ -244,8 +244,49 @@ document.addEventListener("DOMContentLoaded", () => {
       .filter(k => k.startsWith("manga_")
         && !k.startsWith("manga_key_") && !k.startsWith("manga_enh_key_"))
       .forEach(k => localStorage.removeItem(k));
-    location.reload();
+    // In place, not location.reload(): the reload also threw away every
+    // page of the session — a translated chapter, paid for, gone with no
+    // warning because a setting was reset.
+    resetControls();
   });
+
+  // Every setting back to its default, through the control's own handlers,
+  // so what depends on it (panels, labels, the watermark preview) follows
+  // and the default is what gets saved. API keys are kept.
+  function resetControls() {
+    const own = new Set(["apiKey", "enhanceKey", "engine", "model",
+      "enhanceProvider", "enhanceModel", "enhancePrompt", "fontSelect"]);
+    const scopes = ["settingsBar", "enhancePanel", "workflowPicker"]
+      .map(id => document.getElementById(id)).filter(Boolean);
+    const els = scopes.flatMap(sc => [...sc.querySelectorAll("input, select, textarea")])
+      .concat(["chapterName", "fontScale"].map(id => document.getElementById(id)));
+    for (const el of els) {
+      if (!el || !el.id || own.has(el.id) || el.type === "file" || el.type === "radio") continue;
+      if (el.type === "checkbox") {
+        el.checked = el.defaultChecked;
+      } else if (el.tagName === "SELECT") {
+        const d = [...el.options].find(o => o.defaultSelected) || el.options[0];
+        if (d) el.value = d.value;
+      } else {
+        el.value = el.defaultValue;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    // The ones whose default lives in the code, not the markup.
+    fontSelect.value = "";
+    fontSelect.dispatchEvent(new Event("change"));
+    buildFontPicker();
+    setEngine("gemini");
+    enhanceProvider.value = "gemini";
+    enhanceProvider.dispatchEvent(new Event("change"));
+    if (enhanceDefaultPrompt) {
+      enhancePrompt.value = enhanceDefaultPrompt;
+      enhancePrompt.dispatchEvent(new Event("change"));
+    }
+    setWorkflow("scan-translate");
+    applyTheme("dark");
+  }
 
   fontScale.value = localStorage.getItem("manga_font_scale") || fontScale.value;
   fontScaleVal.textContent = parseFloat(fontScale.value).toFixed(1) + "x";
@@ -618,13 +659,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ══ ENHANCEMENT SETTINGS ══ */
   function enhKeyName() { return "manga_enh_key_" + enhanceProvider.value; }
+  // The server's default scan prompt, kept for Reset defaults.
+  let enhanceDefaultPrompt = "";
   async function initEnhance() {
     let defaultPrompt = "Restore this into a clean TCB-style black-and-white manga scan: pure white paper, solid black ink, sharp crisp lines, flattened and straightened, no creases or shadows. Keep all artwork, screentones and Japanese text exactly as drawn.";
+    enhanceDefaultPrompt = defaultPrompt;
     try {
       const res = await fetch("/api/enhance-prompt");
       if (res.ok) {
         const data = await res.json();
-        if (data.prompt) defaultPrompt = data.prompt;
+        if (data.prompt) defaultPrompt = enhanceDefaultPrompt = data.prompt;
         if (data.models) Object.assign(ENHANCE_MODELS, data.models);
       }
     } catch (_) {}
@@ -4683,8 +4727,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function refreshWmPreview() {
     if (!wmPreview) return;
     const txt = (watermarkInput && watermarkInput.value.trim()) || "";
-    if (!txt) { wmPreview.style.display = "none"; return; }
+    // Cancel a preview still pending BEFORE bailing out: clearing the mark
+    // within 350ms of typing it (or Reset defaults) let the old timer fire
+    // and bring the preview of the deleted mark back.
     clearTimeout(_wmPrevTimer);
+    if (!txt) { wmPreview.style.display = "none"; return; }
     _wmPrevTimer = setTimeout(() => {
       const q = new URLSearchParams({
         text: txt,
