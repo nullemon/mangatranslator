@@ -4564,7 +4564,13 @@ document.addEventListener("DOMContentLoaded", () => {
       slider.style.left = pct + "%";
     }
     if (!compBound) {
-      const onStart = e => { dragging = true; setPosition(e.touches ? e.touches[0].clientX : e.clientX); };
+      const onStart = e => {
+        // A mouse press on either picture otherwise starts the browser's
+        // own image drag-and-drop: the split followed the pointer for one
+        // step and then froze until the button was let go.
+        if (!e.touches) e.preventDefault();
+        dragging = true; setPosition(e.touches ? e.touches[0].clientX : e.clientX);
+      };
       const onMove  = e => { if (!dragging) return; e.preventDefault(); setPosition(e.touches ? e.touches[0].clientX : e.clientX); };
       const onEnd   = () => { dragging = false; };
       container.addEventListener("mousedown", onStart);
