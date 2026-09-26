@@ -2201,11 +2201,13 @@ async def _run_upscale(task_id: str, image_path: str, output_path: str,
                 raise ValueError(f"Cannot load image: {image_path}")
             up = Upscaler()
             if not up.ok:
-                raise RuntimeError("No upscale model installed — run "
-                                   "./setup_gpu.sh --mangajanai")
+                raise RuntimeError("Can't upscale: " + up.why)
             tasks[task_id].update({"progress": 35,
                                    "message": "Upscaling to HD (faithful, keeps art)..."})
-            out = up.upscale(img, target_long=3600)
+            # HD means at least 3600px — and never SMALLER than the page
+            # came in: a 5000px scan used to be run through the 4x model and
+            # then shrunk to 3600px, a downgrade labelled "HD upscale ready".
+            out = up.upscale(img, target_long=max(3600, int(max(img.shape[:2]))))
             cv2.imwrite(output_path, out)
             return out.shape
 

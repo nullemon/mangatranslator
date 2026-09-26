@@ -190,12 +190,23 @@ class Upscaler:
               + ("  ⚠ CPU: this is SLOW, consider turning HD Upscale off"
                  if device == "cpu" else ""))
 
+        # The final size is known up front: the long edge at `target_long`,
+        # never past the model's native scale. Each tile is brought to that
+        # size as it comes out of the model, so memory follows the FINISHED
+        # page. The whole x4 page used to be assembled first as float32 and
+        # shrunk at the end — 2.2GB for a 4000x2800 scan (4.6GB for a
+        # 4000x6000 one) held at once for a result a fraction of that size,
+        # which is what took a big page down with it.
+        fin = min(float(scale), float(target_long) / float(max(h, w)))
+        fin = max(fin, 1e-3)
+        H, W = max(1, int(round(h * fin))), max(1, int(round(w * fin)))
         if gray_model:
             src = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-            out = np.zeros((h * scale, w * scale), np.float32)
+            out = np.zeros((H, W), np.uint8)
         else:
             src = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-            out = np.zeros((h * scale, w * scale, 3), np.float32)
+            out = np.zeros((H, W, 3), np.uint8)
+        R = lambda v: int(round(v * fin))     # source px -> final px
 
         done = 0
         with torch.inference_mode():
@@ -215,10 +226,22 @@ class Upscaler:
                         else:
                             t = torch.from_numpy(patch.transpose(2, 0, 1))[None].to(device)
                             sr = desc(t)[0].clamp_(0, 1).cpu().numpy().transpose(1, 2, 0)
-                    cy0, cx0 = (y0 - ey0) * scale, (x0 - ex0) * scale
-                    out[y0 * scale:y1 * scale, x0 * scale:x1 * scale] = sr[
-                        cy0:cy0 + (y1 - y0) * scale, cx0:cx0 + (x1 - x0) * scale
-                    ]
+                    sr = (sr * 255.0 + 0.5).astype(np.uint8)
+                    if fin != scale:
+                        # Resize the EXPANDED tile, then crop: the pixels on
+                        # a tile's edge are computed with the overlap round
+                        # them, so no seam shows at the tile grid.
+                        sr = cv2.resize(sr, (max(1, R(ex1) - R(ex0)),
+                                             max(1, R(ey1) - R(ey0))),
+                                        interpolation=cv2.INTER_AREA
+                                        if fin < scale else cv2.INTER_CUBIC)
+                        cy0, cx0 = R(y0) - R(ey0), R(x0) - R(ex0)
+                    else:
+                        cy0, cx0 = (y0 - ey0) * scale, (x0 - ex0) * scale
+                    ty, tx = R(y1) - R(y0), R(x1) - R(x0)
+                    piece = sr[cy0:cy0 + ty, cx0:cx0 + tx]
+                    out[R(y0):R(y0) + piece.shape[0],
+                        R(x0):R(x0) + piece.shape[1]] = piece
                     done += 1
                 rate = done / max(time.time() - t_start, 1e-3)
                 eta = (n_tiles - done) / max(rate, 1e-3)
@@ -226,14 +249,5 @@ class Upscaler:
                       f"~{eta:4.0f}s left", flush=True)
 
         print(f"[upscale] done in {time.time() - t_start:.0f}s")
-        out = (out * 255.0 + 0.5).astype(np.uint8)
         out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR if gray_model else cv2.COLOR_RGB2BGR)
-
-        long_edge = max(out.shape[:2])
-        target = min(target_long, long_edge)
-        if long_edge > target:
-            s = target / long_edge
-            out = cv2.resize(out, (max(1, round(out.shape[1] * s)),
-                                   max(1, round(out.shape[0] * s))),
-                             interpolation=cv2.INTER_AREA)
         return out
