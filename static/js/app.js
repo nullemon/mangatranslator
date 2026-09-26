@@ -346,6 +346,17 @@ document.addEventListener("DOMContentLoaded", () => {
   // page comes back stamped and otherwise untouched.
   const isRawify = wf => wf === "scan-raw" || wf === "watermark-only";
   const isStampOnly = wf => wf === "watermark-only";
+  // Rotate only: which way. The one workflow setting that was not saved, so
+  // a reload quietly went back to "90° right" — and a chapter that needed
+  // turning left came out turned right.
+  const rotateTurn = document.getElementById("rotateTurn");
+  if (rotateTurn) {
+    const savedTurn = localStorage.getItem("manga_rotate_turn");
+    if (savedTurn && [...rotateTurn.options].some(o => o.value === savedTurn))
+      rotateTurn.value = savedTurn;
+    rotateTurn.addEventListener("change", () =>
+      localStorage.setItem("manga_rotate_turn", rotateTurn.value));
+  }
   const rawStyle = document.getElementById("rawStyle");
   if (rawStyle) {
     rawStyle.value = localStorage.getItem("manga_raw_style") || "photo";
