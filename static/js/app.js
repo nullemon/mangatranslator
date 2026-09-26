@@ -1258,12 +1258,16 @@ document.addEventListener("DOMContentLoaded", () => {
       blob = await transformImage(p.file, kind);
     }
     const name = p.name || "page.png";
-    p.file = new File([blob], name, { type: "image/png" });
-    p.size = blob.size;
-    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    swapFile(p, new File([blob], name, { type: "image/png" }));
     // Small stand-in again — turning a whole chapter would otherwise put a
     // full-resolution bitmap back for every page and undo the saving.
     p.thumb = await makeThumb(p.file);
+    // A page still in the queue simply runs on the turned file. A page
+    // running RIGHT NOW keeps running: its task id is what the poll is
+    // watching, and nulling it here sent the poll to /api/status/null
+    // for ever; the poll drops the stale result itself when it lands
+    // (see pollPage), because it knows the file changed under it.
+    if (p.status === "queued" || p.status === "processing") return true;
     // A result from the old orientation describes a page that no longer
     // exists, so it goes. Back to "pending", NOT "queued": re-running costs
     // real money and that is the user's call, not a side effect of
@@ -1280,6 +1284,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     p.status = "pending"; p.progress = 0; p.step = 0; p.message = "";
     return true;
+  }
+
+  // Every tool that rewrites a page's file goes through here, so the page
+  // can tell that the file it is holding is not the one a running task was
+  // given. fileRev is compared when that task's result lands.
+  function swapFile(p, file) {
+    p.file = file;
+    p.size = file.size;
+    p.fileRev = (p.fileRev || 0) + 1;
+    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
   }
 
   /* ══ EDGE TRIM ══
@@ -1487,9 +1501,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const blob = await new Promise(r => c.toBlob(r, "image/png"));
     c.width = c.height = 0;
     if (!blob) return 0;
-    p.file = new File([blob], p.name || "page.png", { type: "image/png" });
-    p.size = blob.size;
-    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    swapFile(p, new File([blob], p.name || "page.png", { type: "image/png" }));
     p.thumb = await makeThumb(p.file);
     return cut;
   }
@@ -1588,9 +1600,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const size = res.headers.get("X-Page-Size") || "";
     cutoutOne.engine = res.headers.get("X-Cutout-Engine") || "";
     const blob = await res.blob();
-    p.file = new File([blob], p.name || "page.png", { type: "image/png" });
-    p.size = blob.size;
-    try { URL.revokeObjectURL(p.thumb); } catch (_) {}
+    swapFile(p, new File([blob], p.name || "page.png", { type: "image/png" }));
     p.thumb = await makeThumb(p.file);
     return size;
   }
@@ -1975,6 +1985,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // must describe THIS page, not whatever card happens to be selected when
     // the user is setting up the next job.
     page.workflow = workflow;
+    // Which file this run was given. A turn, trim or cut-out while it runs
+    // replaces the file, and the result that comes back then describes a
+    // page that no longer exists.
+    const fileRev = page.fileRev || 0;
     try {
       const { url, form } = buildRequest(page.file);
       const res = await fetch(url, { method: "POST", body: form });
@@ -1984,7 +1998,7 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(msg);
       }
       page.taskId = (await res.json()).task_id;
-      await pollPage(page);
+      await pollPage(page, fileRev);
     } catch (e) {
       page.status = "error"; page.error = e.message;
     } finally {
@@ -1993,13 +2007,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function pollPage(page) {
+  function pollPage(page, fileRev) {
     return new Promise(resolve => {
       const tick = async () => {
         try {
           const r = await fetch(`/api/status/${page.taskId}`);
           const d = await r.json();
           page.progress = d.progress || 0; page.step = d.step || 0; page.message = d.message || "";
+          if (d.status === "done" && fileRev !== undefined && (page.fileRev || 0) !== fileRev) {
+            // The page was turned, trimmed or cut out while this ran. The
+            // result is of the OLD file, so showing it would put an
+            // un-turned page under a turned thumbnail and into the ZIP.
+            // Dropped; back to pending, and the user decides on a re-run.
+            page.status = "pending"; page.taskId = null; page.result = null;
+            page.items = []; page.progress = 0; page.step = 0;
+            page.message = "This page was changed while it ran — press "
+                         + goBtn.textContent + " to run it again";
+            renderStrip(); updateBatch();
+            if (page.uid === activeUid) renderActivePage();
+            return resolve();
+          }
           if (d.status === "done") {
             page.status = "done"; page.result = d;
             page.items = (d.result && d.result.items) ? d.result.items : [];
@@ -2163,7 +2190,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (i < 0) return;
     if (act === "flip") {
       // Turn just this page, whatever the "every page" box says — a chapter
-      // usually has only one or two slides in the wrong way round.
+      // usually has only one or two slides in the wrong way round. Not
+      // while the orientation bar is mid-run over the same files, though.
+      if (applyOrient._busy) return;
       reorientPage(pages[i], "180")
         .then(() => { renderStrip(); updateBatch(); renderActivePage(); })
         .catch(e => showError(e.message));
@@ -2276,16 +2305,24 @@ document.addEventListener("DOMContentLoaded", () => {
       stepsEl.style.display = "none";
       progressBarWrap.style.display = "none";
       progressMsg.innerHTML = '<span style="color:#f87171">⚠ ' + esc(p.error || "Failed") + "</span>";
+      retryPageBtn.textContent = "Retry this page";
       retryPageBtn.style.display = "";
     } else {
       pageResult.style.display = "none";
       pageProcessing.style.display = "";
       stepsEl.style.display = noTranslate ? "none" : "";
-      progressBarWrap.style.display = "";
-      retryPageBtn.style.display = "none";
+      // A page put back to "pending" by a turn, trim or cut-out has nothing
+      // running, and the Translate button lives on the upload screen, which
+      // is hidden in here. The note used to say "press Translate to run
+      // again" beside a bar reading "Starting..." with no button anywhere;
+      // the retry button now doubles as its run button.
+      const idle = p.status === "pending";
+      progressBarWrap.style.display = idle ? "none" : "";
+      retryPageBtn.textContent = "Run this page";
+      retryPageBtn.style.display = idle ? "" : "none";
       updateSteps(p);
       progressFill.style.width = (p.progress || 0) + "%";
-      progressMsg.textContent = p.message || "Starting...";
+      progressMsg.textContent = p.message || (idle ? "Not run yet." : "Starting...");
     }
   }
 
