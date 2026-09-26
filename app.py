@@ -165,19 +165,80 @@ def _mark_to_stamp(watermark, replace_watermark, items) -> str:
 
 
 def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
-               wm_size="m", credit="", wm_style="clean"):
+               wm_size="m", credit="", wm_style="clean", use_model=True):
     """Stamp the user's watermark and/or credit line on ANY finished output
     (translate, upscale, raw, enhance — same look everywhere). The credit
-    goes small in the opposite corner so the two never collide."""
+    goes small in the opposite corner so the two never collide.
+
+    Where the page's lettering is gets worked out ONCE, on the page as it
+    arrives, and both marks place against that. Reading it again for the
+    credit would mean a second pass of the text model over a page that only
+    differs by the watermark — and the watermark's own box is handed to the
+    credit instead, so the two still cannot overlap. `use_model=False` keeps
+    to the quick shape heuristics (the live settings preview).
+
+    The credit is placed against the page as it was BEFORE the watermark went
+    on, too. Read off the stamped page, the heuristics took the watermark's
+    own letters — every instance of a tiled one — for lettering to avoid, and
+    the credit was pushed wherever the tile had left a gap."""
+    if not (watermark or credit):
+        return
+    page = cv2.imread(output_path)
+    lettering = None
+    if use_model and page is not None:
+        lettering = _page_lettering(page)
+    placed = None
     if watermark:
-        _stamp_watermark(output_path, watermark, wm_place, wm_opacity, wm_size,
-                         wm_style)
+        placed = _stamp_watermark(output_path, watermark, wm_place,
+                                  wm_opacity, wm_size, wm_style,
+                                  lettering=lettering, page=page)
     if credit:
         cplace = "bl" if wm_place != "bl" else "br"
-        _stamp_watermark(output_path, credit, cplace, 85, "s", "clean")
+        _stamp_watermark(output_path, credit, cplace, 85, "s", "clean",
+                         lettering=lettering, avoid=placed, page=page)
 
 
-def _bright_regions(gray):
+def _page_lettering(img):
+    """Where the text model says this page's lettering is, or None.
+
+    Returns {"blocks": [(x, y, w, h), ...], "strokes": uint8 mask} from the
+    manga-trained text detector (core/text_seg.py): the block boxes around
+    dialogue and narration, and the stroke mask, which also marks the sound
+    effects drawn into the art. Both are cached per page by the segmenter.
+
+    None when the model is not installed or will not load — the caller then
+    falls back to the shape heuristics. It never STARTS the ~90MB weight
+    download: stamping is a finishing step, and the heuristics are a
+    reasonable stand-in until the translate pipeline has fetched the model.
+    """
+    try:
+        from core import text_seg
+        if text_seg._SESSION is None and not os.path.exists(
+                text_seg._weights_path()):
+            return None
+        seg = text_seg.TextSegmenter()
+        if not seg.ok:
+            return None
+        blocks = list(seg.detect_blocks(img))
+        # The UNSTRIPPED stroke mask. mask() drops solid-looking blobs outside
+        # the text blocks so an erase leaves eyes and ornaments alone — but at
+        # the model's input scale a line of small lettering comes out as a
+        # solid bar, and English lettered over art (which the block head often
+        # misses) was stripped with the eyes: 94% of it on a measured page.
+        # For a keep-out, keeping an eye in costs nothing; losing a line of
+        # dialogue puts the mark on it. Same cached inference either way.
+        a = seg._analyze(img) if hasattr(seg, "_analyze") else None
+        strokes = a.get("raw") if isinstance(a, dict) else None
+        if strokes is None:
+            strokes = seg.mask(img)
+        return {"blocks": blocks, "strokes": strokes}
+    except Exception as e:
+        print(f"[watermark] text model unavailable ({e}); "
+              "placing by shape heuristics")
+        return None
+
+
+def _bright_regions(gray, min_area: float = 0.004):
     """Balloon-shaped bright areas, holes filled.
 
     Yields (x, y, w, h, filled_mask) for every bright region that could be a
@@ -190,6 +251,8 @@ def _bright_regions(gray):
     it, and a RETR_EXTERNAL scan returns the sheet and nothing else. A
     balloon's inked outline separates its interior from the paper around it,
     so components find it whatever else is on the page.
+
+    `min_area` is the smallest region considered, as a share of the page.
     """
     h, w = gray.shape[:2]
     _, bright = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -197,7 +260,7 @@ def _bright_regions(gray):
     page_area = float(h * w)
     for i in range(1, n):
         x, y, cw, ch, area = stats[i]
-        if area < page_area * 0.004 or area > page_area * 0.30:
+        if area < page_area * min_area or area > page_area * 0.30:
             continue
         # A region spanning almost the whole sheet is the paper, not a bubble.
         if cw > w * 0.85 or ch > h * 0.85:
@@ -232,53 +295,56 @@ def _glyph_mask(gray):
     ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
                                 cv2.THRESH_BINARY_INV, 25, 12)
     n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
-    out = np.zeros((h, w), np.uint8)
     lo, hi = max(4, int(h * 0.006)), int(h * 0.09)
-    for i in range(1, n):
-        x, y, cw, ch, area = stats[i]
-        if not (lo <= ch <= hi) or cw > hi * 3:
-            continue
-        if area < 12 or cw < 2:
-            continue
-        fill = area / float(max(1, cw * ch))
-        if fill > 0.92 or fill < 0.05:
-            continue
-        ar = cw / float(max(1, ch))
-        if ar > 8 or ar < 0.06:
-            continue
-        out[lab == i] = 255
-    return out
+    cw, ch, area = (stats[:, 2].astype(np.float64), stats[:, 3].astype(np.float64),
+                    stats[:, 4].astype(np.float64))
+    fill = area / np.maximum(1, cw * ch)
+    ar = cw / np.maximum(1, ch)
+    # All components judged at once and painted with one lookup: the old
+    # per-component `out[lab == i]` pass cost a full-page scan per speck,
+    # over a second on a busy page.
+    ok = ((ch >= lo) & (ch <= hi) & (cw <= hi * 3) & (area >= 12) & (cw >= 2)
+          & (fill <= 0.92) & (fill >= 0.05) & (ar <= 8) & (ar >= 0.06))
+    ok[0] = False
+    return np.where(ok[lab], 255, 0).astype(np.uint8)
 
 
-def _dialogue_keepout(img, pad_px: int):
+def _dialogue_keepout(img, pad_px: int, lettering="auto"):
     """Where the page's DIALOGUE is: lettering that sits inside a balloon.
 
-    Deliberately narrower than _text_keepout(). That one also returns every
-    glyph-shaped speck it can find, which is right when a single mark is being
-    positioned — it just moves elsewhere — but wrong for the full-page styles,
-    which are cut away instead. On a photographed raw, hatching and halftone
-    are glyph-shaped in their thousands, and cutting against all of them
-    shredded the watermark into fragments.
+    For the full-page styles (tile, ghost), which are cut away around it
+    rather than moved. With the text model this is the model's lettering and
+    the part of each balloon near it — see _text_keepout(); the model does not
+    fire on shading, so nothing here is at risk of shredding the pattern.
 
+    Without the model: deliberately narrower than the heuristic keep-out,
+    which also returns every glyph-shaped speck it can find. On a photographed
+    raw, hatching and halftone are glyph-shaped in their thousands, and
+    cutting against all of them shredded the watermark into fragments.
     Requiring a bright, compact, enclosed shape around the lettering is what
-    makes this safe: shading cannot produce one.
+    makes that safe: shading cannot produce one.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
-    keep = np.zeros((h, w), np.uint8)
-    glyphs = _glyph_mask(gray)
-    if not cv2.countNonZero(glyphs):
-        return keep
-    gap = max(3, int(h * 0.012))
-    near = cv2.dilate(glyphs, cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (gap * 4 + 1, gap * 4 + 1)))
-    for x, y, cw, ch, filled in _bright_regions(gray):
-        if not (glyphs[filled > 0] > 0).any():
-            continue                      # bright but empty — not a bubble
-        keep[(filled > 0) & (near > 0)] = 255
-    if pad_px > 0 and cv2.countNonZero(keep):
-        keep = cv2.dilate(keep, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (pad_px * 2 + 1, pad_px * 2 + 1)))
+    if isinstance(lettering, str):
+        lettering = _page_lettering(img)
+    if lettering is not None:
+        keep = _model_keepout(img, lettering, pad_px, whole_balloons=False)
+    else:
+        keep = np.zeros((h, w), np.uint8)
+        glyphs = _glyph_mask(gray)
+        if not cv2.countNonZero(glyphs):
+            return keep
+        gap = max(3, int(h * 0.012))
+        near = cv2.dilate(glyphs, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (gap * 4 + 1, gap * 4 + 1)))
+        for x, y, cw, ch, filled in _bright_regions(gray):
+            if not (glyphs[filled > 0] > 0).any():
+                continue                      # bright but empty — not a bubble
+            keep[(filled > 0) & (near > 0)] = 255
+        if pad_px > 0 and cv2.countNonZero(keep):
+            keep = cv2.dilate(keep, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (pad_px * 2 + 1, pad_px * 2 + 1)))
     # A mask this large is a misdetection, not a page of solid dialogue.
     # Better a mark crossing some text than a page carrying no mark at all.
     if cv2.countNonZero(keep) > 0.45 * h * w:
@@ -289,12 +355,218 @@ def _dialogue_keepout(img, pad_px: int):
     return keep
 
 
-def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
+def _text_keepout(img, pad_px: int, whole_balloons: bool = True,
+                  lettering="auto"):
     """Where the watermark must NOT go: the page's lettering, fattened.
 
     A watermark dropped on top of dialogue ruins both — the mark is unreadable
     and so is the line under it. Corner placement used to take whatever was in
     the corner, and a bottom-right balloon is extremely common.
+
+    The lettering comes from the manga-trained text model when it is
+    installed (`lettering` is its reading of the page, from _page_lettering();
+    "auto" reads it here). Only when the model is unavailable does this fall
+    back to guessing lettering from the shape of the ink — and that guess is
+    why this used to be so wrong on busy pages: hatching, halftone and
+    patterned clothing are glyph-shaped too, and any bright panel with some of
+    that in it counted as a "balloon" and was barred as a whole rectangle. On
+    a One Piece chapter it marked 54-83% of every page (the model: 21-41%),
+    so no corner was ever free and the mark wandered off wherever the sweep
+    found room.
+    """
+    if isinstance(lettering, str):
+        lettering = _page_lettering(img)
+    if lettering is not None:
+        return _model_keepout(img, lettering, pad_px, whole_balloons)
+    return _shape_keepout(img, pad_px, whole_balloons)
+
+
+def _lettering_mask(lettering, gray):
+    """The text model's lettering as a mask, before any padding.
+
+    Three sources, because each misses what the others catch:
+
+      * the text-block boxes — every balloon line and caption, whole, gaps
+        between the characters included;
+      * the stroke mask, grouped into clusters. The block head is trained on
+        dialogue and does not box sound effects, credits drawn on the art or
+        a title page's lettering; the stroke head marks their strokes. Strokes
+        are joined at the gap between neighbouring characters, and a cluster
+        counts only if it is at least glyph-sized — the stroke head also
+        fires on the odd fleck of line art, and a fleck is not lettering;
+      * the rest of each sound effect (_sfx_letters). The stroke head marks
+        big, bold SFX only in pieces — two strokes of a four-letter shout —
+        so the letters those pieces belong to are completed from the ink.
+    """
+    h, w = gray.shape[:2]
+    m = np.zeros((h, w), np.uint8)
+    for bx, by, bw, bh in lettering.get("blocks") or []:
+        cv2.rectangle(m, (int(bx), int(by)),
+                      (int(bx + bw), int(by + bh)), 255, -1)
+    strokes = lettering.get("strokes")
+    if strokes is None or not cv2.countNonZero(strokes):
+        return m
+    gap = max(3, int(h * _LETTER_GAP))
+    joined = cv2.morphologyEx(strokes, cv2.MORPH_CLOSE,
+                              cv2.getStructuringElement(
+                                  cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap * 2 + 1)))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(joined, 8)
+    if n <= 1:
+        return m
+    ink = np.bincount(lab[strokes > 0], minlength=n)
+    glyph = max(6, int(h * _GLYPH_MIN))
+    big = ((np.maximum(stats[:, 2], stats[:, 3]) >= glyph)
+           & (ink >= glyph * glyph * _GLYPH_INK))
+    big[0] = False
+    clusters = big[lab]
+    # SFX seeds: clustered strokes outside the dialogue blocks.
+    seeds = clusters & (strokes > 0) & (m == 0)
+    m[clusters] = 255
+    if seeds.any():
+        m[_sfx_letters(gray, seeds)] = 255
+    return m
+
+
+def _sfx_letters(gray, seeds):
+    """The whole letters of the sound effects the model marked pieces of.
+
+    Letters are dark ink components. One the model's strokes land on is part
+    of the effect; its neighbours in the same word are too, when they are as
+    BOLD as SFX lettering (thick strokes — hatching and hair are drawn with a
+    fine pen) and of a similar size. Grown twice, so a shout of a few letters
+    is covered from a mark on one of them. Anything larger than a big letter
+    (a black cape, a filled panel) is never taken.
+    """
+    h, w = gray.shape[:2]
+    dark = (gray < 100).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(dark, 8)
+    if n <= 1:
+        return np.zeros((h, w), bool)
+    side = np.maximum(st[:, 2], st[:, 3])
+    letter = ((side <= 0.16 * h) & (st[:, 4] <= 0.012 * h * w)
+              & (st[:, 4] >= 60))
+    letter[0] = False
+    dt = cv2.distanceTransform(dark, cv2.DIST_L2, 3)
+    thick = np.zeros(n, np.float32)
+    np.maximum.at(thick, lab.ravel(), dt.ravel())
+    bold = letter & (2 * thick >= max(6, 0.005 * h))
+    hit = np.bincount(lab[seeds], minlength=n)
+    took = letter & (hit >= np.maximum(20, 0.03 * st[:, 4]))
+    for _ in range(2):
+        if not took.any():
+            break
+        size = float(np.median(side[took]))
+        g = max(4, int(size * 0.6))
+        near = cv2.dilate(took[lab].astype(np.uint8), cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * g + 1, 2 * g + 1)))
+        touch = np.bincount(lab[near > 0], minlength=n) > 0
+        more = (bold & touch & ~took
+                & (side >= 0.25 * size) & (side <= 3 * size))
+        if not more.any():
+            break
+        took |= more
+    return took[lab]
+
+
+# Tuned on a One Piece chapter (1403x2048 raws and their English release).
+_LETTER_GAP = 0.008     # strokes this close (x page height) are one piece of text
+_GLYPH_MIN = 0.012      # a stroke cluster must span this much to be lettering
+_GLYPH_INK = 0.25       # ...and carry this much stroke (x glyph size squared)
+_BALLOON_MAX = 0.05     # a balloon is at most this share of the page...
+_BALLOON_SOLID = 0.80   # ...and this convex (area / convex hull area)
+_BALLOON_TEXT = 0.05    # ...with at least this much of it lettered ("..." is 8%)
+_BALLOON_GLYPHS = 0.10  # or, lettering the model missed: this much glyph ink
+_BALLOON_SOLID_UNREAD = 0.90   # ...in a rounder region
+
+
+def _balloon_shaped(inside, page_area, solid=None):
+    """Is this bright region (a filled bool mask) shaped like a balloon?
+
+    A balloon is a compact, convex blob; a panel's bright background is
+    large and ragged — art cuts into it from every side. On the One Piece
+    pages this was tuned on, lettered panel backgrounds that used to be
+    barred whole ran up to 18% of the page, with solidity down to 0.45.
+    Shape rather than how much is written in it: a balloon holding only
+    "..." is mostly empty, and a panel with narration across its sky can be
+    mostly text. `solid` overrides the convexity required.
+    """
+    area = int(np.count_nonzero(inside))
+    if area > _BALLOON_MAX * page_area:
+        return False
+    cnts, _ = cv2.findContours(inside.astype(np.uint8), cv2.RETR_EXTERNAL,
+                               cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return False
+    hull = cv2.contourArea(cv2.convexHull(max(cnts, key=cv2.contourArea)))
+    return area >= (_BALLOON_SOLID if solid is None else solid) * hull
+
+
+def _model_keepout(img, lettering, pad_px, whole_balloons=True):
+    """_text_keepout() from the text model's reading of the page.
+
+    The lettering itself (_lettering_mask), plus the speech balloons it sits
+    in. A balloon is barred whole even though the model has boxed its text:
+    on a translated page the new lettering rarely fills the balloon, and a
+    mark in the empty part of a balloon still reads as covering the dialogue.
+
+    A balloon is a bright enclosed region with lettering in it that is also
+    SHAPED like one (_balloon_shaped). The shape test is what keeps whole
+    panels out. The old test was only "contains something glyph-shaped", and
+    because holes are filled, a panel's bright background contains every
+    balloon, caption and patch of hatching drawn inside it — so the panel
+    counted as a balloon and was barred as one big rectangle. Text written
+    straight onto a panel (narration over the sky) is still barred, by its
+    block; the panel around it is not.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    text = _lettering_mask(lettering, gray)
+    keep = text.copy()
+    # Glyph-shaped ink, for balloons whose lettering the model does not read:
+    # outlined, tone-filled display lettering ("CRASH!!" drawn over an erased
+    # SFX) comes out of the model blank. Only ever asked about a region that
+    # is already balloon-SHAPED, so hatching cannot claim a panel through it.
+    glyphs = _glyph_mask(gray)
+    gap = max(3, int(h * 0.012))
+    ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                     (gap * 4 + 1, gap * 4 + 1))
+    near = None
+    # Down to half the size the heuristic looks at: a balloon holding one
+    # short shout ("CRUNCH!", "!?") is about 0.3% of a page, and here a
+    # region still has to be balloon-shaped AND lettered to count.
+    for x, y, cw, ch, filled in _bright_regions(gray, min_area=0.002):
+        inside = filled[y:y + ch, x:x + cw] > 0
+        area = np.count_nonzero(inside)
+        written = np.count_nonzero(text[y:y + ch, x:x + cw][inside])
+        if written >= _BALLOON_TEXT * area:
+            solid = _BALLOON_SOLID
+        elif (np.count_nonzero(glyphs[y:y + ch, x:x + cw][inside])
+              >= _BALLOON_GLYPHS * area):
+            # Lettered, but not in a way the model reads. Held to a rounder
+            # shape: a cloud or a patch of skin with texture on it is
+            # glyph-shaped too, and is rarely this convex.
+            solid = _BALLOON_SOLID_UNREAD
+        else:
+            continue                    # nothing written in it
+        if not _balloon_shaped(inside, h * w, solid):
+            continue                    # a panel / sky with a caption on it
+        if whole_balloons:
+            keep[y:y + ch, x:x + cw][inside] = 255
+        else:
+            # Full-page styles are cut away rather than moved: bar only the
+            # part of the balloon near the lettering, so the pattern stays
+            # continuous instead of losing a disc per bubble.
+            if near is None:
+                near = cv2.dilate(cv2.bitwise_or(text, glyphs), ring)
+            keep[y:y + ch, x:x + cw][inside & (near[y:y + ch, x:x + cw] > 0)] = 255
+    if pad_px > 0 and cv2.countNonZero(keep):
+        keep = cv2.dilate(keep, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (pad_px * 2 + 1, pad_px * 2 + 1)))
+    return keep
+
+
+def _shape_keepout(img, pad_px: int, whole_balloons: bool = True):
+    """_text_keepout() without the text model: lettering guessed from shape.
 
     Lettering is picked out by the shape of its ink rather than by how dark it
     is, because manga artwork is just as black as its text. Glyphs are small,
@@ -302,6 +574,9 @@ def _text_keepout(img, pad_px: int, whole_balloons: bool = True):
     screentone is tiny and evenly spread, and figure art is large. Components
     that pass are merged into blocks and grown by `pad_px`, so the mark keeps
     clear of the text rather than just missing it.
+
+    Only a fallback: on a busy page hatching passes the same test, and it
+    over-marks badly (see _text_keepout()).
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
@@ -363,10 +638,19 @@ def _clear_spot(img, tw, th, place, keepout):
     The chosen corner is honoured whenever it is actually free — "bottom
     right" should stay bottom right, and quietly relocating a mark the user
     positioned is its own kind of wrong. Only when the preferred spot lands on
-    text does this look elsewhere: the same corner nudged along the edge,
-    then anywhere clear in that corner's quarter of the page, and only then
-    the other corners, so the mark moves as little as it can get away with.
-    The whole mark always fits on the page.
+    text does this look elsewhere, and it moves the mark as little as it can:
+
+      1. the corner itself, then nudged a little along its edges;
+      2. the clear spot nearest the corner in that corner's QUARTER of the
+         page — a mark moved up past a balloon is still "bottom right";
+      3. failing that, nearest the corner along the same HALF of the page (a
+         bottom mark stays at the bottom), then anywhere;
+      4. with nowhere clear at all, the least-covered spot in the quarter.
+
+    It used to try the other three corners before looking along its own
+    edge, and its last resort took the first clear spot scanning the quarter
+    from the page centre — so a bottom-left credit could end up at the top
+    right, and a blocked corner sent the mark to the middle of the page.
     """
     h, w = img.shape[:2]
     m = max(12, int(w * 0.015))
@@ -378,83 +662,60 @@ def _clear_spot(img, tw, th, place, keepout):
     integral = cv2.integral((keepout > 0).astype(np.uint8), sdepth=cv2.CV_32S)
 
     def hits(x, y):
-        x0, y0 = int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
+        x0 = np.clip(np.asarray(x), 0, w - tw)
+        y0 = np.clip(np.asarray(y), 0, h - th)
         x1, y1 = x0 + tw, y0 + th
-        return int(integral[y1, x1] - integral[y0, x1]
-                   - integral[y1, x0] + integral[y0, x0])
+        return (integral[y1, x1] - integral[y0, x1]
+                - integral[y1, x0] + integral[y0, x0])
+
+    def clip(x, y):
+        return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
 
     corners = {"br": (w - tw - m, h - th - m), "bl": (m, h - th - m),
                "tr": (w - tw - m, m), "tl": (m, m)}
     home = place if place in corners else "br"
+    cx, cy = corners[home]
+    right, bottom = home in ("br", "tr"), home in ("br", "bl")
 
-    def nudged(c):
-        cx, cy = corners[c]
-        out = [(cx, cy)]
-        # Same corner, nudged: along its edge, then inward. A mark that shifts
-        # a little still reads as "in the corner".
-        for d in (1, 2, 3):
-            step = int(th * 0.9 * d)
-            out.append((cx, cy - step if c in ("br", "bl") else cy + step))
-            side = int(tw * 0.35 * d)
-            out.append((cx - side if c in ("br", "tr") else cx + side, cy))
-        return out
-
-    def first_free(cands):
-        for x, y in cands:
+    # 1. The corner, nudged: along its edge, then inward. A mark that shifts
+    # a little still reads as "in the corner".
+    for d in (0, 1, 2, 3):
+        for x, y in ((cx, cy - int(th * 0.9 * d) if bottom
+                      else cy + int(th * 0.9 * d)),
+                     (cx - int(tw * 0.35 * d) if right
+                      else cx + int(tw * 0.35 * d), cy)):
             if hits(x, y) == 0:
-                return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
-        return None
+                return clip(x, y)
 
-    # The QUARTER of the page the user's corner is in, as positions where the
-    # WHOLE mark fits. Clamped to that range first: a long mark (a full URL)
-    # is wider than half the page, and sweeping from the page's middle
-    # rightwards used to hand back a spot where the text ran off the edge —
-    # "kaisuki.com/g/o" and the rest cut away.
-    hx, hy = corners[home]
-    x_max, y_max = max(0, w - tw - m), max(0, h - th - m)
-    x_min, y_min = min(m, x_max), min(m, y_max)
-    if home in ("br", "tr"):
-        x_lo, x_hi = min(max(x_min, w // 2), x_max), x_max
-    else:
-        x_lo, x_hi = x_min, max(x_min, min(w // 2 - tw, x_max))
-    if home in ("br", "bl"):
-        y_lo, y_hi = min(max(y_min, h // 2), y_max), y_max
-    else:
-        y_lo, y_hi = y_min, max(y_min, min(h // 2 - th, y_max))
-    xs = list(range(x_lo, x_hi + 1, max(8, tw // 3))) + [x_hi]
-    ys = list(range(y_lo, y_hi + 1, max(8, th // 2))) + [y_hi]
-    # Emptiest first; among equals, nearest the chosen corner — so a clear
-    # spot a little up from "bottom right" beats one just below the middle
-    # of the page that a top-down sweep happened to reach first.
-    quarter = sorted((hits(x, y), abs(x - hx) + abs(y - hy), x, y)
-                     for y in ys for x in xs)
+    # Every position on the page, walking out from the corner.
+    sx, sy = max(4, tw // 8), max(4, th // 4)
+    xs = np.unique(np.clip(np.append(np.arange(m, w - tw - m + 1, sx), cx),
+                           0, w - tw))
+    ys = np.unique(np.clip(np.append(np.arange(m, h - th - m + 1, sy), cy),
+                           0, h - th))
+    gx, gy = np.meshgrid(xs, ys)
+    gx, gy = gx.ravel(), gy.ravel()
+    score = hits(gx, gy)
+    dist = np.hypot(gx - cx, gy - cy)
+    # The mark's box inside the corner's half (by height) / quarter.
+    in_half = (gy >= h // 2) if bottom else (gy + th <= h // 2)
+    in_side = (gx >= w // 2) if right else (gx + tw <= w // 2)
+    for area in (in_half & in_side, in_half, np.ones_like(in_half)):
+        free = np.flatnonzero((score == 0) & area)
+        if free.size:
+            i = free[np.argmin(dist[free])]
+            return clip(gx[i], gy[i])
 
-    # 1) The chosen corner, or nudged along its edge.
-    spot = first_free(nudged(home))
-    if spot:
-        return spot
-    # 2) Anywhere clear in that corner's quarter — still where it was put.
-    #    Going to another corner first sent a "bottom right" mark to the top
-    #    left whenever the bottom-right corner itself held lettering, though
-    #    there was room a few lines up.
-    if quarter and quarter[0][0] == 0:
-        return int(quarter[0][2]), int(quarter[0][3])
-    # 3) The other corners.
-    spot = first_free([xy for c in ("br", "bl", "tr", "tl") if c != home
-                       for xy in nudged(c)])
-    if spot:
-        return spot
-    # 4) Nowhere clear at all: the emptiest spot in the chosen quarter. This
-    #    used to sweep the whole page, and on a busy action page "bottom
-    #    right" came out beside the SFX at the top left. A mark that crosses
-    #    a little art but sits where it was put is the lesser wrong; the user
-    #    chose the corner, not the page's emptiest inch.
-    best = quarter[0]
-    return int(np.clip(best[2], 0, w - tw)), int(np.clip(best[3], 0, h - th))
+    quarter = np.flatnonzero(in_half & in_side)
+    if not quarter.size:
+        return clip(cx, cy)
+    i = quarter[np.lexsort((dist[quarter], score[quarter]))[0]]
+    return clip(gx[i], gy[i])
 
 
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
-                     opacity: int = 50, size: str = "m", style: str = "clean"):
+                     opacity: int = 50, size: str = "m", style: str = "clean",
+                     lettering="auto", avoid=None, page=None):
     """Watermark the finished page. Six styles, all sized off the PAGE WIDTH
     so they stay readable at any resolution (the old min-side divisors made
     marks near-invisible on tall scans):
@@ -467,21 +728,40 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
       tile   — small text repeated diagonally over everything
 
     `place` = tl/tr/bl/br/random for point styles; for ribbon it picks the
-    top or bottom edge. `opacity` 0-100."""
+    top or bottom edge. `opacity` 0-100.
+
+    `lettering` is where the page's text is, from _page_lettering() — None
+    to place by the shape heuristics, "auto" to read it here. `avoid` is an
+    (x, y, w, h) box the mark must also keep clear of (the watermark, when
+    this is the credit line). `page` is the page before any mark went on, to
+    judge the lettering from (defaults to the file as it is now). Returns the
+    box the mark was drawn in, or None for the full-page styles."""
     style = (style or "clean").lower()
     # "clean+tile" (or any style "+tile"): the chosen mark AND a faint tile
     # pass over the whole page, in one go — the corner stamp signs the page,
     # the tile makes it not worth stealing. The tile layer goes on gentler
     # than the main mark so the two read as one design.
     if style.endswith("+tile") and len(style) > 5:
-        _stamp_watermark(image_path, text, place, opacity, size, style[:-5])
+        if page is None:
+            page = cv2.imread(image_path)
+        if isinstance(lettering, str):
+            lettering = _page_lettering(page) if page is not None else None
+        placed = _stamp_watermark(image_path, text, place, opacity, size,
+                                  style[:-5], lettering=lettering, avoid=avoid,
+                                  page=page)
         _stamp_watermark(image_path, text, place,
-                         max(12, int(int(opacity or 50) * 0.55)), size, "tile")
-        return
+                         max(12, int(int(opacity or 50) * 0.55)), size, "tile",
+                         lettering=lettering, page=page)
+        return placed
     img = cv2.imread(image_path)
     if img is None:
-        return
+        return None
     h, w = img.shape[:2]
+    if page is None or page.shape != img.shape:
+        page = img
+    if isinstance(lettering, str):
+        lettering = _page_lettering(page)
+    placed = None
     if place == "tile":                       # legacy value from old configs
         style, place = "tile", "br"
     alpha = int(np.clip(int(opacity or 50), 5, 100) * 255 / 100)
@@ -514,7 +794,12 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
 
     def _keepout():
         if "m" not in _ko:
-            _ko["m"] = _text_keepout(img, max(4, int(fs * 0.35)))
+            pad = max(4, int(fs * 0.35))
+            _ko["m"] = _text_keepout(page, pad, lettering=lettering)
+            if avoid:
+                ax, ay, aw, ah = (int(v) for v in avoid)
+                cv2.rectangle(_ko["m"], (ax - pad, ay - pad),
+                              (ax + aw + pad, ay + ah + pad), 255, -1)
         return _ko["m"]
 
     def _corner_xy(tw, th, pad):
@@ -526,7 +811,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
             # dialogue. It now means the quietest spot that is genuinely clear
             # of lettering.
             keep = _keepout()
-            gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_full = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
             x_lo, y_lo = int(0.06 * w), int(0.06 * h)
             x_hi = max(int(0.94 * w) - tw, x_lo + 1)
             y_hi = max(int(0.94 * h) - th, y_lo + 1)
@@ -603,7 +888,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         # A ribbon is anchored to an edge and spans the width, so it cannot be
         # nudged out of the way — but it can take the other edge. Pick the one
         # with less lettering under it.
-        keep = _text_keepout(img, max(2, int(fs * 0.15)))
+        keep = _text_keepout(page, max(2, int(fs * 0.15)), lettering=lettering)
         top_hit = int((keep[0:band_h, :] > 0).sum())
         bot_hit = int((keep[h - band_h:h, :] > 0).sum())
         if y0 == 0 and top_hit > bot_hit:
@@ -615,6 +900,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         draw.text(((w - tw) // 2 - bb[0],
                    y0 + (band_h - th) // 2 - bb[1]), text,
                   fill=(255, 255, 255, 255), font=font)
+        placed = (0, y0, w, band_h)
 
     elif style == "pill":
         font = _font(fs)
@@ -626,6 +912,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
                                fill=(14, 14, 14, min(235, int(alpha * 1.15))))
         draw.text((x + px_ - bb[0], y + py_ - bb[1]), text,
                   fill=(255, 255, 255, 255), font=font)
+        placed = (x, y, pw, ph)
 
     elif style == "bold":
         font = _font(int(fs * 1.25))
@@ -634,6 +921,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         fill, stroke = _auto_colors(x, y, tw, th)
         draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
                   stroke_width=max(2, font.size // 9), stroke_fill=stroke)
+        placed = (x, y, tw, th)
 
     else:  # clean
         font = _font(fs)
@@ -642,6 +930,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         fill, stroke = _auto_colors(x, y, tw, th)
         draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
                   stroke_width=max(1, font.size // 16), stroke_fill=stroke)
+        placed = (x, y, tw, th)
 
     if style in ("tile", "ghost"):
         # Colour the mark against whatever it is lying on. Both of these used
@@ -658,12 +947,14 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         # These two cover the whole page by design, so there is nowhere to
         # move them to — the mark is kept clear of the lettering instead.
         #
-        # What it is kept clear OF matters. The glyph detector fires on
-        # hatching, halftone and fine line art as well as on writing, and on a
-        # photographed raw that is most of the page. Only DIALOGUE is protected
-        # here: lettering inside a detected speech balloon, which needs a
-        # bright compact shape around it and so cannot be triggered by shading.
-        keep = _dialogue_keepout(img, max(6, int(w * 0.018)))
+        # What it is kept clear OF matters. With the text model that is the
+        # lettering it found and the balloon around it. Without it, the glyph
+        # detector fires on hatching, halftone and fine line art as well as on
+        # writing, and on a photographed raw that is most of the page, so only
+        # DIALOGUE is protected: lettering inside a detected speech balloon,
+        # which needs a bright compact shape around it and so cannot be
+        # triggered by shading.
+        keep = _dialogue_keepout(page, max(6, int(w * 0.018)), lettering)
         if cv2.countNonZero(keep):
             a = np.array(overlay.split()[-1])
             if style == "tile":
@@ -689,6 +980,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
     pil = Image.alpha_composite(pil, overlay)
     result = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
     cv2.imwrite(image_path, result)
+    return placed
 
 app = FastAPI(title="MangaTranslator")
 
@@ -3520,7 +3812,11 @@ async def wm_preview(text: str = "@YourName", style: str = "clean",
                    int(np.clip(opacity, 5, 100)),
                    (size or "m").strip() or "m",
                    (credit or "").strip()[:60],
-                   (style or "clean").strip() or "clean")
+                   (style or "clean").strip() or "clean",
+                   # The sample is drawn fresh on every keystroke; the shape
+                   # heuristics find its one balloon, and the text model
+                   # would add seconds per redraw on a CPU.
+                   use_model=False)
         out = cv2.imread(tmp)
     finally:
         try:
