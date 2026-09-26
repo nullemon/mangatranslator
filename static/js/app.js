@@ -1678,17 +1678,25 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   function _writeZip(files) {           // [{name, u8}] -> Blob
     const enc = new TextEncoder(), locals = [], central = [];
+    // Names are written as UTF-8, and the entry has to SAY so (general
+    // purpose flag bit 11). Without it every reader — Windows Explorer,
+    // Python's zipfile — decodes the bytes as CP437, and a page called
+    // 第1話.jpg came out of the zip as τ¼¼1Φ⌐▒.jpg. Set on every entry: it is
+    // harmless for plain ASCII names.
+    const FLAG_UTF8 = 0x0800;
     let off = 0;
     for (const f of files) {
       const nb = enc.encode(f.name), sum = _crc32(f.u8);
       const lh = new Uint8Array(30 + nb.length), lv = new DataView(lh.buffer);
       lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+      lv.setUint16(6, FLAG_UTF8, true);
       lv.setUint32(14, sum, true); lv.setUint32(18, f.u8.length, true);
       lv.setUint32(22, f.u8.length, true); lv.setUint16(26, nb.length, true);
       lh.set(nb, 30); locals.push(lh, f.u8);
       const ch = new Uint8Array(46 + nb.length), cv2_ = new DataView(ch.buffer);
       cv2_.setUint32(0, 0x02014b50, true); cv2_.setUint16(4, 20, true);
-      cv2_.setUint16(6, 20, true); cv2_.setUint32(16, sum, true);
+      cv2_.setUint16(6, 20, true); cv2_.setUint16(8, FLAG_UTF8, true);
+      cv2_.setUint32(16, sum, true);
       cv2_.setUint32(20, f.u8.length, true); cv2_.setUint32(24, f.u8.length, true);
       cv2_.setUint16(28, nb.length, true); cv2_.setUint32(42, off, true);
       ch.set(nb, 46); central.push(ch);
@@ -2536,7 +2544,7 @@ document.addEventListener("DOMContentLoaded", () => {
     a.href = URL.createObjectURL(blob);
     a.download = ((page.name || "page").replace(/\.[^.]+$/, "")) + "_translation.txt";
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   });
 
   const orderBtn = document.getElementById("orderBtn");
@@ -4485,7 +4493,10 @@ document.addEventListener("DOMContentLoaded", () => {
       a.download = (chName ? chName : "translated_pages") +
                    (withWatermark ? "" : " (no watermark)") + ".zip";
       a.click();
-      URL.revokeObjectURL(a.href);
+      // Revoked later, not at once: Firefox starts the download after the
+      // click returns, and an already-revoked URL gives it nothing to save.
+      // (The page download and Save pages as ZIP already wait like this.)
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
     } catch (e) {
       showError(e.message);
     } finally {
