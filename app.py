@@ -2260,6 +2260,31 @@ def _chunk(items, n):
     return [items[i:i + n] for i in range(0, len(items), n)]
 
 
+GLOSSARY_PASTE_MAX = 2 * 1024 * 1024   # a whole wiki page is well under this
+
+
+@app.post("/api/glossary/parse")
+async def glossary_parse(request: Request):
+    """Pull official names out of text pasted from a wiki (technique lists,
+    character pages, tables, raw wikitext) or typed as `jp = en` lines.
+    Returns the pairs and the same thing as ready-to-use glossary lines."""
+    import json
+    from core import glossary
+    raw = await request.body()
+    if len(raw) > GLOSSARY_PASTE_MAX:
+        raise HTTPException(413, "Pasted text is too large (limit 2 MB)")
+    try:
+        body = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    text = body.get("text", "") if isinstance(body, dict) else ""
+    if not isinstance(text, str):
+        raise HTTPException(400, "text must be a string")
+    pairs = glossary.parse_pairs(text)
+    return {"pairs": [{"jp": jp, "en": en} for jp, en in pairs],
+            "lines": glossary.to_lines(pairs)}
+
+
 @app.get("/api/profiles")
 async def profiles_list():
     from core import profiles

@@ -124,8 +124,11 @@
           <textarea id="stylePrompt" rows="2" placeholder="e.g. Keep honorifics like -san/-kun · punchy shounen tone · keep attack names in romaji · UK English spelling"></textarea>
         </div>
         <div class="setting-group prompt-group half">
-          <label for="glossary">Glossary <span class="muted">(names/terms kept consistent every page)</span></label>
-          <textarea id="glossary" rows="2" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
+          <div class="gloss-head">
+            <label for="glossary">Glossary <span class="muted">(names/terms kept consistent every page)</span></label>
+            <button class="btn btn-ghost btn-sm gloss-wiki-btn" type="button" data-gloss-target="glossary" title="Paste a wiki page, technique list or table — the official names are pulled out for you">📋 Paste from wiki…</button>
+          </div>
+          <textarea id="glossary" rows="4" placeholder="e.g. ガッツ = Guts · キャスカ = Casca · 鷹の団 = Band of the Hawk · keep -dono as -dono"></textarea>
         </div>
       </section>
 
@@ -728,11 +731,42 @@
             <div style="flex:1"><label>Honorifics policy</label><input type="text" id="trainHon" placeholder="e.g. keep -san/-kun"></div>
             <div style="flex:1"><label>SFX policy</label><input type="text" id="trainSfx" placeholder="e.g. leave SFX in art"></div>
           </div>
-          <label>Glossary <span class="muted">(one per line: <code>term = English</code> — edit freely)</span></label>
+          <div class="gloss-head">
+            <label>Glossary <span class="muted">(one per line: <code>term = English</code> — edit freely)</span></label>
+            <button class="btn btn-ghost btn-sm gloss-wiki-btn" type="button" data-gloss-target="trainGloss" title="Paste a wiki page, technique list or table — the official names are pulled out for you">📋 Paste from wiki…</button>
+          </div>
           <textarea id="trainGloss" rows="6" placeholder="カワキ = Kawaki&#10;うずまきボルト = Boruto Uzumaki&#10;螺旋丸 = Rasengan"></textarea>
           <div class="train-row" style="justify-content:flex-end;margin-top:8px">
             <span id="trainMeta" class="muted" style="font-size:.76rem;margin-right:auto"></span>
             <button class="btn btn-primary btn-sm" id="trainSave" type="button">Save profile</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PASTE NAMES FROM A WIKI → GLOSSARY. Opens over the settings or the
+       Train/Manage modal and merges into whichever glossary opened it. -->
+  <div class="train-modal wiki-modal" id="wikiModal" style="display:none">
+    <div class="train-card wiki-card">
+      <div class="train-head">
+        <h3 style="margin:0">📋 Paste names from a wiki</h3>
+        <button class="btn btn-ghost btn-sm" id="wikiClose" type="button">✕</button>
+      </div>
+      <div class="train-body">
+        <label for="wikiInput">Paste anything copied from the wiki <span class="muted">— the official names are pulled out for you</span></label>
+        <textarea id="wikiInput" rows="10" spellcheck="false" placeholder="Paste anything copied from the wiki — a technique list, a character page, a table, or raw wikitext. For example:&#10;&#10;Rokudo no Tsuji (六道の辻 Rokudō no Tsuji?, literally &quot;Six Paths Crossroads&quot;)&#10;Gomu Gomu no Pistol (ゴムゴムの銃 (ピストル) Gomu Gomu no Pisutoru?)&#10;&#10;…or type your own lines:&#10;覇王色 = Conqueror's Haki"></textarea>
+        <div class="train-row" style="margin-top:6px">
+          <button class="btn btn-primary btn-sm" id="wikiExtract" type="button">Extract names</button>
+          <span id="wikiStatus" class="muted" style="font-size:.8rem"></span>
+        </div>
+        <div id="wikiResult" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+          <label for="wikiLines"><span id="wikiFound">Found 0 names</span> <span class="muted">— one per line, <code>Japanese = English</code>. Fix or delete anything before adding.</span></label>
+          <textarea id="wikiLines" rows="8" spellcheck="false"></textarea>
+          <div class="train-row" style="justify-content:flex-end;margin-top:8px">
+            <span id="wikiNote" class="muted" style="font-size:.76rem;margin-right:auto"></span>
+            <button class="btn btn-ghost btn-sm" id="wikiCancel" type="button">Close</button>
+            <button class="btn btn-primary btn-sm" id="wikiAdd" type="button">Add to glossary</button>
           </div>
         </div>
       </div>

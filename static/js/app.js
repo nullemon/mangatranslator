@@ -4639,6 +4639,168 @@ document.addEventListener("DOMContentLoaded", () => {
   if (trainClose) trainClose.addEventListener("click", () => { trainModal.style.display = "none"; });
   if (trainModal) trainModal.addEventListener("click", e => { if (e.target === trainModal) trainModal.style.display = "none"; });
 
+  /* ══ PASTE NAMES FROM A WIKI → GLOSSARY ══
+     The model can't know official names from recent chapters, and the wiki
+     can't be reached from here, so the user pastes what they copied from it.
+     The server pulls out `jp = en` pairs; the user reviews them, then they
+     are merged into whichever glossary textarea opened the modal. */
+  const wikiModal   = document.getElementById("wikiModal");
+  const wikiInput   = document.getElementById("wikiInput");
+  const wikiExtract = document.getElementById("wikiExtract");
+  const wikiStatus  = document.getElementById("wikiStatus");
+  const wikiResult  = document.getElementById("wikiResult");
+  const wikiFound   = document.getElementById("wikiFound");
+  const wikiLines   = document.getElementById("wikiLines");
+  const wikiNote    = document.getElementById("wikiNote");
+  const wikiAdd     = document.getElementById("wikiAdd");
+  let wikiTarget = null;
+
+  const GLOSS_JP_RE = /[々぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ]/;
+  // Same matching key as core/glossary.normalize(): no furigana, spaces,
+  // quotes, dots or bangs.
+  function glossKey(s) {
+    let t = String(s || ""), prev;
+    do { prev = t; t = t.replace(/[（(][^()（）]*[)）]/g, ""); } while (t !== prev);
+    return t.replace(/[\s「」『』“”"'‘’…・.!?！？、。]/g, "").toLowerCase();
+  }
+  // One `jp = en` / `en = jp` / `- jp → en` segment → its parts, or null.
+  function glossSeg(seg) {
+    const m = String(seg).match(/^(\s*(?:[-*•]\s+)?)(.*?\S)\s*(->|→|⇒|=>|＝|=)\s*(\S.*?)\s*$/);
+    if (!m) return null;
+    const [, pre, left, sep, right] = m;
+    const lj = GLOSS_JP_RE.test(left), rj = GLOSS_JP_RE.test(right);
+    if (lj === rj) return null;
+    const jp = lj ? left : right;
+    const key = glossKey(jp);
+    return key ? { pre, left, sep, right, jpLeft: lj, jp, key } : null;
+  }
+  // Merge reviewed lines into a glossary. New names are appended; a name the
+  // glossary already has takes the new English (it was just reviewed).
+  function mergeGlossary(existing, incoming) {
+    const fresh = new Map();
+    for (const line of String(incoming || "").split("\n")) {
+      for (const seg of line.split("·")) {
+        const p = glossSeg(seg);
+        if (!p || fresh.has(p.key)) continue;
+        const en = (p.jpLeft ? p.right : p.left).replace(/\s+#.*$/, "").trim();
+        if (en) fresh.set(p.key, { jp: p.jp.trim(), en });
+      }
+    }
+    const used = new Set();
+    let updated = 0;
+    const lines = String(existing || "").split("\n").map(line =>
+      line.split("·").map(seg => {
+        const p = glossSeg(seg);
+        if (!p || !fresh.has(p.key)) return seg;
+        used.add(p.key);
+        const en = fresh.get(p.key).en;
+        const trail = seg.match(/\s*$/)[0];
+        if (p.jpLeft) {
+          const note = (p.right.match(/\s+#.*$/) || [""])[0];   // keep "# note"
+          const oldEn = p.right.slice(0, p.right.length - note.length).trim();
+          if (oldEn === en) return seg;
+          updated++;
+          return `${p.pre}${p.left} ${p.sep} ${en}${note}${trail}`;
+        }
+        if (p.left.replace(/^[-*•]\s+/, "").trim() === en) return seg;
+        updated++;
+        return `${p.pre}${en} ${p.sep} ${p.right}${trail}`;
+      }).join("·"));
+    const add = [...fresh.entries()].filter(([k]) => !used.has(k))
+      .map(([, v]) => `${v.jp} = ${v.en}`);
+    let text = lines.join("\n").replace(/\s+$/, "");
+    if (add.length) text = (text ? text + "\n" : "") + add.join("\n");
+    return { text, added: add.length, updated };
+  }
+  function countGlossLines(text) {
+    const keys = new Set();
+    for (const line of String(text || "").split("\n"))
+      for (const seg of line.split("·")) { const p = glossSeg(seg); if (p) keys.add(p.key); }
+    return keys.size;
+  }
+  function setFound(n) {
+    wikiFound.textContent = `Found ${n} name${n === 1 ? "" : "s"}`;
+  }
+  function openWikiModal(target) {
+    if (!wikiModal || !target) return;
+    wikiTarget = target;
+    wikiStatus.textContent = "";
+    wikiNote.textContent = "";
+    wikiResult.style.display = "none";
+    wikiModal.style.display = "flex";
+    setTimeout(() => wikiInput.focus(), 0);
+  }
+  function closeWikiModal() { if (wikiModal) wikiModal.style.display = "none"; }
+
+  document.querySelectorAll(".gloss-wiki-btn").forEach(btn =>
+    btn.addEventListener("click", () =>
+      openWikiModal(document.getElementById(btn.dataset.glossTarget))));
+
+  async function extractWikiNames() {
+    const text = wikiInput.value;
+    if (!text.trim()) { wikiStatus.textContent = "Paste something from the wiki first."; return; }
+    wikiExtract.disabled = true;
+    wikiStatus.textContent = "Extracting…";
+    try {
+      const r = await fetch("/api/glossary/parse", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      const n = (data.pairs || []).length;
+      wikiLines.value = data.lines || "";
+      setFound(n);
+      wikiNote.textContent = "";
+      wikiResult.style.display = n ? "" : "none";
+      wikiStatus.textContent = n ? ""
+        : "No names found. Copy the part of the page that shows the Japanese "
+          + "in brackets, a table row, or lines like 覇王色 = Conqueror's Haki.";
+      if (n) wikiLines.focus();
+    } catch (e) {
+      wikiStatus.textContent = "Couldn't extract names: " + (e.message || e);
+    } finally {
+      wikiExtract.disabled = false;
+    }
+  }
+  if (wikiExtract) wikiExtract.addEventListener("click", extractWikiNames);
+  if (wikiInput) wikiInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); extractWikiNames(); }
+  });
+  if (wikiLines) wikiLines.addEventListener("input", () => setFound(countGlossLines(wikiLines.value)));
+  if (wikiAdd) wikiAdd.addEventListener("click", () => {
+    if (!wikiTarget) return;
+    const res = mergeGlossary(wikiTarget.value, wikiLines.value);
+    if (!res.added && !res.updated) {
+      wikiNote.textContent = "Nothing new — the glossary already has all of these.";
+      return;
+    }
+    wikiTarget.value = res.text;
+    // Fires the textarea's own save (localStorage for the main glossary).
+    wikiTarget.dispatchEvent(new Event("input", { bubbles: true }));
+    const parts = [];
+    if (res.added) parts.push(`${res.added} added`);
+    if (res.updated) parts.push(`${res.updated} updated`);
+    const msg = `Glossary: ${parts.join(", ")}.`
+      + (wikiTarget === trainGloss ? " Click “Save profile” to keep them." : "");
+    closeWikiModal();
+    if (wikiTarget === trainGloss && trainMeta) trainMeta.textContent = msg;
+    // Show where the names went: focus the glossary, scrolled to its end.
+    wikiTarget.focus();
+    wikiTarget.setSelectionRange(wikiTarget.value.length, wikiTarget.value.length);
+    wikiTarget.scrollTop = wikiTarget.scrollHeight;
+  });
+  const wikiClose = document.getElementById("wikiClose");
+  const wikiCancel = document.getElementById("wikiCancel");
+  if (wikiClose) wikiClose.addEventListener("click", closeWikiModal);
+  if (wikiCancel) wikiCancel.addEventListener("click", closeWikiModal);
+  if (wikiModal) wikiModal.addEventListener("click", e => { if (e.target === wikiModal) closeWikiModal(); });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && wikiModal && wikiModal.style.display !== "none") {
+      e.stopPropagation(); closeWikiModal();
+    }
+  }, true);
+
   if (trainProfileSel) trainProfileSel.addEventListener("change", async () => {
     const slug = trainProfileSel.value;
     if (!slug) { trainName.value = ""; trainResult.style.display = "none"; trainDelete.style.display = "none"; return; }

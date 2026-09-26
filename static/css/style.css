@@ -121,7 +121,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .setting-group{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .setting-group.half{grid-column:span 2}
 .setting-group.full{grid-column:1/-1}
-.setting-group>label{
+.setting-group>label,.setting-group>.gloss-head>label{
   font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;
   color:var(--text-faint);font-weight:600;
 }
@@ -512,6 +512,15 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .train-body input[type=text],.train-body select,.train-body textarea{width:100%;padding:.5rem .6rem;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font:inherit}
 .train-body textarea{resize:vertical}
 .train-row{display:flex;gap:.6rem;align-items:center}
+/* ── Paste-from-wiki glossary modal (sits above the Train modal) ── */
+.gloss-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;min-width:0}
+.gloss-head>label{min-width:0}
+.train-body .gloss-head{margin-top:.5rem}
+.train-body .gloss-head>label{margin-top:0}
+.gloss-wiki-btn{padding:.18rem .55rem;font-size:.7rem;flex-shrink:0}
+.wiki-modal{z-index:1002}
+.wiki-card{width:min(680px,96vw)}
+.wiki-card textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.8rem;line-height:1.45}
 .crop-modal{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.85);display:flex;flex-direction:column}
 .crop-toolbar{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
 .crop-hint{flex:1;font-size:.85rem;color:var(--text-dim)}
