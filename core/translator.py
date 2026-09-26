@@ -5,6 +5,7 @@ import cv2
 import json
 import threading
 import time
+import os
 import numpy as np
 import httpx
 from typing import Dict, List
@@ -216,7 +217,16 @@ class ClaudeTranslator:
 class GeminiTranslator:
     """Translation backend powered by Google Gemini (vision), via REST."""
 
-    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    # GEMINI_BASE_URL points the translator at another host speaking the same
+    # REST API (a proxy, or the stub server the browser tests run against).
+    # Unset, it is Google's own endpoint.
+    BASE_URL = "https://generativelanguage.googleapis.com"
+    URL = "/v1beta/models/{model}:generateContent"
+
+    @classmethod
+    def endpoint(cls, model: str) -> str:
+        base = (os.environ.get("GEMINI_BASE_URL") or cls.BASE_URL).rstrip("/")
+        return base + cls.URL.format(model=model)
 
     # How to ask each model family to keep its thinking short, cheapest first.
     #
@@ -354,7 +364,7 @@ class GeminiTranslator:
                 ],
             }
 
-        url = self.URL.format(model=self.model)
+        url = self.endpoint(self.model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
 
         t0 = time.time()
