@@ -1009,7 +1009,8 @@ async def translate(
         "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
         "wm_size": wm_size.strip() or "m",
         "text_case": text_case,
-        "style_fonts": style_fonts == "true",
+        # "false" | "pro" | "expressive" (legacy "true" = pro)
+        "style_fonts": _font_mode(style_fonts),
         "finish": finish,
         "enhance_provider": enhance_provider,
         "enhance_key": enhance_key,
@@ -1052,7 +1053,7 @@ async def translate(
             credit=credit.strip(),
             cut_regions=cut_regions,
             one_by_one=(one_by_one == "true"),
-            style_fonts=(style_fonts == "true"),
+            style_fonts=_font_mode(style_fonts),
             webtoon=(webtoon == "true"),
         )
     )
@@ -2260,6 +2261,16 @@ def _chunk(items, n):
     return [items[i:i + n] for i in range(0, len(items), n)]
 
 
+def _font_mode(v) -> object:
+    """The "Font per mood" setting: False (one page font), "pro" (the
+    three-face scanlation set — the default when on) or "expressive" (a face
+    for every mood). Older clients send "true", which means pro."""
+    v = str(v or "").strip().lower()
+    if v in ("", "false", "off", "0", "none"):
+        return False
+    return "expressive" if v == "expressive" else "pro"
+
+
 GLOSSARY_PASTE_MAX = 2 * 1024 * 1024   # a whole wiki page is well under this
 
 
@@ -2602,7 +2613,7 @@ async def rerender(task_id: str, request: Request):
                           translate_sfx=bool(t.get("translate_sfx", False)),
                           replace_watermark=bool(t.get("replace_watermark", False)),
                           watermark_text=t.get("watermark", ""),
-                          style_fonts=bool(t.get("style_fonts", False)))
+                          style_fonts=t.get("style_fonts", False))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, erase_covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the

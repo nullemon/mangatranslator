@@ -43,7 +43,12 @@ class Compositor:
         # machine-lettered page, so each line is given a face to match how it
         # is said. Off by default — it changes how every page looks, and that
         # should be the user's decision, not a surprise.
-        self.style_fonts = bool(style_fonts)
+        # style_fonts: False / "off" = one page font; True / "pro" = the
+        # three-face scanlation set (dialogue, shout, thought); "expressive" =
+        # a face for every mood.
+        sf = str(style_fonts).strip().lower()
+        self.style_fonts = bool(style_fonts) and sf not in ("false", "off", "0", "")
+        self.font_variety = "expressive" if sf == "expressive" else "pro"
         self.font_map = lettering.build_map(self.renderer.font_path,
                                             overrides=font_roles or {})
         # Background SFX (out-of-bubble onomatopoeia) are left in the artwork
@@ -106,6 +111,9 @@ class Compositor:
                 # the art and are never touched (a half-erased, smeared SFX is
                 # the worst of both worlds).
                 text_mask = self.text_seg.text_mask(src)
+                text_mask = self._drop_sfx_blocks(
+                    cv2.cvtColor(src, cv2.COLOR_BGR2GRAY), text_mask,
+                    self.text_seg.detect_blocks(src))
             except Exception as e:
                 print(f"[compositor] clean: text-seg mask failed: {e}")
 
@@ -147,6 +155,12 @@ class Compositor:
             for (x0, y0, x1, y1) in self._mask_regions(text_mask):
                 crop = result[y0:y1, x0:x1]
                 cm = text_mask[y0:y1, x0:x1]
+                pf = self._paper_fill(crop, cm)
+                if pf is not None:
+                    filled, fsel = pf
+                    crop[fsel] = filled[fsel]      # writes through into `result`
+                    healed += 1
+                    continue
                 # A SMOOTH background (a solid black panel, a flat tone, a
                 # gradient) is healed by extending that background, not by an
                 # inpaint model. LaMa/TELEA over solid black or a gradient
@@ -169,6 +183,93 @@ class Compositor:
             if healed:
                 return result
         return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
+
+    @classmethod
+    def _drop_sfx_blocks(cls, gray, mask, blocks, ratio=1.9):
+        """Remove hand-lettered SFX the block detector boxed as text (a small
+        ドキドキ beside a face, パキパキ in a little bubble). Sound effects are
+        lettered far bigger than the page's dialogue — measured 2.3-2.5x on real
+        pages, while shouted dialogue stays under 1.5x — so a block whose
+        glyphs are `ratio` times the page's typical size keeps its strokes."""
+        if not blocks or len(blocks) < 3 or cv2.countNonZero(mask) == 0:
+            return mask
+        sizes = [(b, cls._glyph_px(gray, mask, b)) for b in blocks]
+        vals = [s for _b, s in sizes if s]
+        if len(vals) < 3:
+            return mask
+        med = float(np.median(vals))
+        out = mask.copy()
+        H, W = gray.shape[:2]
+        dropped = 0
+        for (x, y, w, h), s in sizes:
+            if s and med > 0 and s / med >= ratio:
+                out[max(0, y):min(H, y + h), max(0, x):min(W, x + w)] = 0
+                dropped += 1
+        if dropped:
+            print(f"[compositor] kept {dropped} SFX block(s) untouched "
+                  f"(lettered {ratio:.1f}x+ the page's dialogue size)")
+        return out
+
+    @staticmethod
+    def _paper_fill(crop, mask):
+        """Text on plain PAPER (a balloon interior, blank page margin): there
+        is nothing to reconstruct, so fill the letters with the paper's exact
+        tone instead of healing them — healing left a faint grey haze of
+        ghost characters. Judged on a thin ring just outside the letters; the
+        antialiased fringe darker than the paper is taken too. Returns the
+        filled crop, or None when the letters don't sit on flat paper."""
+        sel = mask > 0
+        if not sel.any():
+            return None
+        ell = lambda d: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))
+        inner = cv2.dilate(mask, ell(2))
+        ring = cv2.subtract(cv2.dilate(mask, ell(7)), inner) > 0
+        g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        rv = g[ring]
+        if rv.size < 40:
+            return None
+        med = float(np.median(rv))
+        if med < 215 or float(np.percentile(rv, 8)) < med - 22:
+            return None
+        paper = np.median(crop[ring].reshape(-1, 3), axis=0).astype(np.uint8)
+        fringe = (cv2.dilate(mask, ell(3)) > 0) & (g < med - 8)
+        fill = (inner > 0) | fringe
+        out = crop.copy()
+        out[fill] = paper
+        return out, fill
+
+    @staticmethod
+    def _glyph_px(gray, seg, bbox):
+        """Typical glyph size (px) of the original lettering in `bbox`: the
+        85th percentile of character-sized ink components inside the text
+        stroke mask. Relative sizes across a page are reliable even where
+        absolute stroke widths (2-4 px on a normal scan) are not. 0 = too
+        little text to judge."""
+        H, W = gray.shape[:2]
+        x, y, w, h = [int(v) for v in bbox]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return 0.0
+        g = gray[y0:y1, x0:x1]
+        m = seg[y0:y1, x0:x1] > 0
+        if int(m.sum()) < 60:
+            return 0.0
+        near = cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        vals = g[near]
+        if vals.size < 60:
+            return 0.0
+        t, _ = cv2.threshold(vals.reshape(-1, 1), 0, 255,
+                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        light = float(np.median(g[m])) > float(np.median(vals))
+        ink = ((g > t) if light else (g < t)) & near
+        j = cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_CLOSE,
+                             np.ones((3, 3), np.uint8))
+        n, _lab, st, _ = cv2.connectedComponentsWithStats(j, 8)
+        sizes = [max(st[k, 2], st[k, 3]) for k in range(1, n) if st[k, 4] >= 12]
+        if len(sizes) < 3:
+            return 0.0
+        return float(np.percentile(sizes, 85))
 
     @staticmethod
     def _snap_lineart(out, crop, mask):
@@ -406,6 +507,24 @@ class Compositor:
                     touched = self._inpaint_text(result, cx, cy, cw, ch, contain=True)
                     edited_rects.append(touched or (cx, cy, cw, ch))
 
+        # Copy the ORIGINAL lettering's voice: how big each line was lettered
+        # compared with the page's ordinary dialogue. The font picker turns a
+        # clearly bigger line into a shout and a clearly smaller one into a
+        # quiet line, so the English keeps the emphasis the letterer drew.
+        if self.style_fonts and self._seg_mask is not None:
+            sizes = {}
+            for it in items:
+                b = it.get("bbox")
+                if b and len(b) == 4:
+                    s = self._glyph_px(gray, self._seg_mask, b)
+                    if s:
+                        sizes[id(it)] = s
+            if len(sizes) >= 3:
+                med = float(np.median(list(sizes.values())))
+                for it in items:
+                    if id(it) in sizes and med > 0:
+                        it["orig_rel"] = sizes[id(it)] / med
+
         placements = []     # (rect, text, color)
         used_boxes = []
 
@@ -485,7 +604,8 @@ class Compositor:
             role_font, role_ital, role_scale = "", False, 1.0
             if self.style_fonts:
                 role_font, role_ital, role_scale, _role = lettering.style_for(
-                    it, self.font_map, self.renderer.font_path)
+                    it, self.font_map, self.renderer.font_path,
+                    variety=self.font_variety)
                 ital = ital or role_ital
             # A face the user picked for THIS bubble beats the mood system
             # and the page font both — mood toggle on or off. They chose it
@@ -1619,6 +1739,15 @@ class Compositor:
             mwin = np.zeros((wy1 - wy0, wx1 - wx0), np.uint8)
             mwin[oy0 - wy0:oy1 - wy0, ox0 - wx0:ox1 - wx0] = tsub
             sub = result[wy0:wy1, wx0:wx1]
+            # Letters on plain paper: fill with the paper tone, no healing
+            # (healing leaves a faint grey haze of ghost characters). Only
+            # for the automatic path — a user-drawn box may be over anything.
+            pf = None if contain else self._paper_fill(sub, mwin)
+            if pf is not None:
+                filled, fsel = pf
+                sub[fsel] = filled[fsel]
+                dsub |= tsub
+                continue
             # Smooth background (solid black panel, flat tone, gradient) →
             # extend the tone seamlessly; a model here invents the pale blurry
             # smudge that showed where erased text used to sit. Detailed art

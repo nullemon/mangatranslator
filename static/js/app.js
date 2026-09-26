@@ -133,6 +133,12 @@ document.addEventListener("DOMContentLoaded", () => {
     styleFonts.addEventListener("change", () =>
       localStorage.setItem("manga_style_fonts", styleFonts.checked ? "1" : "0"));
   }
+  const fontVariety = document.getElementById("fontVariety");
+  if (fontVariety) {
+    fontVariety.value = localStorage.getItem("manga_font_variety") || "pro";
+    fontVariety.addEventListener("change", () =>
+      localStorage.setItem("manga_font_variety", fontVariety.value));
+  }
   if (oneByOne) {
     oneByOne.checked = localStorage.getItem("manga_one_by_one") === "1";
     oneByOne.addEventListener("change", () =>
@@ -1849,7 +1855,8 @@ document.addEventListener("DOMContentLoaded", () => {
       f.append("translate_sfx", translateSfx && translateSfx.checked ? "true" : "false");
       f.append("one_by_one", oneByOne && oneByOne.checked ? "true" : "false");
       const sf = document.getElementById("styleFonts");
-      f.append("style_fonts", sf && sf.checked ? "true" : "false");
+      const fv = document.getElementById("fontVariety");
+      f.append("style_fonts", sf && sf.checked ? (fv ? fv.value : "pro") : "false");
       f.append("webtoon", webtoonMode && webtoonMode.checked ? "true" : "false");
       f.append("max_quality", maxQuality && maxQuality.checked ? "true" : "false");
       f.append("compress", compressOut && compressOut.checked ? "true" : "false");

@@ -883,7 +883,9 @@ class TranslationPipeline:
         self.clean_only = bool(clean_only)
         self.one_by_one = bool(one_by_one)
         # Give each line a typeface that matches how it is said.
-        self.style_fonts = bool(style_fonts)
+        # False / "pro" / "expressive" — passed through untouched so the
+        # compositor knows WHICH lettering set, not just on/off.
+        self.style_fonts = style_fonts if style_fonts else False
         # Isolate page (beta): white-out + crop the background around a photo.
         self.isolate_page = bool(isolate_page)
         # Credit / TL name dropped in the margin (movable per page in the editor).

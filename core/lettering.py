@@ -116,6 +116,16 @@ ROLE_SCALE = {"whisper": 0.92, "thought": 0.96}
 
 _SHOUT_RE = re.compile(r"[!?][!?]|[!]{1}\s*$")
 _TRAIL_RE = re.compile(r"(\.\.\.|…)\s*$")
+_SLANT_RE = re.compile(r"ital|oblique|slant")
+
+#: "Pro" lettering (the default): a scanlation page wears THREE faces — one
+#: upright dialogue face, one shout face, italic for thoughts — plus the
+#: display face for titles/SFX. Every other mood is set in the dialogue face
+#: (a whisper still comes out a touch smaller via ROLE_SCALE). Handing
+#: narration, gag lines and villains a face each read like a ransom note next
+#: to professional releases. "expressive" keeps the full per-mood table.
+PRO_FOLD = {"narration": "dialogue", "goofy": "dialogue", "eerie": "dialogue",
+            "whisper": "dialogue"}
 
 
 def infer_tone(text: str, kind: str = "", dark: bool = False) -> str:
@@ -138,8 +148,11 @@ def infer_tone(text: str, kind: str = "", dark: bool = False) -> str:
     letters = [c for c in t if c.isalpha()]
     caps = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
 
-    # A shout: exclamation, or written in capitals and short enough to be one.
-    if _SHOUT_RE.search(t) or (caps > 0.9 and len(letters) <= 24 and t.endswith("!")):
+    # A shout: a short burst, or a line that ends in three bangs. NOT merely
+    # "!!" — manga English ends ordinary lines with "!!" all the time, and
+    # treating each one as a scream put half the page in the shout face.
+    words = len(t.split())
+    if re.search(r"!{3}\s*$", t) or (words <= 3 and t.endswith("!")):
         return "shout"
     # White lettering on a black balloon is nearly always a shout or a scream.
     if dark and _SHOUT_RE.search(t + "!"):
@@ -217,8 +230,13 @@ def build_map(base_font: Optional[str] = None, fonts_dir: str = "fonts",
             # shouting cut of its own face. The shortest stem that contains the
             # name is the one that IS that name.
             w = _squash(want)
+            # An italic / oblique CUT only ever serves a role that asked for
+            # one by name. "meanwhilecc" is a substring of
+            # "meanwhileccitalic": with only the italic cut installed, every
+            # ordinary speech balloon on the page came out slanted.
+            slanted_ok = _SLANT_RE.search(w) is not None
             hits = [(len(stem), path) for stem, path in have.items()
-                    if w in stem]
+                    if w in stem and (slanted_ok or not _SLANT_RE.search(stem))]
             if hits:
                 pick = min(hits)[1]
                 break
@@ -230,12 +248,28 @@ def build_map(base_font: Optional[str] = None, fonts_dir: str = "fonts",
     return out
 
 
-def style_for(item: dict, font_map: Dict[str, str], base_font: str = ""):
-    """(font_path, italic, size_scale, role) for one region."""
+def style_for(item: dict, font_map: Dict[str, str], base_font: str = "",
+              variety: str = "pro"):
+    """(font_path, italic, size_scale, role) for one region.
+
+    `item["orig_rel"]`, when present, is the size of the ORIGINAL lettering
+    relative to the page's normal dialogue (measured from the raw strokes by
+    the compositor). The English copies that: ordinary dialogue lettered
+    noticeably bigger than its neighbours is a shout, noticeably smaller is
+    quiet — whatever the model guessed from the words alone."""
     role = normalise(item.get("tone", "")) or infer_tone(
         item.get("translation", ""), item.get("type", ""),
         bool(item.get("dark")))
-    path = font_map.get(role) or base_font
+    rel = item.get("orig_rel")
+    if rel and role in ("dialogue", "whisper", "shout"):
+        if rel >= 1.35:
+            role = "shout"
+        elif rel <= 0.7:
+            role = "whisper"
+        elif role == "shout" and rel <= 1.05:
+            role = "dialogue"      # "!!" in normal-sized lettering is speech
+    face_role = PRO_FOLD.get(role, role) if variety != "expressive" else role
+    path = font_map.get(face_role) or base_font
     # Synthetic slant only when the role FELL BACK to the page's own font —
     # that slant is what distinguishes a thought from speech when both wear
     # the same face. A font picked FOR the role is used as it was drawn:
