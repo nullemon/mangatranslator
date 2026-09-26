@@ -1051,7 +1051,12 @@ async def translate(
     LAST_TRANSLATE_TASK = task_id
     ext = Path(file.filename or "img.png").suffix or ".png"
     upload_path = f"uploads/{task_id}{ext}"
-    output_path = f"output/{task_id}{ext}"
+    # Maximum Quality promises no quality loss, so the finished page is saved
+    # lossless. It used to follow the upload's extension, which for the usual
+    # .jpg raw meant a fresh JPEG encode of the whole page on the way out —
+    # "Untouched (original pixels)" included. (Compress Output, if also on,
+    # still makes its JPEG afterwards, as asked.)
+    output_path = f"output/{task_id}{'.png' if max_quality == 'true' else ext}"
 
     # Maximum Quality keeps the upload uncompressed (full resolution end-to-end).
     # Webtoon strips must NOT be capped at the normal 4000px long side — that
