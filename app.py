@@ -2615,9 +2615,12 @@ async def rerender(task_id: str, request: Request):
                          if isinstance(c, dict) and c.get("restore_poly")]
         restore_clicks = [c["restore_click"] for c in covers
                           if isinstance(c, dict) and c.get("restore_click")]
+        # Restore clicks are handled below too; compose() would only trip
+        # over them in its plain-box fallback (int() of a dict key).
         erase_covers = [c for c in covers
                         if not (isinstance(c, dict)
-                                and (c.get("keep_poly") or c.get("restore_poly")))]
+                                and (c.get("keep_poly") or c.get("restore_poly")
+                                     or c.get("restore_click")))]
         comp = Compositor(t.get("font_path"), font_scale=font_scale,
                           uppercase=(t.get("text_case", "upper") != "keep"),
                           translate_sfx=bool(t.get("translate_sfx", False)),

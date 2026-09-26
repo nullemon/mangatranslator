@@ -616,6 +616,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .clone-dab{position:absolute;border:1px dashed #06b6d4;border-radius:50%;
   background:rgba(6,182,212,.12);z-index:4;cursor:pointer}
 .clone-dab:hover{background:rgba(6,182,212,.25)}
+/* Restore tool, click variant: a small amber target centred on the click. */
+.restore-click{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;
+  border:2px solid #f59e0b;border-radius:50%;background:rgba(245,158,11,.22);
+  box-shadow:0 0 0 2px rgba(255,255,255,.7);z-index:4;cursor:pointer}
+.restore-click:hover{background:rgba(245,158,11,.45)}
 
 /* ── Copy typesetting bar ────────────────────────────────────────────── */
 .style-bar{position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);

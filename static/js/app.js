@@ -2952,6 +2952,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return box;
   }
 
+  // Click-to-remove on any cover marker. Snapshotted for Undo like every
+  // other cover edit — a stray click used to throw a carefully drawn lasso
+  // away with no way back.
+  function removeCover(page, i) {
+    pushUndo(page);
+    page.covers.splice(i, 1);
+    buildOverlay();
+  }
+
   function buildOverlay() {
     const page = getActive();
     closeEditor();
@@ -2980,7 +2989,7 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("stroke-dasharray", "2 1.5");
         pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
-        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        svg.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(svg);
         return;
       }
@@ -2998,8 +3007,23 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("stroke-dasharray", "2 1.5");
         pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
-        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        svg.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(svg);
+        return;
+      }
+      if (cb && cb.restore_click) {   // restore-original click point
+        // This used to fall through to the box branch below: an object has no
+        // [0]..[3], so the marker got "NaN%" for every edge and the browser
+        // dropped it at the top-left corner as a bare "erase ✕" tag — the
+        // click could not be seen where it was made, nor removed on purpose.
+        const [px, py] = cb.restore_click;
+        const d = document.createElement("div");
+        d.className = "restore-click";
+        d.style.left = (px / W * 100) + "%";
+        d.style.top = (py / H * 100) + "%";
+        d.title = "Restore here (original comes back around this point) — click to remove";
+        d.addEventListener("click", () => { removeCover(page, i); });
+        moveLayer.appendChild(d);
         return;
       }
       if (cb && cb.clone) {   // clone-stamp dab
@@ -3011,7 +3035,7 @@ document.addEventListener("DOMContentLoaded", () => {
         d.style.width = (2 * c.r / W * 100) + "%";
         d.style.height = (2 * c.r / H * 100) + "%";
         d.title = "Clone dab — click to remove";
-        d.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        d.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(d);
         return;
       }
@@ -3038,7 +3062,7 @@ document.addEventListener("DOMContentLoaded", () => {
         hit.style.pointerEvents = "stroke";
         svg.appendChild(ln);
         svg.appendChild(hit);
-        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        svg.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(svg);
         return;
       }
@@ -3056,7 +3080,7 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("stroke-width", "0.5");
         pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
-        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        svg.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(svg);
         return;
       }
@@ -3073,14 +3097,14 @@ document.addEventListener("DOMContentLoaded", () => {
         pg.setAttribute("stroke-width", "0.5");
         pg.style.pointerEvents = "auto";     // only the shape itself is clickable
         svg.appendChild(pg);
-        svg.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+        svg.addEventListener("click", () => { removeCover(page, i); });
         moveLayer.appendChild(svg);
         return;
       }
       const box = makeBox(cb[0], cb[1], cb[2], cb[3], W, H, "cover-box");
       box.innerHTML = `<span class="ov-tag">erase ✕</span>`;
       box.title = "Click to remove this cover";
-      box.addEventListener("click", () => { page.covers.splice(i, 1); buildOverlay(); });
+      box.addEventListener("click", () => { removeCover(page, i); });
       moveLayer.appendChild(box);
     });
 
