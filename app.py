@@ -146,6 +146,24 @@ def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
                wm_style)
 
 
+def _mark_to_stamp(watermark, replace_watermark, items) -> str:
+    """The watermark to stamp on a finished translated page, if any.
+
+    "Replace With My Watermark" drops the user's mark where a site watermark
+    was erased, INSTEAD of stamping it. On a page with no site watermark
+    there is nothing to replace, and the mark used to vanish altogether: the
+    user typed a watermark and got pages without one. Replace now means "put
+    it there when there is a there"; otherwise the page is stamped as usual.
+    """
+    watermark = (watermark or "").strip()
+    if not watermark or not replace_watermark:
+        return watermark
+    replaced = any(isinstance(it, dict) and (it.get("erase") or
+                   str(it.get("type") or "").lower() == "watermark")
+                   for it in (items or []))
+    return "" if replaced else watermark
+
+
 def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
                wm_size="m", credit="", wm_style="clean"):
     """Stamp the user's watermark and/or credit line on ANY finished output
@@ -1347,14 +1365,15 @@ async def _run(
         # "Enhance & Translate" workflow, where it produces a SEPARATE image.
 
         # User watermark (corner by default; tiled optional). Skipped when
-        # "replace watermark" is on — there the user's mark is dropped in place
-        # of the erased site watermark instead.
+        # "replace watermark" put the user's mark in place of an erased site
+        # watermark on this page (see _mark_to_stamp).
         #
         # Called even when there is no watermark, so a page re-run with the
         # mark turned off drops the previous run's clean twin instead of
         # leaving it to be served as if it were current.
         _stamp_output(output_path,
-                      watermark if not replace_watermark else "",
+                      _mark_to_stamp(watermark, replace_watermark,
+                                     (result or {}).get("items")),
                       wm_place, wm_opacity, wm_size, "", wm_style)
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
@@ -2852,7 +2871,12 @@ async def rerender(task_id: str, request: Request):
         # Unconditional: a re-render rebuilds the page from scratch, so the
         # clean twin has to be rebuilt with it (or dropped, if the watermark
         # has since been cleared).
-        _stamp_output(r["output_path"], t.get("watermark", ""),
+        # The same stamp decision as the first render: this used to stamp
+        # the corner mark regardless, so a "Replace With My Watermark" page
+        # grew a second mark the first time Apply was pressed.
+        _stamp_output(r["output_path"],
+                      _mark_to_stamp(t.get("watermark", ""),
+                                     t.get("replace_watermark", False), all_items),
                       t.get("wm_place", "br"), t.get("wm_opacity", 50),
                       t.get("wm_size", "m"), "",
                       t.get("wm_style", "clean"))
