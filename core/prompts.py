@@ -148,6 +148,7 @@ Return ONLY a JSON array — no markdown fences, no commentary:
     "original": "original text",
     "translation": "{target_lang.upper()} TEXT",
     "type": "dialogue",
+    "tone": "dialogue",
     "in_bubble": true
   }}
 ]
@@ -173,6 +174,10 @@ Rules:
   "translation" empty — these are ERASED, not translated.
 - "in_bubble": true if the text is enclosed in a speech bubble or drawn box.
   Set to false for titles, credits, captions, watermarks, and any loose text.
+- "tone" is HOW the line is said, for choosing a typeface: "shout",
+  "whisper", "thought", "narration", "title", "sfx", "goofy", "eerie" or
+  "dialogue" for ordinary speech. Judge it from the panel — the face, the
+  balloon shape, the size of the original lettering.
 {_sfx_rule(translate_sfx)}
 - Do NOT include tiny furigana readings above kanji.
 - Return ONLY the JSON array.{_style_block(style)}"""

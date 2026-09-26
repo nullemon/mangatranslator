@@ -846,6 +846,11 @@ def probe_components() -> Dict[str, Any]:
     return out
 
 
+# Item fields the stored result carries through to the editor and every
+# re-render (see _result), beyond the always-present basics.
+_KEEP_ON_ITEM = ("tone", "title_caption", "src_rect", "credit")
+
+
 class TranslationPipeline:
     def __init__(
         self,
@@ -1565,6 +1570,11 @@ class TranslationPipeline:
                     "original": tr.get("original", ""),
                     "translation": tr.get("translation", ""),
                     "type": tr.get("type", "dialogue"),
+                    # How the line is said, as the translator judged it from
+                    # the panel — what Font per mood picks the face from.
+                    # It was asked for in every prompt and then dropped here,
+                    # so the mood fonts only ever saw the text-based guess.
+                    "tone": tr.get("tone", ""),
                     "in_bubble": True,
                     "dark": bool(getattr(r, "dark", False)),
                 })
@@ -2537,6 +2547,7 @@ class TranslationPipeline:
                 "translation": det.get("translation", ""),
                 "type": det.get("type", "dialogue"),
                 "in_bubble": det.get("in_bubble", True),
+                "tone": det.get("tone", ""),
                 "dark": False,
                 "rotation": rotation,
             })
@@ -2696,6 +2707,7 @@ class TranslationPipeline:
                     "original": best.get("original", ""),
                     "translation": best.get("translation", ""),
                     "type": best.get("type", "dialogue"),
+                    "tone": best.get("tone", ""),
                     "in_bubble": True,
                     "dark": bool(getattr(reg, "dark", False)),
                     "rotation": 0.0,
@@ -2834,6 +2846,13 @@ class TranslationPipeline:
                     "dark": it.get("dark", False),
                     "placed": it.get("placed", False),
                     "rotation": it.get("rotation", 0),
+                    # What a re-render needs to set the line the SAME way
+                    # again. Dropped here, the first Apply after a translate
+                    # changed things nobody touched: the title banner lost
+                    # its modest-caption treatment and was refitted to the
+                    # size of the artwork lettering, and every line lost the
+                    # voice its mood font was picked from.
+                    **{k: it[k] for k in _KEEP_ON_ITEM if it.get(k)},
                 }
                 for it in items
             ],

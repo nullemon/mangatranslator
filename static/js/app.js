@@ -2695,7 +2695,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // Detected lines, then the ones added by hand (Add / Type text / Point
     // translate) — those were left out, so a typed-in line never made it
     // into the .txt.
-    const items = (page && page.items || []).concat(page && page.added || [])
+    // A skipped (✕) or erased (⌫) line is not on the page, so it is not in
+    // the transcript either — whether or not Apply has been pressed since.
+    const off = id => (page.excluded && page.excluded.has(String(id)))
+      || (page.erased && page.erased.has(String(id)));
+    const items = (page && page.items || []).filter(it => !off(it.id))
+      .concat(page && page.added || [])
       .filter(it => (it.translation || "").trim());
     if (!items.length) return "";
     const head = `${page.name || "page"} — ${items.length} lines\n${"=".repeat(40)}\n\n`;

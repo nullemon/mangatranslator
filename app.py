@@ -2624,6 +2624,19 @@ async def rerender(task_id: str, request: Request):
     # it["bbox"] in place while placing, which would drift the same way.)
     detected = {str(it["id"]): (list(it["bbox"]), it.get("rotation", 0))
                 for it in r.get("items", [])}
+    # And what each line IS, kept apart from how this render shows it. Skip
+    # (✕) and ⌫ are view states the editor sends with every render; writing
+    # their blanked text and "watermark" type back into the stored result
+    # made them one-way: un-skipping a bubble brought back an empty box,
+    # because the translation itself had been overwritten with "".
+    kept = {}
+    for it in r.get("items", []):
+        nid = str(it["id"])
+        kept[nid] = {
+            "translation": edits.get(nid, it.get("translation", "")),
+            "type": it.get("type", ""),
+            **{k: it[k] for k in ("tone", "credit") if it.get(k)},
+        }
 
     items = []
     for it in r.get("items", []):
@@ -2828,12 +2841,13 @@ async def rerender(task_id: str, request: Request):
             "id": it["id"],
             "bbox": detected.get(str(it["id"]), (it["bbox"], 0))[0],
             "original": it["original"],
-            "translation": it["translation"], "type": it["type"],
             "in_bubble": it["in_bubble"], "dark": it.get("dark", False),
             "placed": it.get("placed", False),
             "rotation": detected.get(str(it["id"]), (None, it.get("rotation", 0)))[1],
             "src_rect": it.get("src_rect"),
             "title_caption": it.get("title_caption", False),
+            **kept.get(str(it["id"]), {"translation": it["translation"],
+                                       "type": it["type"]}),
         }
         for it in items
     ]
@@ -2849,7 +2863,7 @@ async def rerender(task_id: str, request: Request):
         str(it["id"]): {
             "original": it["original"], "translation": it["translation"], "type": it["type"]
         }
-        for it in items
+        for it in r["items"]
     }
     r["num_translated"] = sum(1 for it in all_items if it.get("placed"))
 
