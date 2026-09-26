@@ -2524,7 +2524,14 @@ async def rerender(task_id: str, request: Request):
             text = ""
         # Marked "erase" in the editor: wipe the region from the art and place
         # no text (for a watermark/garbage region the AI typeset by mistake).
-        if nid in erased:
+        # A credit is OUR overlay on a plate that never held it, so there is
+        # nothing under its box to erase: ⌫ on one used to heal the whole
+        # box and chew the art beneath (balloon lettering, borders) — it just
+        # means "don't draw it".
+        is_credit = bool(it.get("credit")) or it.get("type") == "credit"
+        if nid in erased and is_credit:
+            text = ""
+        if nid in erased and not is_credit:
             items.append({
                 "id": it["id"], "bbox": _bbox(nid, it["bbox"]), "original": it.get("original", ""),
                 "translation": "", "type": "watermark", "erase": True,
