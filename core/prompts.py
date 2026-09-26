@@ -390,9 +390,46 @@ def extract_json_object(text: str) -> dict:
     raise ValueError(f"Could not parse JSON object from model response: {text[:300]}")
 
 
+# Japanese typography that has no business in English lettering. A model
+# faithfully carries it across ("「CONQUEROR'S HAKI」を", "AAAH〜〜", "NOPE———",
+# "WHAT!?"), and a release letterer strips it every time: brackets and wave
+# dashes go, a run of long dashes becomes one, "!?" is written "?!".
+_JP_BRACKETS = str.maketrans("", "", "「」『』〝〟〈〉《》【】〔〕")
+_FULLWIDTH = str.maketrans({"！": "!", "？": "?", "，": ",", "：": ":", "；": ";",
+                            "（": "(", "）": ")", "　": " "})
+
+
+def tidy_translation(text: str) -> str:
+    """Normalise a model's English for lettering (see _JP_BRACKETS above).
+    Only typography changes — never wording."""
+    if not isinstance(text, str) or not text:
+        return text
+    t = text.translate(_JP_BRACKETS).translate(_FULLWIDTH)
+    t = re.sub(r"[〜～~]+", "", t)                      # wave dashes / elongation
+    t = re.sub(r"[ーｰ]{2,}", "", t)                     # katakana long-vowel runs
+    t = re.sub(r"[―—–─━]{2,}", "—", t)                 # a run of long dashes → one
+    t = t.replace("…", "...")
+    t = re.sub(r"!\?", "?!", t)                         # English writes ?! not !?
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r" *\n *", "\n", t)
+    return t.strip()
+
+
+def _tidy_items(arr: list) -> list:
+    for it in arr:
+        if isinstance(it, dict) and isinstance(it.get("translation"), str):
+            it["translation"] = tidy_translation(it["translation"])
+    return arr
+
+
 def extract_json_array(text: str) -> list:
     """Robustly pull a JSON array out of a model response that may include
-    markdown fences or stray prose."""
+    markdown fences or stray prose. Every item's "translation" is tidied of
+    Japanese typography on the way out (tidy_translation)."""
+    return _tidy_items(_extract_json_array_raw(text))
+
+
+def _extract_json_array_raw(text: str) -> list:
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
