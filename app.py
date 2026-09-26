@@ -345,9 +345,10 @@ def _clear_spot(img, tw, th, place, keepout):
     The chosen corner is honoured whenever it is actually free — "bottom
     right" should stay bottom right, and quietly relocating a mark the user
     positioned is its own kind of wrong. Only when the preferred spot lands on
-    text does this look elsewhere, trying the same corner nudged along the
-    edge first and the other corners after that, so the mark moves as little
-    as it can get away with.
+    text does this look elsewhere: the same corner nudged along the edge,
+    then anywhere clear in that corner's quarter of the page, and only then
+    the other corners, so the mark moves as little as it can get away with.
+    The whole mark always fits on the page.
     """
     h, w = img.shape[:2]
     m = max(12, int(w * 0.015))
@@ -366,45 +367,72 @@ def _clear_spot(img, tw, th, place, keepout):
 
     corners = {"br": (w - tw - m, h - th - m), "bl": (m, h - th - m),
                "tr": (w - tw - m, m), "tl": (m, m)}
-    order = ([place] if place in corners else []) + \
-            [c for c in ("br", "bl", "tr", "tl") if c != place]
+    home = place if place in corners else "br"
 
-    cands = []
-    for c in order:
+    def nudged(c):
         cx, cy = corners[c]
-        cands.append((cx, cy))
+        out = [(cx, cy)]
         # Same corner, nudged: along its edge, then inward. A mark that shifts
         # a little still reads as "in the corner".
         for d in (1, 2, 3):
             step = int(th * 0.9 * d)
-            cands.append((cx, cy - step if c in ("br", "bl") else cy + step))
+            out.append((cx, cy - step if c in ("br", "bl") else cy + step))
             side = int(tw * 0.35 * d)
-            cands.append((cx - side if c in ("br", "tr") else cx + side, cy))
+            out.append((cx - side if c in ("br", "tr") else cx + side, cy))
+        return out
 
-    for x, y in cands:
-        if hits(x, y) == 0:
-            return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
+    def first_free(cands):
+        for x, y in cands:
+            if hits(x, y) == 0:
+                return int(np.clip(x, 0, w - tw)), int(np.clip(y, 0, h - th))
+        return None
 
-    # Nowhere clear in a corner — take the emptiest spot in the QUARTER of the
-    # page the user's corner is in. This used to sweep the whole page, and on
-    # a busy action page (where the keep-out covers most of it and no corner
-    # is ever free) "bottom right" came out beside the SFX at the top left.
-    # A mark that crosses a little art but sits where it was put is the
-    # lesser wrong; the user chose the corner, not the page's emptiest inch.
-    home = place if place in corners else "br"
-    x_lo = w // 2 if home in ("br", "tr") else m
-    x_hi = w - tw - m if home in ("br", "tr") else w // 2 - tw
-    y_lo = h // 2 if home in ("br", "bl") else m
-    y_hi = h - th - m if home in ("br", "bl") else h // 2 - th
-    best, score = corners.get(place, (m, m)), None
-    for y in range(y_lo, max(y_lo + 1, y_hi), max(8, th // 2)):
-        for x in range(x_lo, max(x_lo + 1, x_hi), max(8, tw // 3)):
-            s = hits(x, y)
-            if score is None or s < score:
-                score, best = s, (x, y)
-                if s == 0:
-                    return best
-    return int(np.clip(best[0], 0, w - tw)), int(np.clip(best[1], 0, h - th))
+    # The QUARTER of the page the user's corner is in, as positions where the
+    # WHOLE mark fits. Clamped to that range first: a long mark (a full URL)
+    # is wider than half the page, and sweeping from the page's middle
+    # rightwards used to hand back a spot where the text ran off the edge —
+    # "kaisuki.com/g/o" and the rest cut away.
+    hx, hy = corners[home]
+    x_max, y_max = max(0, w - tw - m), max(0, h - th - m)
+    x_min, y_min = min(m, x_max), min(m, y_max)
+    if home in ("br", "tr"):
+        x_lo, x_hi = min(max(x_min, w // 2), x_max), x_max
+    else:
+        x_lo, x_hi = x_min, max(x_min, min(w // 2 - tw, x_max))
+    if home in ("br", "bl"):
+        y_lo, y_hi = min(max(y_min, h // 2), y_max), y_max
+    else:
+        y_lo, y_hi = y_min, max(y_min, min(h // 2 - th, y_max))
+    xs = list(range(x_lo, x_hi + 1, max(8, tw // 3))) + [x_hi]
+    ys = list(range(y_lo, y_hi + 1, max(8, th // 2))) + [y_hi]
+    # Emptiest first; among equals, nearest the chosen corner — so a clear
+    # spot a little up from "bottom right" beats one just below the middle
+    # of the page that a top-down sweep happened to reach first.
+    quarter = sorted((hits(x, y), abs(x - hx) + abs(y - hy), x, y)
+                     for y in ys for x in xs)
+
+    # 1) The chosen corner, or nudged along its edge.
+    spot = first_free(nudged(home))
+    if spot:
+        return spot
+    # 2) Anywhere clear in that corner's quarter — still where it was put.
+    #    Going to another corner first sent a "bottom right" mark to the top
+    #    left whenever the bottom-right corner itself held lettering, though
+    #    there was room a few lines up.
+    if quarter and quarter[0][0] == 0:
+        return int(quarter[0][2]), int(quarter[0][3])
+    # 3) The other corners.
+    spot = first_free([xy for c in ("br", "bl", "tr", "tl") if c != home
+                       for xy in nudged(c)])
+    if spot:
+        return spot
+    # 4) Nowhere clear at all: the emptiest spot in the chosen quarter. This
+    #    used to sweep the whole page, and on a busy action page "bottom
+    #    right" came out beside the SFX at the top left. A mark that crosses
+    #    a little art but sits where it was put is the lesser wrong; the user
+    #    chose the corner, not the page's emptiest inch.
+    best = quarter[0]
+    return int(np.clip(best[2], 0, w - tw)), int(np.clip(best[3], 0, h - th))
 
 
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
