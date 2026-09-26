@@ -396,10 +396,40 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .orient-note{font-size:.82rem;color:var(--accent);margin-left:auto}
 
 /* ── On-image edit tools (move · edit · cover · add) ── */
-.edit-toolbar{display:flex;align-items:center;gap:.7rem;margin-bottom:.8rem;flex-wrap:wrap}
-.tool-group{display:flex;gap:.35rem;flex-wrap:wrap}
+.edit-toolbar{display:flex;flex-direction:column;gap:.6rem;margin-bottom:.8rem}
+/* Tools sit in labelled clusters (Adjust · Erase & repair · Add text ·
+   History); whole clusters wrap onto the next line on narrow screens. */
+.tool-group{display:flex;gap:.5rem;flex-wrap:wrap;align-items:stretch}
+.tool-cluster{
+  display:flex;flex-direction:column;gap:.35rem;min-width:0;
+  padding:.4rem .5rem .5rem;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--r-lg);
+}
+.tool-cluster-history{margin-left:auto}
+.tool-cluster-label{
+  font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;font-weight:700;
+  color:var(--text-dim);padding-left:.15rem;line-height:1.2;
+}
+.tool-cluster-btns{display:flex;gap:.3rem;flex-wrap:wrap}
+.tool-cluster-btns .btn-sm{height:30px;padding:0 .65rem;font-size:.78rem;font-weight:600;gap:.3rem}
 .tool-btn{font-weight:600}
-.edit-hint{font-size:.8rem;color:var(--text-dim);flex:1;min-width:140px}
+/* The active tool: filled with the accent colour and ringed, so it reads
+   at a glance (app.js marks it by swapping btn-ghost for btn-primary). */
+.tool-btn.btn-primary{
+  background:var(--accent);border-color:var(--accent);color:#fff;
+  box-shadow:0 0 0 2px var(--ring),var(--shadow-sm);
+}
+.tool-btn.btn-primary:hover{background:var(--accent);filter:brightness(1.08)}
+.edit-hint-row{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.edit-hint{
+  flex:1;min-width:200px;font-size:.84rem;line-height:1.4;color:var(--text);
+  padding:.45rem .75rem;border-radius:var(--r);
+  background:var(--surface-2);border:1px solid var(--border);border-left:3px solid var(--border-strong);
+}
+/* with a tool picked, the hint is the instruction to follow — make it stand out */
+.edit-toolbar:has(.tool-btn.btn-primary) .edit-hint{
+  background:var(--accent-soft);border-color:var(--accent);border-left-color:var(--accent);
+}
 .trans-stage{position:relative;display:block;line-height:0}
 .move-layer{position:absolute;inset:0;display:none}
 .move-layer.on{display:block}

@@ -650,29 +650,53 @@
 
         <div class="tab-panel" id="panel-translated">
           <div class="edit-toolbar">
-            <div class="tool-group">
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="move" title="Drag a translation to reposition it">✥ Move</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="resize" title="Drag the handles to resize/reshape a text box so words fit better">⤢ Resize</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="edit" title="Click a translation to fix its text">✎ Edit</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="cover" title="Drag a box over a watermark or leftover text to erase it">⌫ Erase</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso" title="Draw a free-form shape around anything (weird shapes) — content-aware erases it">⬡ Lasso erase</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="vert-add" title="Drag a box over a TALL vertical text run — it's read &amp; translated, and the English is typeset VERTICALLY (sideways, reading bottom-to-top)">↕ Vertical translate</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="type-add" title="Drag a box, then TYPE the original Japanese/Korean yourself using the built-in keyboard (type it how it sounds, or click the characters) — for text the reader can't make out">あ Type text</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso-add" title="Draw a free-form shape over weird-shaped/missed text — it reads &amp; translates it">⬡＋ Lasso translate</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="pen-add" title="Pen select: CLICK points around the text to build a custom shape (click the first point or press Enter to close). Only what's inside is read, and the translation stays inside your shape.">⬠ Point translate</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="keep" title="Draw around the page — everything OUTSIDE the outline becomes white (removes carpet/floor/background)">⬚ Remove BG</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="tone-poly" title="TONE FILL: click points around a hole in a screentone area — it's filled with a dot pattern matched to the tone around it, instead of a flat colour that would look like a patch">▦ Tone fill</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="clone" title="CLONE STAMP: click a clean patch of art to copy FROM, then click (or drag) over the damage to paint it in. Best for textured art — hatching, screentone, gradients — where a flat fill shows.">⎘ Clone stamp</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="line" title="LINE: click two points to redraw a straight line — panel borders and rules that cleaning ate. Thickness and colour are adjustable.">╱ Line</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="fill-poly" title="REDRAW: click points around a damaged/leftover area to outline it, sample a colour from the surrounding art (or pick your own), and flood-fill the shape — rebuilds flat backgrounds, black panels and tone gaps">🪣 Redraw fill</button>
-              <button class="btn btn-ghost btn-sm tool-btn" data-tool="restore" title="Paint over a spot where cleaning damaged the art — the ORIGINAL pixels come back exactly as drawn (brings back any original text there too)">⟲ Restore</button>
-              <button class="btn btn-ghost btn-sm" id="rescanBtn" title="Re-scan this page with AI and add any text it missed (keeps your edits)">🔍 Find missed text</button>
-              <button class="btn btn-ghost btn-sm" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
-              <button class="btn btn-ghost btn-sm" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+            <!-- Grouped by what the tool is for; the buttons and what they do are
+                 unchanged (app.js finds them by .tool-btn / data-tool / id). -->
+            <div class="tool-group" role="toolbar" aria-label="Editing tools">
+              <div class="tool-cluster" role="group" aria-label="Adjust">
+                <span class="tool-cluster-label">Adjust</span>
+                <div class="tool-cluster-btns">
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="move" title="Drag a translation to reposition it">✥ Move</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="resize" title="Drag the handles to resize/reshape a text box so words fit better">⤢ Resize</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="edit" title="Click a translation to fix its text">✎ Edit</button>
+                </div>
+              </div>
+              <div class="tool-cluster" role="group" aria-label="Erase &amp; repair">
+                <span class="tool-cluster-label">Erase &amp; repair</span>
+                <div class="tool-cluster-btns">
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="cover" title="Drag a box over a watermark or leftover text to erase it">⌫ Erase</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso" title="Draw a free-form shape around anything (weird shapes) — content-aware erases it">⬡ Lasso erase</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="restore" title="Paint over a spot where cleaning damaged the art — the ORIGINAL pixels come back exactly as drawn (brings back any original text there too)">⟲ Restore</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="fill-poly" title="REDRAW: click points around a damaged/leftover area to outline it, sample a colour from the surrounding art (or pick your own), and flood-fill the shape — rebuilds flat backgrounds, black panels and tone gaps">🪣 Redraw fill</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="tone-poly" title="TONE FILL: click points around a hole in a screentone area — it's filled with a dot pattern matched to the tone around it, instead of a flat colour that would look like a patch">▦ Tone fill</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="clone" title="CLONE STAMP: click a clean patch of art to copy FROM, then click (or drag) over the damage to paint it in. Best for textured art — hatching, screentone, gradients — where a flat fill shows.">⎘ Clone stamp</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="line" title="LINE: click two points to redraw a straight line — panel borders and rules that cleaning ate. Thickness and colour are adjustable.">╱ Line</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="keep" title="Draw around the page — everything OUTSIDE the outline becomes white (removes carpet/floor/background)">⬚ Remove BG</button>
+                </div>
+              </div>
+              <div class="tool-cluster" role="group" aria-label="Add text">
+                <span class="tool-cluster-label">Add text</span>
+                <div class="tool-cluster-btns">
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="add" title="Drag a box over missed text — it auto-OCRs &amp; translates (edit before placing)">＋ Add</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="vert-add" title="Drag a box over a TALL vertical text run — it's read &amp; translated, and the English is typeset VERTICALLY (sideways, reading bottom-to-top)">↕ Vertical translate</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="type-add" title="Drag a box, then TYPE the original Japanese/Korean yourself using the built-in keyboard (type it how it sounds, or click the characters) — for text the reader can't make out">あ Type text</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="lasso-add" title="Draw a free-form shape over weird-shaped/missed text — it reads &amp; translates it">⬡＋ Lasso translate</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="pen-add" title="Pen select: CLICK points around the text to build a custom shape (click the first point or press Enter to close). Only what's inside is read, and the translation stays inside your shape.">⬠ Point translate</button>
+                  <button class="btn btn-ghost btn-sm" id="rescanBtn" title="Re-scan this page with AI and add any text it missed (keeps your edits)">🔍 Find missed text</button>
+                </div>
+              </div>
+              <div class="tool-cluster tool-cluster-history" role="group" aria-label="History">
+                <span class="tool-cluster-label">History</span>
+                <div class="tool-cluster-btns">
+                  <button class="btn btn-ghost btn-sm" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+                  <button class="btn btn-ghost btn-sm" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+                </div>
+              </div>
             </div>
-            <span class="edit-hint" id="editHint">Pick a tool to fix anything by hand.</span>
-            <button class="btn btn-primary btn-sm" id="editApply" style="display:none">Apply &amp; Re-render</button>
+            <div class="edit-hint-row">
+              <span class="edit-hint" id="editHint">Pick a tool to fix anything by hand.</span>
+              <button class="btn btn-primary btn-sm" id="editApply" style="display:none">Apply &amp; Re-render</button>
+            </div>
           </div>
           <div class="trans-stage" id="transStage">
             <img id="transFull" class="full-img" alt="Translated">
