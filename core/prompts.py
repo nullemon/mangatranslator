@@ -311,6 +311,9 @@ Rules:
   フッ = *SMIRK*, etc.) are "dialogue" — translate them into an expressive
   English word wrapped in asterisks (e.g. *GRIN*). Only mark loud dramatic
   sound effects (ドーン, バキ, ゴゴゴ) as "sfx".
+- Small sound / reaction words inside speech bubbles become natural English
+  onomatopoeia that fits the action (にゅっ as a limb regrows = SCHLOOP!,
+  ハァ ハァ panting = HUFF... HUFF...), never a transliteration like NYA or HAH.
 - If an entry's text is empty or unreadable, return an empty translation for it.
 - Return ONLY the JSON array.{_style_block(style)}"""
 
