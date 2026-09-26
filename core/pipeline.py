@@ -1140,6 +1140,14 @@ class TranslationPipeline:
                 print(f"[pipeline] upscaled to {image.shape[1]}x{image.shape[0]}")
             except Exception as e:
                 print(f"[pipeline] upscale failed, continuing as-is: {e}")
+        elif (self.upscale_on and max(image.shape[:2]) < 2000
+              and progress_cb):
+            # HD was asked for and cannot happen: say so on the page (the
+            # task's "warning"), not only in the console — the page used to
+            # come back at its own size looking as if HD had run.
+            why = (self.upscaler.why if self.upscaler is not None
+                   else "the upscaler could not be set up")
+            progress_cb({"warning": f"⚠ HD Upscale skipped: {why}."})
 
         base_path = self._base_path(output_path)
         cv2.imwrite(base_path, image)

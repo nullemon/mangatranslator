@@ -1251,6 +1251,11 @@ async def _run(
         )
 
         def on_progress(update):
+            # A pipeline warning adds to one the scan step left, rather than
+            # replacing it.
+            prev = tasks[task_id].get("warning")
+            if update.get("warning") and prev and update["warning"] not in prev:
+                update = dict(update, warning=prev + "\n" + update["warning"])
             tasks[task_id].update(update)
 
         # "Cut into pieces" (SBS): translate each drawn region on its own and
