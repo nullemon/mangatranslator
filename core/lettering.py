@@ -256,7 +256,8 @@ def style_for(item: dict, font_map: Dict[str, str], base_font: str = "",
     relative to the page's normal dialogue (measured from the raw strokes by
     the compositor). The English copies that: ordinary dialogue lettered
     noticeably bigger than its neighbours is a shout, noticeably smaller is
-    quiet — whatever the model guessed from the words alone."""
+    quiet. A model-given "shout" is kept even at normal size: attack
+    call-outs are lettered normal-sized but still take the heavy face."""
     role = normalise(item.get("tone", "")) or infer_tone(
         item.get("translation", ""), item.get("type", ""),
         bool(item.get("dark")))
@@ -266,8 +267,6 @@ def style_for(item: dict, font_map: Dict[str, str], base_font: str = "",
             role = "shout"
         elif rel <= 0.7:
             role = "whisper"
-        elif role == "shout" and rel <= 1.05:
-            role = "dialogue"      # "!!" in normal-sized lettering is speech
     face_role = PRO_FOLD.get(role, role) if variety != "expressive" else role
     path = font_map.get(face_role) or base_font
     # Synthetic slant only when the role FELL BACK to the page's own font —

@@ -184,8 +184,49 @@ class Compositor:
                 return result
         return cv2.inpaint(result, text_mask, 5, cv2.INPAINT_TELEA)
 
-    @classmethod
-    def _drop_sfx_blocks(cls, gray, mask, blocks, ratio=1.9):
+    def _clear_residual_strokes(self, result, box, dark, mask=None):
+        """After a balloon wipe, paint out text strokes that survived it. A
+        glyph touching the balloon outline can cut a pocket off the recovered
+        interior (the last キ of a パキパキ sat in one), so the wipe never
+        reached it. Only strokes the text model marks inside this line's own
+        box AND inside the balloon (its convex hull, pulled in off the inked
+        outline) are touched, and they are painted with the balloon's OWN
+        fill tone — a grey balloon stays grey, the outline stays."""
+        if self._seg_mask is None or dark or mask is None:
+            return
+        H, W = result.shape[:2]
+        x, y, w, h = [int(v) for v in box]
+        x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
+        if x1 - x0 < 6 or y1 - y0 < 6:
+            return
+        pts = cv2.findNonZero(mask)
+        if pts is None:
+            return
+        hull = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(hull, [cv2.convexHull(pts)], 255)
+        hull = cv2.erode(hull, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+        inside = hull[y0:y1, x0:x1] > 0
+        seg = (self._seg_mask[y0:y1, x0:x1] > 0) & inside
+        if int(seg.sum()) < 30:
+            return
+        crop = result[y0:y1, x0:x1]
+        g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        # the balloon's fill, read from its (already wiped) interior
+        interior = cv2.erode(mask, np.ones((7, 7), np.uint8)) > 0
+        tone_px = result[interior]
+        if tone_px.size < 30:
+            return
+        tone = np.median(tone_px.reshape(-1, 3), axis=0).astype(np.uint8)
+        tl = float(0.114 * tone[0] + 0.587 * tone[1] + 0.299 * tone[2])
+        live = seg & (g < tl - 60)
+        if int(live.sum()) < 25:
+            return
+        near = cv2.dilate(live.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+        fill = (cv2.dilate(live.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0) \
+            | (near & (np.abs(g.astype(np.int16) - int(tl)) > 20))
+        crop[fill & inside] = tone
+
+    def _drop_sfx_blocks(self, gray, mask, blocks, ratio=1.9):
         """Remove hand-lettered SFX the block detector boxed as text (a small
         ドキドキ beside a face, パキパキ in a little bubble). Sound effects are
         lettered far bigger than the page's dialogue — measured 2.3-2.5x on real
@@ -193,7 +234,7 @@ class Compositor:
         glyphs are `ratio` times the page's typical size keeps its strokes."""
         if not blocks or len(blocks) < 3 or cv2.countNonZero(mask) == 0:
             return mask
-        sizes = [(b, cls._glyph_px(gray, mask, b)) for b in blocks]
+        sizes = [(b, self._glyph_px(gray, mask, b)) for b in blocks]
         vals = [s for _b, s in sizes if s]
         if len(vals) < 3:
             return mask
@@ -203,6 +244,12 @@ class Compositor:
         dropped = 0
         for (x, y, w, h), s in sizes:
             if s and med > 0 and s / med >= ratio:
+                # A sound INSIDE a balloon (パキパキ in a little speech bubble)
+                # is lettering to be replaced like any line; only SFX drawn
+                # on the art itself are left alone.
+                rb = self._resolve_bubble(gray, (x, y, w, h), H * W)
+                if rb is not None:
+                    continue
                 out[max(0, y):min(H, y + h), max(0, x):min(W, x + w)] = 0
                 dropped += 1
         if dropped:
@@ -860,7 +907,16 @@ class Compositor:
                     rmask, rbb, rdark = resolved
                     box_area = max(bw * bh, 1)
                     ratio = rbb[2] * rbb[3] / box_area
-                    if ratio <= 2.6:
+                    # How much of the text box the recovered region encloses.
+                    # A short line in a big balloon (a one-kanji call-out in a
+                    # round balloon, three words in a burst) is routinely 3-4x
+                    # its text box; rejecting those squeezed the English into
+                    # the tiny original text box — the small type the
+                    # competitor comparison showed. A LEAK into background is
+                    # told apart by not actually enclosing the box.
+                    enclosed = cv2.countNonZero(
+                        rmask[max(0, by):by + bh, max(0, bx):bx + bw]) / float(box_area)
+                    if ratio <= 2.6 or (ratio <= 9.0 and enclosed >= 0.85):
                         mask, dark = rmask, rdark
                     elif ratio <= 9.0 and self._seg_mask is not None:
                         # The recovered balloon is far larger than the AI box.
@@ -907,6 +963,7 @@ class Compositor:
                     continue
                 used_boxes.append(bb)
                 self._wipe(result, mask, dark)
+                self._clear_residual_strokes(result, (bx, by, bw, bh), dark, mask)
                 inner = self._inner_rect(mask)
                 rect = inner or (bb[0] + 2, bb[1] + 2,
                                  max(bb[2] - 4, 10), max(bb[3] - 4, 10))
@@ -1087,8 +1144,16 @@ class Compositor:
                 self._balloon_why = "dark shape with no light lettering"
                 return False
         else:
-            self._balloon_why = f"mid-gray interior (median {med:.0f}) = artwork"
-            return False
+            # A TONED balloon (flat grey fill — a common way to letter a sound
+            # or an aside) is one flat tone around its lettering; screentone
+            # or shaded art is not flat at the pixel level. Refusing every
+            # grey interior sent grey balloons down the stroke-only path,
+            # which chewed the outline and smeared the art round it.
+            flat_mid = float((np.abs(vals.astype(np.int16) - int(med)) <= 14).mean())
+            if not (has_text and flat_mid >= 0.8):
+                self._balloon_why = f"mid-gray interior (median {med:.0f}) = artwork"
+                return False
+            body = vals[np.abs(vals.astype(np.int16) - int(med)) <= 40]
         if body.size < 50:
             self._balloon_why = "too little paper to judge"
             return False
@@ -1618,6 +1683,22 @@ class Compositor:
         # Keep only ink inside the drawn box.
         box = np.zeros_like(gwin)
         box[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0] = 255
+        # THICK strokes: deviation from a blurred background only catches a
+        # fat stroke's edges — the blur sinks inside it — so the black cores
+        # of bold lettering / a boxed SFX (ザザザ over speed lines) survived as
+        # blobs. Take dark regions in the box that are STROKE-shaped (thin
+        # relative to the box); a big solid area (a coat, a shadow) is a blob,
+        # not a stroke, and is left to the whole-box rule below.
+        dark = ((gwin < 80) & (box > 0)).astype(np.uint8)
+        if dark.any():
+            n_, lab_, _st, _c = cv2.connectedComponentsWithStats(dark, 8)
+            dt_ = cv2.distanceTransform(dark, cv2.DIST_L2, 3)
+            maxdt = np.zeros(n_, np.float32)
+            np.maximum.at(maxdt, lab_.ravel(), dt_.ravel())
+            limit = max(6.0, 0.30 * min(bw, bh))
+            keep = (2.0 * maxdt <= limit)
+            keep[0] = False
+            ink = cv2.bitwise_or(ink, (keep[lab_] * 255).astype(np.uint8))
         ink = cv2.bitwise_and(ink, box)
         # Grow strokes so antialiased edges and thin serifs are fully covered.
         k = int(np.clip(min(bw, bh) // 50, 2, 6))
@@ -2090,19 +2171,38 @@ class Compositor:
             break
         if lbl in border:
             lbl = 0
-        if lbl == 0:
-            best, best_a = 0, 0
-            for i in range(1, num):
-                if i in border:
-                    continue
-                a = stats[i, cv2.CC_STAT_AREA]
-                if a > best_a:
-                    best, best_a = i, a
-            lbl = best
+        # Box coordinates inside the search window.
+        bx0, by0 = max(0, x - x0), max(0, y - y0)
+        bx1, by1 = min(rw, x + bw - x0), min(rh, y + bh - y0)
+        if lbl == 0 and bx1 > bx0 and by1 > by0:
+            # The centre sat on a glyph stroke (a big bold kanji guarantees
+            # it). Take the enclosed white region that fills the most of THIS
+            # box — the balloon the text is actually in. The old fallback took
+            # the LARGEST enclosed region anywhere in the window, and the
+            # retry window reaches 600 px: a small balloon's translation was
+            # being typeset into a big balloon in another panel, whose own line
+            # was then skipped as a collision — "box 1's text in box 2".
+            inside = labels[by0:by1, bx0:bx1].ravel()
+            counts = np.bincount(inside, minlength=num)
+            counts[0] = 0
+            for b_ in border:
+                if 0 <= b_ < num:
+                    counts[b_] = 0
+            best = int(np.argmax(counts)) if counts.size else 0
+            if best and counts[best] >= 0.08 * (bx1 - bx0) * (by1 - by0):
+                lbl = best
         if lbl == 0:
             return None
 
         comp = (labels == lbl).astype(np.uint8) * 255
+        # Whatever was picked must actually hold this box: a recovered balloon
+        # that barely touches the text box is somebody else's balloon.
+        if bx1 > bx0 and by1 > by0:
+            span = comp[by0:by1, bx0:bx1]
+            box_area = (bx1 - bx0) * (by1 - by0)
+            filled_in = cv2.countNonZero(span)
+            if filled_in < 0.08 * box_area:
+                return None
         cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
             return None
@@ -2370,8 +2470,18 @@ class Compositor:
         win = cv2.cvtColor(result[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
         rows = slice(max(y, wy0) - wy0, max(min(y + rh, wy1) - wy0, max(y, wy0) - wy0 + 1))
         cols = slice(max(x, wx0) - wx0, max(min(x + rw, wx1) - wx0, max(x, wx0) - wx0 + 1))
-        quiet_col = (win[rows] < 160).mean(axis=0) < 0.10
-        quiet_row = (win[:, cols] < 160).mean(axis=1) < 0.10
+        # "Quiet" = the text's OWN background with nothing on it. On light
+        # paper that's "few dark pixels" (unchanged); white lettering on a
+        # black panel sits on DARK background, where the old light-only test
+        # saw nothing but "art" and never let the box grow — the line stayed
+        # a 30px-wide sliver of tiny type.
+        bgv = float(np.median(win[rows, cols])) if win[rows, cols].size else 255.0
+        if bgv >= 128:
+            busy = win < 160
+        else:
+            busy = win > bgv + 70
+        quiet_col = busy[rows].mean(axis=0) < 0.10
+        quiet_row = busy[:, cols].mean(axis=1) < 0.10
         left, right = x, x + rw
         while left - 1 >= wx0 and quiet_col[left - 1 - wx0]:
             left -= 1
@@ -2387,7 +2497,7 @@ class Compositor:
         # art sitting diagonally (new rows x new columns) slipped through.
         rows2 = slice(max(top, wy0) - wy0, max(min(bot, wy1) - wy0,
                                                max(top, wy0) - wy0 + 1))
-        quiet_col = (win[rows2] < 160).mean(axis=0) < 0.10
+        quiet_col = busy[rows2].mean(axis=0) < 0.10
         left, right = x, x + rw
         while left - 1 >= wx0 and quiet_col[left - 1 - wx0]:
             left -= 1
@@ -2395,7 +2505,7 @@ class Compositor:
             right += 1
         cols2 = slice(max(left, wx0) - wx0, max(min(right, wx1) - wx0,
                                                 max(left, wx0) - wx0 + 1))
-        quiet_row = (win[:, cols2] < 160).mean(axis=1) < 0.10
+        quiet_row = busy[:, cols2].mean(axis=1) < 0.10
         top, bot = y, y + rh
         while top - 1 >= wy0 and quiet_row[top - 1 - wy0]:
             top -= 1
@@ -2437,10 +2547,15 @@ class Compositor:
                 cand = (nx, ny, int(nw), int(nh))
                 croi = win[max(ny, wy0) - wy0:max(ny + int(nh), wy0) - wy0,
                            max(nx, wx0) - wx0:max(nx + int(nw), wx0) - wx0]
-                if croi.size and float((croi < 160).mean()) < 0.10 and clear_of_others(cand):
+                cbusy = (croi < 160) if bgv >= 128 else (croi > bgv + 70)
+                if croi.size and float(cbusy.mean()) < 0.10 and clear_of_others(cand):
                     quiet = cand
         best = quiet if quiet is not None else orig
-        if self._est_fit(t, best[2], best[3]) >= 0.55 * target:
+        # 0.8, not 0.55: half-size type was being accepted as "fits", and the
+        # real render comes out smaller than this estimate — a line on busy
+        # art ended up 10px against a ~22px target. The competitor letters
+        # such lines at size over the art; Tier 2 below does exactly that.
+        if self._est_fit(t, best[2], best[3]) >= 0.8 * target:
             return best
         # Tier 2: no quiet room anywhere (dense crowd/detail panels). Pros
         # typeset AT SIZE right on the art and let the stroke halo carry
@@ -2481,7 +2596,12 @@ class Compositor:
         nh = int(min(rh, max(2.6 * char, 24)))
         ny = max(0, min(cy - nh // 2, H - nh))
         band = cv2.cvtColor(result[ny:ny + nh], cv2.COLOR_BGR2GRAY)
-        quiet = (band < 160).mean(axis=0) < 0.10
+        # Quiet relative to the column's OWN background: white lettering on a
+        # black panel sits on dark ground, which the light-only test read as
+        # solid art on both sides — the column could never widen.
+        colbg = band[:, max(0, x):max(0, x) + max(rw, 1)]
+        bgv = float(np.median(colbg)) if colbg.size else 255.0
+        quiet = ((band < 160) if bgv >= 128 else (band > bgv + 70)).mean(axis=0) < 0.10
         limit = int(5 * char)
         left = x
         while left > max(0, x - limit) and quiet[left - 1]:
