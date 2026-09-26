@@ -1506,6 +1506,20 @@ document.addEventListener("DOMContentLoaded", () => {
     return cut;
   }
 
+  // Move one cover (any kind) by -dx/-dy, in place — the page it sits on
+  // was cropped at the left/top.
+  function shiftCover(c, dx, dy) {
+    if (!c) return;
+    const pts = a => { if (Array.isArray(a)) a.forEach(pt => { pt[0] -= dx; pt[1] -= dy; }); };
+    if (Array.isArray(c)) { if (c.length >= 4) { c[0] -= dx; c[1] -= dy; } return; }
+    pts(c.poly); pts(c.fill_poly); pts(c.keep_poly); pts(c.restore_poly); pts(c.line);
+    if (c.restore_click) { c.restore_click[0] -= dx; c.restore_click[1] -= dy; }
+    if (c.clone) {
+      if (c.clone.src) { c.clone.src[0] -= dx; c.clone.src[1] -= dy; }
+      if (c.clone.dst) { c.clone.dst[0] -= dx; c.clone.dst[1] -= dy; }
+    }
+  }
+
   async function cutPage(p, side, frac) {
     if (!p || !p.file || frac <= 0) return 0;
     // A page that is already translated is trimmed WHERE IT STANDS, on the
@@ -1527,8 +1541,14 @@ document.addEventListener("DOMContentLoaded", () => {
           const b = p.boxes[k];
           if (b && b.length === 4) { b[0] -= dx; b[1] -= dy; }
         }
-        (p.covers || []).forEach(c => {
-          if (c && c.length >= 4) { c[0] -= dx; c[1] -= dy; }
+        // Only the plain erase boxes used to follow the page; every other
+        // cover (lasso, restore, fill, tone, clone, line, keep) and the
+        // drawn text regions stayed put, so after a left/top trim they all
+        // sat dx/dy to the right of / below where they were drawn.
+        (p.covers || []).forEach(c => shiftCover(c, dx, dy));
+        (p.added || []).forEach(a => {
+          if (a.bbox && a.bbox.length === 4) { a.bbox[0] -= dx; a.bbox[1] -= dy; }
+          if (a.poly) a.poly.forEach(pt => { pt[0] -= dx; pt[1] -= dy; });
         });
       }
       p.rev = (p.rev || 0) + 1;

@@ -2840,10 +2840,24 @@ async def trim_page(task_id: str, request: Request):
 
     r["items"] = shift(r.get("items"))
     r["added"] = shift(r.get("added"))
+    # Every cover kind follows the page, not just the plain erase boxes: a
+    # lasso / restore / fill / tone / clone / line / keep cover is a set of
+    # page coordinates too.
+    def shift_pts(pts):
+        for pt in pts or []:
+            if isinstance(pt, list) and len(pt) >= 2:
+                pt[0] -= dx
+                pt[1] -= dy
     for c in (r.get("covers") or []):
         if isinstance(c, list) and len(c) >= 4:
             c[0] -= dx
             c[1] -= dy
+        elif isinstance(c, dict):
+            for key in ("poly", "fill_poly", "keep_poly", "restore_poly", "line"):
+                shift_pts(c.get(key))
+            shift_pts([c.get("restore_click")] if c.get("restore_click") else [])
+            cl = c.get("clone") or {}
+            shift_pts([cl.get("src"), cl.get("dst")] if isinstance(cl, dict) else [])
     cut = int(round(frac * (probe.shape[1] if side in ("left", "right")
                             else probe.shape[0])))
     print(f"[trim] {task_id[:8]} cut {cut}px off the {side} "
