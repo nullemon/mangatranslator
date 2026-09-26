@@ -24,8 +24,8 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (UI, Report, PAGES_DIR, server_up, changed_mask,   # noqa: E402
-                     changed_outside, dark_fraction, poly_rect, region)
+from harness import (UI, Report, PAGES_DIR, APPLY_TIMEOUT, server_up,   # noqa: E402
+                     changed_mask, changed_outside, dark_fraction, poly_rect, region)
 
 OUT = os.environ.get("MT_OUT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_out"))
 
@@ -464,8 +464,8 @@ def trim_follow(ui, rep, SFX):
     ui.page.wait_for_timeout(200)
     rev0 = ui.rev()
     ui.page.click("#trimApplyOne")
-    ui.page.wait_for_function("() => document.getElementById('trimModal').style.display === 'none'", timeout=120_000)
-    ui.page.wait_for_function(f"() => document.getElementById('transFull').getAttribute('src').includes('?t=') && !document.getElementById('transFull').getAttribute('src').endsWith('?t={rev0}')", timeout=60_000)
+    ui.page.wait_for_function("() => document.getElementById('trimModal').style.display === 'none'", timeout=int(APPLY_TIMEOUT * 1000))
+    ui.page.wait_for_function(f"() => document.getElementById('transFull').getAttribute('src').includes('?t=') && !document.getElementById('transFull').getAttribute('src').endsWith('?t={rev0}')", timeout=int(APPLY_TIMEOUT * 1000))
     ui.page.wait_for_function("() => { const im = document.getElementById('transFull'); return im.complete && im.naturalWidth > 0; }")
     ui.page.wait_for_timeout(300)
     W1, H1 = ui.dims()
@@ -636,7 +636,7 @@ def chains(ui, rep, base1, SFX, BALLOON, FP, frect):
     ui.click_at(*L0)
     ui.click_at(*L1)
     oc_mid = ui.overlay_counts()
-    deadline = time.time() + 600
+    deadline = time.time() + APPLY_TIMEOUT
     while time.time() < deadline and (ui.rev() == rev0 or ui.page.evaluate("() => document.getElementById('editApply').disabled")):
         time.sleep(1)
     ui.page.wait_for_timeout(500)

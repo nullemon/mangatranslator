@@ -24,6 +24,11 @@ import numpy as np
 BASE = os.environ.get("MT_URL", "http://127.0.0.1:8022")
 CHROME = os.environ.get("MT_CHROME", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
 PAGES_DIR = os.environ.get("MT_PAGES", "/tmp/claude-0/op")
+# LaMa on a CPU takes 30-45 s per region on an idle machine and several
+# times that on a busy one; MT_SLOW scales every wait (default 1.0).
+SLOW = float(os.environ.get("MT_SLOW", "1"))
+CLEAN_TIMEOUT = 900 * SLOW      # two pages through Clean
+APPLY_TIMEOUT = 600 * SLOW      # one Apply & Re-render
 
 
 def server_up():
@@ -92,7 +97,7 @@ class UI:
         self.ctx = self.browser.new_context(
             viewport={"width": viewport[0], "height": viewport[1]})
         self.page = self.ctx.new_page()
-        self.page.set_default_timeout(60_000)
+        self.page.set_default_timeout(int(60_000 * SLOW))
         self.js_errors = []
         self.console_errors = []
         self.rerender_bodies = []      # every /api/rerender request body, in order
@@ -121,7 +126,7 @@ class UI:
             self.browser.close()
 
     # ── workflow ─────────────────────────────────────────────────────────
-    def run_clean(self, files, credit="", timeout=900):
+    def run_clean(self, files, credit="", timeout=None):
         """Upload pages through 'Clean (remove text)' and wait until every
         page is done. Returns the list of task ids in page order."""
         p = self.page
@@ -131,7 +136,7 @@ class UI:
         p.set_input_files("#fileInput", files)
         p.wait_for_timeout(500)
         p.click("#goBtn")
-        deadline = time.time() + timeout
+        deadline = time.time() + (timeout or CLEAN_TIMEOUT)
         n = len(files)
         while time.time() < deadline:
             if n == 1:
@@ -289,7 +294,7 @@ class UI:
             "  restoreClick: L.querySelectorAll('.restore-click').length,"
             "  children: L.children.length }; }")
 
-    def apply(self, timeout=600):
+    def apply(self, timeout=None):
         """Press Apply & Re-render, wait for the re-render to land. Returns
         the request body that was sent."""
         n0 = len(self.rerender_bodies)
@@ -297,7 +302,7 @@ class UI:
         btn = self.page.locator("#editApply")
         btn.scroll_into_view_if_needed()
         btn.click()
-        deadline = time.time() + timeout
+        deadline = time.time() + (timeout or APPLY_TIMEOUT)
         while time.time() < deadline:
             if self.rev() > rev0 and not self.page.evaluate(
                     "() => document.getElementById('editApply').disabled"):
