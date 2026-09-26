@@ -1,4 +1,5 @@
 import base64
+import os
 import time
 import cv2
 import numpy as np
@@ -57,6 +58,32 @@ class ImageEnhancer:
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     )
     XAI_URL = "https://api.x.ai/v1/images/edits"
+
+    # GEMINI_BASE_URL / XAI_BASE_URL / OPENAI_BASE_URL point the scanner at
+    # another host speaking the same API (a proxy, or the stub server the
+    # browser tests run against). Each is the host root, like the translator's
+    # GEMINI_BASE_URL; a trailing /v1 (the SDK convention for xAI and OpenAI)
+    # is accepted too. Unset, each is the provider's own endpoint.
+    @staticmethod
+    def _endpoint(env: str, default: str, path: str) -> str:
+        base = (os.environ.get(env) or "").strip().rstrip("/")
+        if not base:
+            return default
+        if base.endswith("/v1") and path.startswith("/v1/"):
+            base = base[:-3]
+        return base + path
+
+    def _gemini_url(self, model: str) -> str:
+        return self._endpoint(
+            "GEMINI_BASE_URL", self.GEMINI_URL.format(model=model),
+            f"/v1beta/models/{model}:generateContent")
+
+    def _xai_url(self) -> str:
+        return self._endpoint("XAI_BASE_URL", self.XAI_URL, "/v1/images/edits")
+
+    def _openai_url(self) -> str:
+        return self._endpoint("OPENAI_BASE_URL", self.OPENAI_URL,
+                              "/v1/images/edits")
 
     DEFAULT_MODELS = {
         "openai": "gpt-image-1",
@@ -302,7 +329,7 @@ class ImageEnhancer:
         headers = {"Authorization": f"Bearer {api_key}"}
 
         with httpx.Client(timeout=self.timeout) as client:
-            resp = _post_with_retry(client, self.OPENAI_URL, headers=headers,
+            resp = _post_with_retry(client, self._openai_url(), headers=headers,
                                     data=data, files=files)
 
         if resp.status_code != 200:
@@ -336,7 +363,7 @@ class ImageEnhancer:
             ],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
-        url = self.GEMINI_URL.format(model=model)
+        url = self._gemini_url(model)
         headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
 
         img_kb = len(b64) * 3 // 4 // 1024
@@ -396,16 +423,17 @@ class ImageEnhancer:
         # the old line printed only the original, and "input=8525x6269" made
         # a capped 2048px upload look like an eight-thousand-pixel one.
         sh_, sw_ = image.shape[:2]
-        print(f"[enhance] xAI request: POST {self.XAI_URL} | model={model} | "
+        url = self._xai_url()
+        print(f"[enhance] xAI request: POST {url} | model={model} | "
               f"sending {sw_}x{sh_} (source {w}x{h}) | resolution=2k | "
               f"prompt[:80]={prompt[:80]!r}")
         with httpx.Client(timeout=self.timeout) as client:
-            resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
+            resp = _post_with_retry(client, url, headers=headers, json=body)
             if resp.status_code == 422 and "resolution" in resp.text.lower():
                 # Account/tier that doesn't accept the param — retry without.
                 print("[enhance] xAI rejected 'resolution'; retrying without")
                 body.pop("resolution", None)
-                resp = _post_with_retry(client, self.XAI_URL, headers=headers, json=body)
+                resp = _post_with_retry(client, url, headers=headers, json=body)
         print(f"[enhance] xAI response: {resp.status_code}")
 
         if resp.status_code != 200:
