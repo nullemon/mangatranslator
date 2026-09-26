@@ -568,14 +568,26 @@ document.addEventListener("DOMContentLoaded", () => {
     const files = [...fontUpload.files];
     if (!files.length) return;
     let last = "";
+    const refused = [];
     for (const file of files) {
       const form = new FormData(); form.append("file", file);
       try {
         const res = await fetch("/api/upload-font", { method: "POST", body: form });
         if (res.ok) last = file.name;
-      } catch (_) {}
+        else {
+          let m = res.statusText;
+          try { m = (await res.json()).detail || m; } catch (_) {}
+          refused.push(m);
+        }
+      } catch (e) {
+        refused.push(`'${file.name}': ${e.message}`);
+      }
     }
     await loadFonts();
+    // The Details tab's per-line font pickers are built with the page, so
+    // they did not offer a font added afterwards until the page was redrawn.
+    const act = getActive();
+    if (act && act.status === "done") buildTranslationsList(act);
     // Auto-select ONLY on a single add. Someone dropping a whole folder of
     // mood fonts (shout cuts, thought faces, the eerie voice) is stocking
     // the shelf, not choosing a page font — and this used to set the main
@@ -583,8 +595,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (last && files.length === 1) {
       fontSelect.value = last;
       localStorage.setItem("manga_font", last);
+      // The visible picker is a copy of the hidden <select>; it kept
+      // showing the previous font after this switched to the new one.
+      buildFontPicker();
     }
     fontUpload.value = "";
+    if (refused.length) {
+      showError("Font not added — " + refused.join(" · "));
+    }
   });
 
   /* ══ ENHANCEMENT SETTINGS ══ */

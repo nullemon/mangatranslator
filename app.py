@@ -3649,6 +3649,16 @@ async def upload_font(file: UploadFile = File(...)):
         raise HTTPException(400, "That filename can't be used")
     dest = f"fonts/{name}"
     content = await file.read()
+    # Only a font that actually loads goes into fonts/. Anything used to be
+    # written as long as its NAME ended in .ttf — a renamed PNG or a broken
+    # download then sat in every font picker, and a page lettered with it
+    # fell back to another face (or failed) with nothing saying why.
+    try:
+        ImageFont.truetype(io.BytesIO(content), 24)
+    except Exception as e:
+        raise HTTPException(
+            400, f"'{name}' is not a usable font file ({e}) — nothing was "
+                 f"added. Pick a real .ttf or .otf.")
     with open(dest, "wb") as f:
         f.write(content)
     return {"message": f"Font '{name}' uploaded", "path": dest}
