@@ -1979,7 +1979,22 @@ class Compositor:
                 own_f = self._seg_mask[max(0, y):min(H, y + h), max(0, x):min(W, x + w)]
                 if (own_f.size and cv2.countNonZero(own_f) >= 40
                         and cv2.countNonZero(own_d) < 0.5 * cv2.countNonZero(own_f)):
-                    seg_roi[iy0:iy1, ix0:ix1] = cv2.bitwise_or(own_d, own_f)
+                    # Only strokes that lie (almost) wholly INSIDE the line's
+                    # box belong to it. A big SFX glyph that merely crosses
+                    # into the box (あ / ブル beside a caption) runs well
+                    # outside it — erasing its inside part cut the SFX up.
+                    full_win = self._seg_mask[y0:y1, x0:x1]
+                    n_, lab_, _st, _c = cv2.connectedComponentsWithStats(
+                        (full_win > 0).astype(np.uint8), 8)
+                    inside = np.zeros(full_win.shape, bool)
+                    inside[iy0:iy1, ix0:ix1] = True
+                    tot = np.bincount(lab_.ravel(), minlength=n_)
+                    ins = np.bincount(lab_.ravel(), weights=inside.ravel().astype(np.float64),
+                                      minlength=n_)
+                    keep = ins >= 0.85 * np.maximum(tot, 1)
+                    keep[0] = False
+                    own_keep = (keep[lab_] * 255).astype(np.uint8)[iy0:iy1, ix0:ix1]
+                    seg_roi[iy0:iy1, ix0:ix1] = cv2.bitwise_or(own_d, own_keep)
         if contain:
             # USER-DRAWN region (cover box / item ⌫ / resized box). The intent
             # is to erase the TEXT the user boxed while KEEPING the artwork
@@ -2112,13 +2127,33 @@ class Compositor:
         # lines); fall back to the deviation heuristic when it's absent or
         # finds nothing in the window.
         ink = None
-        strokes = self._dialog_mask if self._dialog_mask is not None else self._seg_mask
-        if strokes is not None:
+        # Dialogue strokes first; then ALL the text model's strokes (a line
+        # the block detector didn't box — a caption, a title — is still marked
+        # there, as letter-shaped pieces separate from the art); only with
+        # neither, the deviation heuristic, which lights up the art as well.
+        for strokes in (self._dialog_mask, self._seg_mask):
+            if strokes is None:
+                continue
             seg_win = strokes[y0:y1, x0:x1]
             if cv2.countNonZero(seg_win) >= 10:
                 ink = seg_win
+                break
         if ink is None:
             ink = self._ink_mask(gray[y0:y1, x0:x1])
+        # Grow only toward ink that BELONGS to this line: pieces lying mostly
+        # inside the original box. Taking all ink in the padded window swept
+        # in whatever sat nearby — on a chapter's last page a caption's box
+        # grew over the chapter-end badge below it, and the erase took the
+        # Luffy icon and "ONE PIECE" with it (and a big SFX above).
+        n_, lab_, _st, _c = cv2.connectedComponentsWithStats((ink > 0).astype(np.uint8), 8)
+        if n_ > 1:
+            inbox = np.zeros(ink.shape, bool)
+            inbox[max(0, y - y0):y - y0 + h, max(0, x - x0):x - x0 + w] = True
+            tot = np.bincount(lab_.ravel(), minlength=n_)
+            ins = np.bincount(lab_.ravel(), weights=inbox.ravel().astype(np.float64), minlength=n_)
+            keep = ins >= 0.5 * np.maximum(tot, 1)
+            keep[0] = False
+            ink = (keep[lab_] * 255).astype(np.uint8)
         ys, xs = np.where(ink > 0)
         if xs.size < 10:
             return x, y, w, h
