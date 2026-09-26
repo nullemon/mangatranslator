@@ -2180,6 +2180,17 @@ document.addEventListener("DOMContentLoaded", () => {
     syncOrientBar();          // one page or fifty, a bad scan is still a bad scan
     if (!multi) return;
 
+    // Rebuild only when something a chip shows has changed. Every status
+    // poll used to throw the chips away and re-create their <img>s, and
+    // results are served no-store, so a finished page's full result was
+    // fetched again on every poll for as long as any other page was still
+    // working — 160 fetches of one page in five minutes on a two-page batch.
+    const sig = pages.map(p =>
+      `${p.uid}:${p.status}:${p.rev}:${p.taskId || ""}:${p.thumb || ""}:${p.file ? 1 : 0}`
+    ).join("|") + `#${activeUid}`;
+    if (pageStrip.dataset.sig === sig && pageStrip.children.length === pages.length) return;
+    pageStrip.dataset.sig = sig;
+
     pageStrip.innerHTML = "";
     pages.forEach((p, i) => {
       const chip = document.createElement("div");
