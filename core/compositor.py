@@ -1211,6 +1211,7 @@ class Compositor:
 
         placements = []     # (rect, text, color)
         placed_by = []      # (first placement index, item) per line
+        bubble_clean = {}   # balloon found with a line's outlined letters erased
         # Balloons already lettered this page: (bbox, placement index, x of
         # the text block that claimed it). A second block of text in the SAME
         # balloon (two columns — "ブハァ!!" beside "ゲホ!!") joins that
@@ -1256,8 +1257,25 @@ class Compositor:
             placed_by.append((len(placements), it))
             o = outlined.get(id(it))
             if o is not None:
-                self._erase_outlined(result, o, on_art=not it.get("in_bubble"))
                 mh, mw = o["mask"].shape[:2]
+                if (it.get("in_bubble") and masks.get(it["id"]) is None
+                        and masks.get(str(it["id"])) is None and it.get("bbox")):
+                    # Outlined letters running from a balloon's top edge to
+                    # its bottom cut its inside into pockets: the balloon was
+                    # found as the one pocket between two letters and the
+                    # English squeezed into it. Find it with them erased —
+                    # then erase for real only inside it, so a letter that
+                    # touched the border doesn't take a bite of the art past it.
+                    scratch = result.copy()
+                    self._erase_outlined(scratch, o, on_art=False)
+                    found = self._resolve_bubble(
+                        cv2.cvtColor(scratch, cv2.COLOR_BGR2GRAY), it["bbox"], page_area)
+                    if found is not None:
+                        bubble_clean[id(it)] = found
+                        keep = cv2.dilate(found[0], np.ones((5, 5), np.uint8))[
+                            o["y0"]:o["y0"] + mh, o["x0"]:o["x0"] + mw]
+                        o = dict(o, mask=cv2.bitwise_and(o["mask"], keep))
+                self._erase_outlined(result, o, on_art=not it.get("in_bubble"))
                 edited_rects.append((o["x0"], o["y0"], mw, mh))
             # a line measured beside a big sound effect: its glyph size, for
             # telling its letters from the effect's strokes inside its box
@@ -1609,7 +1627,7 @@ class Compositor:
             # enclosed bubble from the box, but reject a recovery that grabs
             # far more than the box (that means it leaked into the background).
             if mask is None:
-                resolved = self._resolve_bubble(gray, bbox, page_area)
+                resolved = bubble_clean.pop(id(it), None) or self._resolve_bubble(gray, bbox, page_area)
                 if resolved is not None:
                     rmask, rbb, rdark = resolved
                     box_area = max(bw * bh, 1)
@@ -1914,6 +1932,31 @@ class Compositor:
             return (0, 0, 0)
         return (255, 255, 255) if dark else (0, 0, 0)
 
+    def _outline_coverage(self, gray, mask):
+        """Share of directions round a shape's centre in which its edge is
+        inked: dark non-text pixels in a thin band just inside or just
+        outside the edge (a detector mask may stop at the outline or take it
+        in). 1.0 for a closed balloon; low for a blob round floating text."""
+        m = (mask > 0).astype(np.uint8)
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        outer = (cv2.dilate(m, k) > 0) & (m == 0)
+        inner = (m > 0) & (cv2.erode(m, k) == 0)
+        dark = gray < 110
+        if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
+            dark &= ~(cv2.dilate(self._seg_mask, np.ones((5, 5), np.uint8)) > 0)
+        ys, xs = np.nonzero(m)
+        if ys.size == 0:
+            return 0.0
+        cy, cx = float(ys.mean()), float(xs.mean())
+        hits, tot = np.zeros(36), np.zeros(36)
+        for band in (inner, outer):
+            by, bx = np.nonzero(band)
+            ang = ((np.degrees(np.arctan2(by - cy, bx - cx)) + 360.0) % 360.0 / 10.0).astype(int) % 36
+            np.add.at(tot, ang, 1)
+            np.add.at(hits, ang, dark[by, bx])
+        frac = np.where(tot > 0, hits / np.maximum(tot, 1), 0.0)
+        return float((frac > 0.25).mean())
+
     def _is_real_balloon(self, gray, mask, has_text=False):
         """A real balloon's interior (minus the text strokes) is near-uniform
         paper enclosed by an inked outline. Balloon segmentation sometimes
@@ -1993,6 +2036,17 @@ class Compositor:
                 self._balloon_why = (
                     f"interior not uniform (std {std:.1f} > 22, "
                     f"only {flat:.0%} of it one tone)")
+                return False
+        # A balloon is drawn: an inked outline runs round (almost) all of it.
+        # Lettering floating on the art — a monologue over a white face —
+        # read as "paper plus text" and, with text inside, skipped the ring
+        # test below; the detector's blob round it was then flat-filled white
+        # over the art. Measured on chapter 1194: balloons 0.69-1.0 of their
+        # edge inked, text on art 0.0-0.42.
+        if med >= 165 and has_text:
+            cov = self._outline_coverage(gray, mask)
+            if cov < 0.55:
+                self._balloon_why = f"no drawn outline round it ({cov:.0%} of its edge)"
                 return False
         # Decisive signature: a balloon keeps a clean paper MARGIN between
         # its lettering and the outline; artwork's lines run right across

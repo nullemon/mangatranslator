@@ -113,6 +113,13 @@ def _load():
         providers = onnx_providers(ort.get_available_providers())
         if providers[0] == "CUDAExecutionProvider":
             _preload_cuda12_libs()
+            # onnxruntime-gpu 1.21+ can find the CUDA / cuDNN libraries the
+            # installed torch or nvidia-* wheels ship by itself
+            if hasattr(ort, "preload_dlls"):
+                try:
+                    ort.preload_dlls()
+                except Exception:
+                    pass
         _SESSION = ort.InferenceSession(path, providers=providers)
         # Report the provider the session ACTUALLY uses — ORT can list CUDA as
         # available, fail to load its libs, and quietly run on CPU.

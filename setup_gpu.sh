@@ -8,6 +8,7 @@
 # Usage:
 #     chmod +x setup_gpu.sh && ./setup_gpu.sh
 #     ./setup_gpu.sh --mangajanai     # also fetch the MangaJaNai manga upscaler
+#     ./setup_gpu.sh --fix-onnx       # only put the text finder back on the GPU
 #
 # After it finishes the final check_setup.py tells you what's green.
 # Then start the app:   python3 app.py
@@ -17,9 +18,38 @@ set -e
 PIP="pip3 install --user --break-system-packages"
 
 WANT_MANGAJANAI=0
+FIX_ONNX_ONLY=0
 for arg in "$@"; do
     [ "$arg" = "--mangajanai" ] && WANT_MANGAJANAI=1
+    [ "$arg" = "--fix-onnx" ] && FIX_ONNX_ONLY=1
 done
+
+# The CPU-only `onnxruntime` package and `onnxruntime-gpu` install the SAME
+# module; whichever went in last wins, and requirements.txt (and a stray
+# `pip install rembg`) bring the CPU one — the text finder then runs on the
+# CPU while the pipeline banner says "ON CPU: slow!". Remove it and put the
+# GPU build back, with the CUDA 12 libraries it loads.
+fix_onnx() {
+    echo ""
+    echo "==> Text finder on the GPU (onnxruntime-gpu)..."
+    pip3 uninstall -y --break-system-packages onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+    $PIP "onnxruntime-gpu>=1.17.0"
+    $PIP nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+         nvidia-cufft-cu12 nvidia-curand-cu12 \
+      || echo "    (CUDA 12 libs failed — the text finder may stay on the CPU, still works)"
+    python3 - <<'PY'
+import onnxruntime as ort
+ok = "CUDAExecutionProvider" in ort.get_available_providers()
+print(f"    onnxruntime {ort.__version__}: {'CUDA available' if ok else 'still CPU only'}")
+PY
+}
+
+if [ "$FIX_ONNX_ONLY" = "1" ]; then
+    fix_onnx
+    echo ""
+    echo "Done. Restart the app: python3 app.py"
+    exit 0
+fi
 
 # ── .env (secrets / config) ──────────────────────────────────────────────
 if [ -f .env ]; then
@@ -53,6 +83,8 @@ echo "==> [3/8] CUDA 12 runtime libs for onnxruntime..."
 $PIP nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
      nvidia-cufft-cu12 nvidia-curand-cu12 \
   || echo "    (install failed — text-seg will fall back to CPU, still works)"
+
+fix_onnx
 
 # ── CRAFT free-text detector (narration, labels, dramatic text) ──────────
 # --no-deps: CRAFT pins a 2021 opencv (<4.5.4.62) that won't build on modern

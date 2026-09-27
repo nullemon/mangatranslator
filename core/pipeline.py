@@ -1058,7 +1058,7 @@ class TranslationPipeline:
             tsp = _ts_provider()
         except Exception:
             tsp = ""
-        ts_note = (" — ON CPU: slow! reinstall onnxruntime-gpu"
+        ts_note = (" — ON CPU: slow! fix: ./setup_gpu.sh --fix-onnx"
                    if (c["text_pixel_seg"] and tsp == "cpu" and dev == "cuda")
                    else "")
         print(f"[pipeline]   text-pixel seg : {mark(c['text_pixel_seg'])}{ts_note}")
