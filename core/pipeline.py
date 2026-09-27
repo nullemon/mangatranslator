@@ -1135,10 +1135,11 @@ class TranslationPipeline:
             tsp = _ts_provider()
         except Exception:
             tsp = ""
-        ts_note = (" — ON CPU: slow! fix: ./setup_gpu.sh --fix-onnx"
-                   if (c["text_pixel_seg"] and tsp == "cpu" and dev == "cuda")
-                   else "")
-        print(f"[pipeline]   text-pixel seg : {mark(c['text_pixel_seg'])}{ts_note}")
+        # the model's own device, so the line can't say GPU and CPU at once
+        ts_cpu = c["text_pixel_seg"] and tsp == "cpu" and dev == "cuda"
+        ts_mark = ("CPU     — slow! fix: ./setup_gpu.sh --fix-onnx" if ts_cpu
+                   else mark(c["text_pixel_seg"]))
+        print(f"[pipeline]   text-pixel seg : {ts_mark}")
         print(f"[pipeline]   LaMa inpaint   : {mark(c['lama_inpaint'])}")
         print(f"[pipeline]   upscaler       : {mark(c['upscaler'])}")
         print(f"[pipeline]   RTL shaping    : {mark(c['raqm_rtl_shaping'])} (raqm)")

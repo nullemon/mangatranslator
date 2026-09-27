@@ -12,7 +12,7 @@ scanlates One Piece and measures the output against TCB's releases.
     curl -s localhost:8000/api/health | python3 -m json.tool   # what's loaded, build
 
 The startup banner (`[pipeline] ===== component stack =====`) says which parts
-run on the GPU. "text-pixel seg ... ON CPU" → `./setup_gpu.sh --fix-onnx`.
+run on the GPU. "text-pixel seg : CPU — slow!" → `./setup_gpu.sh --fix-onnx`.
 
 Stop the app by its port (`fuser -k 8000/tcp`), not with `pkill -f "python app.py"`
 — a pattern like that also matches the shell running the command.
