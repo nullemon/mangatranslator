@@ -28,6 +28,10 @@ in-balloon?, placed?, box, Japanese → English) and `<page>.status.json`. Any
 `/api/translate` form field can be set with `--set name=value` (see its
 parameters in `app.py`).
 
+The owner's test pages (Windows folders, seen from Ubuntu): Japanese raws in
+`/mnt/c/Users/Admin/MT/raws/<chapter>/`, TCB's English release of the same
+chapter in `/mnt/c/Users/Admin/MT/tcb/<chapter>/` — compare against those.
+
 **Testing spends no API credits.** The owner's rule: test runs are free.
 
 - Default engine is the offline one (`--provider local`, needs
