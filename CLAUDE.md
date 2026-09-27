@@ -22,19 +22,30 @@ Stop the app by its port (`fuser -k 8000/tcp`), not with `pkill -f "python app.p
     python3 tools/run_page.py path/to/page.jpg --series "One Piece"
     python3 tools/run_page.py path/to/chapter_folder/ --series "One Piece" --set max_quality=true
 
-The key comes from `.env` (`GEMINI_API_KEY=...`, or `ANTHROPIC_API_KEY` with
-`--provider claude`) — never put it on the command line. Each page leaves in
-`output/runs/<time>/`: `<page>.out.*` (finished), `<page>.raw.*` (original),
-`<page>.debug.txt` (every region: type, in-balloon?, placed?, box, Japanese →
-English) and `<page>.status.json`. Any `/api/translate` form field can be set
-with `--set name=value` (see its parameters in `app.py`).
+Each page leaves in `output/runs/<time>/`: `<page>.out.*` (finished),
+`<page>.raw.*` (original), `<page>.debug.txt` (every region: type,
+in-balloon?, placed?, box, Japanese → English) and `<page>.status.json`. Any
+`/api/translate` form field can be set with `--set name=value` (see its
+parameters in `app.py`).
 
-A Gemini page costs about $0.03. For runs that don't need real translations,
-use the stub (fixed fake lines, no key, no cost):
+**Testing spends no API credits.** The owner's rule: test runs are free.
 
-    python3 tests/ui/stub_gemini.py 8132 &
-    GEMINI_BASE_URL=http://127.0.0.1:8132 python3 app.py
-    GEMINI_API_KEY=dummy python3 tools/run_page.py page.jpg
+- Default engine is the offline one (`--provider local`, needs
+  `python3 setup_models.py --offline-translate --langs japanese` once).
+  Detection, reading, erasing and lettering are all real; only the English
+  is rough, and the Gemini-only passes (AI free-text finder, picture checks)
+  don't run. Use it for erase / layout / sizing / balloon work.
+- To exercise the Gemini code path (reply matching, free-text passes), use the
+  stub — fake lines, no key, no cost:
+
+      python3 tests/ui/stub_gemini.py 8132 &
+      GEMINI_BASE_URL=http://127.0.0.1:8132 python3 app.py
+      python3 tools/run_page.py page.jpg --provider gemini
+
+- Real Gemini/Claude is refused unless `--spend DOLLARS` is given. Don't
+  pass it unless the owner asks for a paid run; then it uses the cheapest
+  model (Flash-Lite), prints each page's cost, and stops before the cap.
+  The key comes from `.env` — never put it on the command line.
 
 ## Tests
 

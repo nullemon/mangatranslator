@@ -1316,6 +1316,9 @@ async def health(refresh: bool = False):
         loop = asyncio.get_event_loop()
         _HEALTH_CACHE.update(await loop.run_in_executor(None, probe_components))
     _HEALTH_CACHE["server_commit"] = _SERVER_COMMIT
+    # True when Gemini calls go to another host (the test stub), so a test
+    # runner can tell a free run from a billed one before sending a page.
+    _HEALTH_CACHE["gemini_custom_endpoint"] = bool(os.environ.get("GEMINI_BASE_URL"))
     return _HEALTH_CACHE
 
 
