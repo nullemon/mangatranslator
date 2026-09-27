@@ -88,6 +88,9 @@ def _text_sim(a: str, b: str) -> float:
     return len(aa & bb) / max(min(len(aa), len(bb)), 1)
 
 
+# a balloon holding only dots: ……, ．．．, ・・・
+_DOTS_ONLY = __import__("re").compile(r"[…‥・.．。･\s]+")
+
 def _merge_column_boxes(boxes):
     """The block detector splits giant vertical lettering (one huge glyph per
     box) — merge boxes that line up into a single column/run so OCR reads the
@@ -691,8 +694,16 @@ def tidy_free_text(items, remove_watermark=True):
         return bool(_re.search(r"@[A-Za-z0-9_]{3,}", t)
                     or _re.search(r"(?:www\.|https?://|\.(?:com|net|org|io)\b)", t, _re.I))
 
-    bubble_texts = [norm(it.get("original")) for it in items
+    # (text AND place: the same words elsewhere on the page are a different
+    # line — a batched reply that filed one line's text under another
+    # bubble made every real free-text line look like a duplicate, and the
+    # page's narration was dropped untranslated)
+    bubble_texts = [(norm(it.get("original")), it.get("bbox")) for it in items
                     if it.get("in_bubble") is not False]
+
+    def same_spot(a, b):
+        return (bool(a) and bool(b) and len(a) == 4 and len(b) == 4
+                and _overlap_frac(a, b) >= 0.3)
     out = []
     for it in items:
         if (it.get("in_bubble") is False and it.get("type") != "watermark"
@@ -703,9 +714,10 @@ def tidy_free_text(items, remove_watermark=True):
             continue
         o = norm(it.get("original"))
         if (it.get("in_bubble") is False and len(o) >= 3
-                and any(o == b or (len(o) >= 4 and (o in b or b in o))
-                        or _dl.SequenceMatcher(None, o, b).ratio() >= 0.8
-                        for b in bubble_texts if b)):
+                and any((o == b or (len(o) >= 4 and (o in b or b in o))
+                         or _dl.SequenceMatcher(None, o, b).ratio() >= 0.8)
+                        and same_spot(it.get("bbox"), bb)
+                        for b, bb in bubble_texts if b)):
             continue      # same line already translated inside a bubble
         out.append(it)
 
@@ -1664,6 +1676,65 @@ class TranslationPipeline:
                   f"bubble {sid}'s text (sim {sc:.2f}) -> moved to {sid}")
         return fixed
 
+    @staticmethod
+    def _match_replies(id_to_text: dict, out: dict) -> dict:
+        """Keep one reply per bubble that was SENT, paired by the text it
+        echoes back. With the page image attached the model also translates
+        text it sees that wasn't asked for (narration on the art) and numbers
+        its answers its own way: a page sent 4 bubbles came back with 11
+        entries, and bubble 1 got the page's first narration line — every
+        bubble on the page showed another line's English. An entry is taken
+        under its own id only when its echo fits that bubble; otherwise the
+        entry whose echo fits best is used, and a bubble nothing fits is left
+        empty (it is then asked for on its own). Entries nobody asked for are
+        dropped."""
+        import difflib
+        import re
+
+        def norm(s):
+            return re.sub(r"[\s\W_…・〜ー]+", "", str(s or ""))
+
+        def sim(a, b):
+            a, b = norm(a), norm(b)
+            if not a or not b:
+                return None
+            return difflib.SequenceMatcher(None, a, b).ratio()
+
+        entries = [e for e in out.values() if isinstance(e, dict)]
+        extra = len(entries) > len(id_to_text)
+        fixed, used = {}, set()
+        # 1. an entry filed under a sent id whose echo fits that bubble
+        for sid, jp in id_to_text.items():
+            e = out.get(sid)
+            if not isinstance(e, dict):
+                continue
+            s = sim(e.get("original"), jp)
+            if (s is not None and s >= 0.5) or (s is None and not extra):
+                fixed[sid] = e
+                used.add(id(e))
+        # 2. the rest: the best-fitting unused entry, if it fits well
+        pairs = []
+        for sid, jp in id_to_text.items():
+            if sid in fixed:
+                continue
+            for e in entries:
+                if id(e) in used:
+                    continue
+                s = sim(e.get("original"), jp)
+                if s is not None and s >= 0.45:
+                    pairs.append((s, sid, e))
+        for s, sid, e in sorted(pairs, key=lambda p: -p[0]):
+            if sid in fixed or id(e) in used:
+                continue
+            e = dict(e, id=sid)
+            fixed[sid] = e
+            used.add(id(e))
+        dropped = len(entries) - len(fixed)
+        if dropped > 0:
+            print(f"[pipeline] replies: kept {len(fixed)} for the {len(id_to_text)} "
+                  f"bubble(s) sent, dropped {dropped} the model added or misfiled")
+        return fixed
+
     def _translate_regions(self, image, regions, annotated, update) -> Dict[int, dict]:
         """Translate each detected bubble. For Japanese, prefer local OCR (reads
         each bubble's OWN text → no cross-bubble mismatch). For any OTHER source
@@ -1686,6 +1757,7 @@ class TranslationPipeline:
             from .ocr import _has_japanese
             update(2, "Reading bubbles with manga-ocr...", 30)
             id_to_text = {}
+            dots = {}
             for r in regions:
                 jp = self.ocr.read_region(image, r.bbox, getattr(r, "mask", None))
                 # Keep only genuinely Japanese reads. If the page is actually
@@ -1693,6 +1765,10 @@ class TranslationPipeline:
                 # the whole page falls through to the vision model below.
                 if jp and _has_japanese(jp):
                     id_to_text[r.id] = jp
+                elif jp and _DOTS_ONLY.fullmatch(jp.strip()):
+                    # a balloon of dots (……) says "..." — nothing to ask
+                    dots[r.id] = {"id": r.id, "original": jp.strip(),
+                                  "translation": "...", "type": "dialogue"}
             # Now the page's text is known: send only the glossary names it uses.
             self._focus_glossary("".join(id_to_text.values()))
             update(2, f"Read {len(id_to_text)} bubbles, translating...", 42)
@@ -1721,6 +1797,7 @@ class TranslationPipeline:
                 for rid, jp in id_to_text.items():
                     out.setdefault(rid, {})
                     out[rid]["original"] = out[rid].get("original") or jp
+                out.update(dots)
                 update(2, f"Translated {len(out)} bubbles (one-by-one)", 50)
                 return out
             if id_to_text:
@@ -1730,6 +1807,23 @@ class TranslationPipeline:
                     # under another bubble's id (box 1's text in box 2). Uses the
                     # ORIGINAL each entry echoes back, before we fill blanks below.
                     out = self._realign_by_ocr(id_to_text, out)
+                    # ...and keep only replies for the bubbles actually sent,
+                    # each paired with its bubble by the text it echoes.
+                    out = self._match_replies(id_to_text, out)
+                    # A bubble the reply left out gets its own call.
+                    h_img, w_img = image.shape[:2]
+                    boxes = {r.id: r.bbox for r in regions}
+                    for rid, jp in id_to_text.items():
+                        if (out.get(rid) or {}).get("translation", "").strip():
+                            continue
+                        bx, by, bw2, bh2 = [int(v) for v in boxes.get(rid, (0, 0, w_img, h_img))]
+                        mx, my = int(bw2 * 0.6) + 40, int(bh2 * 0.6) + 40
+                        crop = image[max(0, by - my):min(h_img, by + bh2 + my),
+                                     max(0, bx - mx):min(w_img, bx + bw2 + mx)]
+                        ent = self._translate_single(rid, jp, crop, "bubble")
+                        if ent is not None:
+                            out[rid] = ent
+                    out.update(dots)
                     # keep the OCR'd original text for the editor view
                     for rid, jp in id_to_text.items():
                         out.setdefault(rid, {})
@@ -1801,8 +1895,10 @@ class TranslationPipeline:
         """Batch translate — or, in one-by-one mode, one call per item with a
         crop of its surroundings, so a bad response can only lose ONE item."""
         if not self.one_by_one:
-            return self.translator.translate_texts(
-                id_to_text, self.target_lang, image=image)
+            # (paired by echoed text, like the bubbles: with the page attached
+            # the reply can carry lines nobody asked for, numbered its own way)
+            return self._match_replies(id_to_text, self.translator.translate_texts(
+                id_to_text, self.target_lang, image=image))
         h_img, w_img = image.shape[:2]
         out = {}
         for fid, jp in id_to_text.items():
@@ -2466,7 +2562,17 @@ class TranslationPipeline:
         boxes = _merge_column_boxes(boxes)
         taken = [list(r.bbox) for r in bubble_regions]
         taken += [list(it["bbox"]) for it in existing_items]
-        known_texts = [it.get("original", "") for it in existing_items]
+        known_texts = [(it.get("original", ""), it.get("bbox")) for it in existing_items]
+
+        def near(a, b):
+            # the other pass's box was "off but close": within a box's size
+            if not b or len(b) != 4:
+                return False
+            ax, ay, aw, ah = a
+            bx, by, bw, bh = b
+            px, py = max(aw, bw), max(ah, bh)
+            return not (ax > bx + bw + px or bx > ax + aw + px
+                        or ay > by + bh + py or by > ay + ah + py)
         all_ids = [r.id for r in bubble_regions] + [it["id"] for it in existing_items]
         next_id = max(all_ids, default=0) + 1
 
@@ -2485,10 +2591,12 @@ class TranslationPipeline:
                 continue
             # Same text already found by another pass (LLM box was off but
             # close enough that both versions would be placed = doubled text).
-            if any(_texts_match(jp, t) for t in known_texts):
+            # (the same words far away are another line — and a misfiled
+            # batched reply once made the page's narration look "found")
+            if any(_texts_match(jp, t) and near(list(box), tb) for t, tb in known_texts):
                 continue
             taken.append(list(box))
-            known_texts.append(jp)
+            known_texts.append((jp, list(box)))
             id_to_text[next_id] = jp
             box_map[next_id] = box
             next_id += 1

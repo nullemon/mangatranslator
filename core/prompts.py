@@ -286,8 +286,11 @@ def text_translate_prompt(target_lang: str, style: str = "",
         "and it makes mistakes — merged furigana, wrong small kana, missing "
         "characters, whole words dropped. Where the image and the text below "
         "disagree, TRUST THE IMAGE and translate what is actually printed.\n"
-        "- If a bubble's entry below is empty, garbled or clearly not what "
-        "the picture shows, read that bubble yourself and translate it.\n"
+        "- If a bubble's entry below is garbled or clearly not what the "
+        "picture shows, correct it from the picture — under the SAME id.\n"
+        "- Translate ONLY the entries listed below. Other text you can see on "
+        "the page (narration on the art, captions, other balloons) is handled "
+        "separately: do NOT add entries for it.\n"
         "- READ THE PANEL too: who is speaking, their expression, and the "
         "action — translate to fit what is happening, never word-for-word.\n"
         if with_image else "")
@@ -304,7 +307,9 @@ Return ONLY a JSON array — no markdown fences, no commentary:
 ]
 
 Rules:
+- Return EXACTLY one entry per id listed below, and no other ids.
 - Keep each translation matched to the SAME id — never move text between ids.
+- "original" must be the {src} text of THAT id, as printed.
 - Write like official {target_lang} manga lettering — natural and idiomatic,
   never stiff or word-for-word literal. Translate the MEANING and the emotion.
 - Match the scene's tone: shouted lines are short and forceful; inner
