@@ -49,17 +49,14 @@ HOUSE STYLE:
 _DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "series_data")
 
 
-def _load_data(name: str) -> str:
-    """The series' word list (series_data/<name>.txt) as prompt lines:
-    [glossary] entries as strict "jp = en" lines, [phrasebook] entries as
-    the release team's usual renderings. Notes after "#" are for people;
-    glossary lines are sent without them so they parse as exact pairs."""
+def _entries(name: str):
+    """(section, "jp = en", note) for every entry in series_data/<name>.txt."""
     path = os.path.join(_DATA, name + ".txt")
     try:
         raw = open(path, encoding="utf-8").read()
     except OSError:
-        return ""
-    gloss, phrases, section = [], [], None
+        return []
+    out, section = [], None
     for line in raw.splitlines():
         t = line.strip()
         if not t or t.startswith("#"):
@@ -69,8 +66,18 @@ def _load_data(name: str) -> str:
             continue
         body, _, note = t.partition("#")
         body, note = body.strip(), note.strip()
-        if "=" not in body:
-            continue
+        if "=" in body:
+            out.append((section, body, note))
+    return out
+
+
+def _load_data(name: str) -> str:
+    """The series' word list (series_data/<name>.txt) as prompt lines:
+    [glossary] entries as strict "jp = en" lines, [phrasebook] entries as
+    the release team's usual renderings. Notes after "#" are for people;
+    glossary lines are sent without them so they parse as exact pairs."""
+    gloss, phrases = [], []
+    for section, body, note in _entries(name):
         if section == "glossary":
             gloss.append(body)
         elif section == "phrasebook":
@@ -87,8 +94,10 @@ def _load_data(name: str) -> str:
     return "\n".join(out)
 
 
+_DATA_FILES = {"one piece": "one_piece"}
+
 PRESETS = {
-    "one piece": ONE_PIECE_STYLE + "\n\n" + _load_data("one_piece"),
+    "one piece": ONE_PIECE_STYLE + "\n\n" + _load_data(_DATA_FILES["one piece"]),
 }
 
 # Names a user might type in the Manga title box for each preset.
@@ -119,3 +128,22 @@ def apply(style_prompt: str) -> str:
     if not key or PRESETS[key] in (style_prompt or ""):
         return style_prompt or ""
     return PRESETS[key] + "\n\n" + (style_prompt or "")
+
+
+def phrasebook(style_prompt: str):
+    """The matching preset's word list as (japanese, english) pairs, glossary
+    first — for the offline engine, which has no prompt to put them in."""
+    key = detect(style_prompt)
+    for k, name in _DATA_FILES.items():
+        if key is None and PRESETS[k] in (style_prompt or ""):
+            key = k            # the preset was already applied to the style
+    if key not in _DATA_FILES:
+        return []
+    pairs = []
+    for section, body, _note in _entries(_DATA_FILES[key]):
+        if section not in ("glossary", "phrasebook"):
+            continue
+        jp, _, en = body.partition("=")
+        if jp.strip() and en.strip():
+            pairs.append((jp.strip(), en.strip()))
+    return pairs

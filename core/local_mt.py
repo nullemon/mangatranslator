@@ -112,16 +112,136 @@ def model_id_for(source_lang: str) -> str:
     return models_for(source_lang)[0]
 
 
+# Textbook sentences a working model cannot get wrong, and a word its English
+# must contain. A checkpoint can load without error and still be useless:
+# fugumt-ja-en, as downloaded, turns 私は学生です。 into "My school is in the
+# school of Irreceive…" and every manga line into a run-on loop ("jesus
+# christ, jesus, walter…") — a whole chapter of it was lettered, much of it
+# shrunk to microscopic type. A model that fails these is skipped like one
+# that failed to download, and the next candidate is used.
+SANITY_CHECKS = {
+    "japanese": [("猫はかわいいです。", "cat"), ("私は学生です。", "student")],
+}
+
+
+def _sanity_for(model_id: str, source_lang: str):
+    key = _lang_key(source_lang)
+    if key in SANITY_CHECKS:
+        return SANITY_CHECKS[key]
+    for lang, mids in MODEL_CANDIDATES.items():
+        if model_id in mids:
+            return SANITY_CHECKS.get(lang, [])
+    return []
+
+
+def _budget(src: str) -> int:
+    """Most characters of English a line of source can honestly need.
+    Measured on TCB's chapter 1194: English runs 1.5-3.5x the Japanese
+    (これ以上壊れたら…!! 12 -> IF IT BREAKS ANY MORE...!! 26). Anything far past
+    that is the model looping, not translating."""
+    return 24 + 5 * len(src)
+
+
+def _trim_runaway(text: str, src: str) -> str:
+    """Cut a looping translation back to what the source can carry: at the
+    last sentence end inside the budget if there is one, else at a word."""
+    limit = _budget(src)
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    ends = [m.end() for m in re.finditer(r"[.!?…]+(?=\s|$)", head)]
+    if ends and ends[-1] >= limit // 3:
+        return head[:ends[-1]].strip()
+    cut = head.rsplit(" ", 1)[0] if " " in head else head
+    return cut.rstrip(" ,;:-") + "..."
+
+
+# ── lines the model should never see ─────────────────────────────────────
+# A sentence model given a bare sound or a row of dots invents a sentence
+# (ーー… -> "- Oh, my God.", ばっ!! -> "Ha Ni!"). A release team letters those
+# from a phrasebook, and so does the offline engine when the series preset
+# has one; a line of pure punctuation keeps its punctuation.
+_PUNCT_MAP = {"…": "...", "!": "!", "?": "?"}
+_STRIP = "「」『』〝〟〈〉《》()[]\"'“”‘’、,。;:：；・"
+_DASHES = "ー―—‐-〜~〰"
+
+
+def _fold(text: str) -> str:
+    """Compare form: width-folded, katakana as hiragana, no spaces."""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text or "")
+    t = re.sub(r"\.{2,}", "…", t)
+    t = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in t)
+    return re.sub(r"\s+", "", t)
+
+
+def _core(text: str) -> str:
+    """The words of a line, all punctuation, dashes and brackets gone."""
+    t = _fold(text)
+    return "".join(c for c in t
+                   if c not in _STRIP and c not in _DASHES and c not in "….!?")
+
+
+def punctuation_only(text: str) -> str:
+    """English for a line with no words in it (……, !!!, ーー…, …!?), or ""
+    when the line has words."""
+    t = _fold(text)
+    if not t or _core(t):
+        return ""
+    out = "".join(_PUNCT_MAP.get(c, "") for c in t)
+    if not out:
+        return "..." if any(c in _DASHES for c in t) else ""
+    return out.replace("!?", "?!")
+
+
+def _tail(text: str) -> str:
+    """The source's closing punctuation, in English (…!! -> "...!!")."""
+    t = "".join(c for c in _fold(text) if c not in _STRIP).rstrip(_DASHES)
+    m = re.search(r"[….!?]+$", t)
+    return punctuation_only(m.group(0)) if m else ""
+
+
+def fixed_rendering(text: str, pairs) -> str:
+    """The phrasebook / glossary English for a whole line, or "".
+    `pairs` is series.phrasebook(): (japanese, english), glossary first."""
+    core = _core(text)
+    if not core:
+        return ""
+    # the exact line first: ばっ! (FWOOSH!!) and ばっ!! (BAM!) are different
+    # entries, told apart only by their punctuation
+    folded = _fold(text).strip(_STRIP)
+    hit = next((en for jp, en in pairs if _fold(jp).strip(_STRIP) == folded), "")
+    if not hit:
+        hit = next((en for jp, en in pairs if _core(jp) == core), "")
+    if hit and hit[-1].isalnum():
+        hit += _tail(text)
+    return hit
+
+
 class LocalMT:
     """A loaded offline translation model. Process-wide cached per model id."""
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, sanity=None):
         self.model_id = model_id
         self.ok = False
         self._tok = None
         self._model = None
         self._device = "cpu"
         self._load()
+        if self.ok and sanity:
+            self._check(sanity)
+
+    def _check(self, sanity):
+        """Refuse a model that loads but cannot translate (see SANITY_CHECKS)."""
+        outs = self.translate_many([s for s, _ in sanity])
+        bad = [(s, o) for (s, want), o in zip(sanity, outs)
+               if want not in (o or "").lower()]
+        if bad:
+            s, o = bad[0]
+            self.ok = False
+            LocalMT.last_error = (f"{self.model_id} failed its self-test "
+                                  f"({s} -> {o[:60]!r})")
+            print(f"[local-mt] {LocalMT.last_error} — not using it", flush=True)
 
     #: set when loading failed, so callers can tell the user WHY
     last_error = ""
@@ -282,6 +402,10 @@ class LocalMT:
                 results.extend("" for _ in chunk)
                 continue
             batch = [chunk[n] for n in keep]
+            # Room for the longest line's honest English and no more: a
+            # model that starts looping stops there instead of running on
+            # for 256 tokens.
+            cap = min(256, 16 + max(_budget(b) for b in batch) // 3)
             try:
                 enc = self._tok(batch, return_tensors="pt", padding=True,
                                 truncation=True, max_length=512)
@@ -289,7 +413,7 @@ class LocalMT:
                 with torch.inference_mode():
                     gen = self._model.generate(
                         **enc,
-                        max_new_tokens=256,
+                        max_new_tokens=cap,
                         num_beams=4,          # markedly better than greedy
                         no_repeat_ngram_size=4,
                         length_penalty=1.0,
@@ -300,7 +424,7 @@ class LocalMT:
                 dec = ["" for _ in batch]
             out = ["" for _ in chunk]
             for n, d in zip(keep, dec):
-                out[n] = self._polish(d)
+                out[n] = _trim_runaway(self._polish(d), chunk[n])
             results.extend(out)
         return results
 
@@ -318,7 +442,7 @@ def get(source_lang: str = "Japanese") -> Optional[LocalMT]:
     for mid in models_for(source_lang):
         hit = _CACHE.get(mid)
         if hit is None:
-            hit = LocalMT(mid)
+            hit = LocalMT(mid, _sanity_for(mid, source_lang))
             _CACHE[mid] = hit
         if hit.ok:
             return hit

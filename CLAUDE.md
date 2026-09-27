@@ -29,8 +29,14 @@ in-balloon?, placed?, box, Japanese → English) and `<page>.status.json`. Any
 parameters in `app.py`).
 
 The owner's test pages (Windows folders, seen from Ubuntu): Japanese raws in
-`/mnt/c/Users/Admin/MT/raws/<chapter>/`, TCB's English release of the same
-chapter in `/mnt/c/Users/Admin/MT/tcb/<chapter>/` — compare against those.
+`/mnt/c/Users/Admin/MT/raws/<chapter>/`; TCB's real English releases, one
+folder per chapter (1173-1193, 1195), in `/mnt/c/Users/Admin/MT/tcb_real/<chapter>/`
+— the standard to match. `/mnt/c/Users/Admin/MT/tcb/1194/` is ANOTHER group's
+release of 1194 (not TCB): useful to see what each balloon says, not how to letter it.
+
+The offline engine self-tests its model on load: fugumt-ja-en fails here
+(garbage on textbook sentences) and OPUS-MT ja-en is used — the log says
+`[local-mt] ... failed its self-test` once per start. That is expected.
 
 **Testing spends no API credits.** The owner's rule: test runs are free.
 

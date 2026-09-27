@@ -539,8 +539,19 @@ class LocalTranslator:
             why = getattr(local_mt.LocalMT, "last_error", "") or (
                 "the model isn't downloaded yet")
             raise RuntimeError(f"Offline translation is unavailable — {why}")
+        from . import series as _series
+        pairs = _series.phrasebook(self.style)
         keys = list(id_to_text.keys())
-        outs = mt.translate_many([str(id_to_text[k]) for k in keys])
+        fixed = {}
+        for k in keys:
+            src = str(id_to_text[k])
+            en = (local_mt.punctuation_only(src)
+                  or local_mt.fixed_rendering(src, pairs))
+            if en:
+                fixed[k] = en
+        ask = [k for k in keys if k not in fixed]
+        got = dict(zip(ask, mt.translate_many([str(id_to_text[k]) for k in ask])))
+        outs = [fixed.get(k, got.get(k, "")) for k in keys]
         result = {}
         for k, tr in zip(keys, outs):
             try:
