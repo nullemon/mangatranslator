@@ -91,6 +91,82 @@ def main():
     diff = cv2.absdiff(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY), gs)
     assert int((diff > 40).sum()) < 50, f"the brush stroke was altered ({int((diff > 40).sum())} px)"
     print("reading on the brush stroke left alone OK")
+
+    # 6. a white balloon-shaped gap with no lettering in it, "read" as
+    #    それでも、 -> "(Laughter)": left alone; the same shape with letters in
+    #    it is lettered
+    def balloon_page(with_letters):
+        pg = np.full((H, W, 3), 60, np.uint8)
+        cv2.ellipse(pg, (300, 200), (150, 110), 0, 0, 360, (250, 250, 250), -1)
+        cv2.ellipse(pg, (300, 200), (150, 110), 0, 0, 360, (0, 0, 0), 3)
+        ink = np.zeros((H, W), np.uint8)
+        if with_letters:
+            for c in range(3):
+                for r in range(4):
+                    p = (250 + c * 36, 130 + r * 36)
+                    cv2.rectangle(pg, p, (p[0] + 24, p[1] + 24), (0, 0, 0), -1)
+                    cv2.rectangle(ink, p, (p[0] + 24, p[1] + 24), 255, -1)
+        bm = np.zeros((H, W), np.uint8)
+        cv2.ellipse(bm, (300, 200), (146, 106), 0, 0, 360, 255, -1)
+        return pg, ink, bm
+
+    for with_letters in (False, True):
+        pg, ink, bm = balloon_page(with_letters)
+        comp3 = Compositor(use_lama=False)
+
+        class Seg:
+            ok = True
+
+            def mask(self, image, _ink=ink):
+                return _ink.copy()
+            text_mask = raw_mask = mask
+        comp3.text_seg = Seg()
+        drawn3 = []
+        orig3 = comp3.renderer.draw_in_rect
+        comp3.renderer.draw_in_rect = lambda image, rect, text, *a, _o=orig3, **k: (
+            drawn3.append(text) or _o(image, rect, text, *a, **k))
+        it = dict(id=1, bbox=[160, 100, 280, 200], in_bubble=True, type="dialogue",
+                  original="それでも、", translation="(Laughter)")
+        comp3.compose(pg.copy(), [it], masks={1: bm})
+        if with_letters:
+            assert drawn3, "a balloon with lettering in it was skipped"
+        else:
+            assert not drawn3, f"English lettered on a reading with no text under it: {drawn3}"
+    print("reading with no lettering under it left alone; real one lettered OK")
+
+    # 6b. a white gap enclosed by a huge sound effect's strokes (which the
+    #     text model marks as lettering), "read" as この: the strokes are
+    #     around the gap, not in it — nothing is lettered there
+    gap = np.full((H, W, 3), 250, np.uint8)
+    sfx = np.zeros((H, W), np.uint8)
+    cv2.ellipse(sfx, (300, 200), (150, 110), 0, 0, 360, 255, 40)   # heavy stroke ring
+    gap[sfx > 0] = 0
+    gm = np.zeros((H, W), np.uint8)
+    cv2.ellipse(gm, (300, 200), (128, 88), 0, 0, 360, 255, -1)
+    comp4 = Compositor(use_lama=False)
+
+    class SfxSeg:
+        ok = True
+
+        def mask(self, image):
+            return sfx.copy()
+        text_mask = raw_mask = mask
+    comp4.text_seg = SfxSeg()
+    drawn4 = []
+    orig4 = comp4.renderer.draw_in_rect
+    comp4.renderer.draw_in_rect = lambda image, rect, text, *a, **k: (
+        drawn4.append(text) or orig4(image, rect, text, *a, **k))
+    comp4.compose(gap.copy(), [dict(id=1, bbox=[150, 90, 300, 220], in_bubble=True,
+                                    type="dialogue", original="この", translation="This.")],
+                  masks={1: gm})
+    assert not drawn4, f"English lettered in a gap of a sound effect: {drawn4}"
+    print("gap inside a sound effect left alone OK")
+
+    # 7. solid black letters on a clean digital page (pure 0 / 255) measure
+    pg, ink, _ = balloon_page(True)
+    gp = Compositor._glyph_px(cv2.cvtColor(pg, cv2.COLOR_BGR2GRAY), ink, (160, 100, 280, 200))
+    assert 20 <= gp <= 30, f"flat black lettering measured {gp}"
+    print(f"flat digital lettering measured ({gp:.0f} px) OK")
     print("ALL CHECKS PASSED")
 
 

@@ -300,6 +300,23 @@ class Compositor:
     _SIZE_CEIL_DEFAULT = 0.85
     _SIZE_CEIL_ON_ART = 0.68
 
+    def _phantom_read(self, it):
+        """True for a balloon-finder line whose reading has no lettering under
+        it: the page's text strokes hold no character-sized piece in its box,
+        so its glyph size could not be measured. manga-ocr, handed a white
+        gap in the art or a row of dots, answers with a stock phrase — over
+        chapter 1194 それでも、 ("(Laughter)") 12 times, そういえば、 10, それは、
+        8 — and each was lettered over the art. Every real line measured.
+        Lines the user placed, and the free-text finders' lines (found BY
+        their text pixels), are not judged."""
+        if it.get("manual") or it.get("manual_box") or it.get("in_bubble") is False:
+            return False
+        if self._seg_mask is None:
+            return False                 # nothing was measured at all
+        if not (it.get("original") or "").strip():
+            return False
+        return not float(it.get("_glyph_px") or 0.0)
+
     def _sfx_sized(self, it):
         """True for an automatic line whose measured lettering is sound-effect
         scale: over 2.2x the page's median glyph and at least 60 px. Lines
@@ -641,7 +658,10 @@ class Compositor:
         t, _ = cv2.threshold(vals.reshape(-1, 1), 0, 255,
                              cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         light = float(np.median(g[m])) > float(np.median(vals))
-        ink = ((g > t) if light else (g < t)) & near
+        # Otsu's dark class is `<= t`: solid black lettering on a clean
+        # digital page (pure 0 / 255) thresholds at t = 0, and `< t` found no
+        # ink at all — every line on such a page went unmeasured.
+        ink = ((g > t) if light else (g <= t)) & near
         j = cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_CLOSE,
                              np.ones((3, 3), np.uint8))
         n, _lab, st, _ = cv2.connectedComponentsWithStats(j, 8)
@@ -1170,7 +1190,23 @@ class Compositor:
             for it in items:
                 b = it.get("bbox")
                 if b and len(b) == 4:
-                    s = self._glyph_px(gray, strokes_for_size, b)
+                    # A line in a balloon is measured INSIDE the balloon: its
+                    # box also holds the outline and the art around it, and a
+                    # white gap between the strokes of a huge sound effect
+                    # "measured" the effect (94 px) — then passed as a
+                    # lettered balloon and got "THIS." stamped in it.
+                    bm = masks.get(it.get("id"))
+                    if bm is None:
+                        bm = masks.get(str(it.get("id")))
+                    inside = None
+                    if (it.get("in_bubble") and bm is not None
+                            and bm.shape[:2] == gray.shape[:2] and not it.get("manual")):
+                        inside = cv2.erode((bm > 0).astype(np.uint8) * 255,
+                                           np.ones((5, 5), np.uint8))
+
+                    def within(sm):
+                        return sm if inside is None else cv2.bitwise_and(sm, inside)
+                    s = self._glyph_px(gray, within(strokes_for_size), b)
                     # a line the block detector didn't box (a chapter title,
                     # a cover caption) is still measured — from the filtered
                     # strokes first: the unstripped ones also hold big solid
@@ -1178,7 +1214,7 @@ class Compositor:
                     if not s:
                         for alt in (self._seg_mask, self._raw_mask):
                             if not s and alt is not None:
-                                s = self._glyph_px(gray, alt, b)
+                                s = self._glyph_px(gray, within(alt), b)
                         if s:
                             fallback.append(it)
                     if s:
@@ -1277,6 +1313,11 @@ class Compositor:
             # "そういえば、"). The house rule leaves those untouched; erasing
             # "its text" (outlined-letter erase included, just below) smeared
             # the effect. Judged before anything is erased.
+            if self._phantom_read(it):
+                print(f"[compositor] line {it.get('id')} at {it.get('bbox')}: "
+                      f"no lettering under the reading "
+                      f"{(it.get('original') or '')[:12]!r} — left alone", flush=True)
+                continue
             if self._sfx_sized(it):
                 bm = masks.get(it.get("id"))
                 if bm is None:
