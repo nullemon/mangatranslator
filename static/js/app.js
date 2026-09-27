@@ -1591,7 +1591,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (Array.isArray(c)) { if (c.length >= 4) { c[0] -= dx; c[1] -= dy; } return; }
     pts(c.poly); pts(c.fill_poly); pts(c.keep_poly); pts(c.restore_poly); pts(c.line);
     if (c.restore_click) { c.restore_click[0] -= dx; c.restore_click[1] -= dy; }
+    if (c.paint) pts(c.paint.pts);
+    if (c.heal) pts(c.heal.pts);
     if (c.clone) {
+      pts(c.clone.pts);
       if (c.clone.src) { c.clone.src[0] -= dx; c.clone.src[1] -= dy; }
       if (c.clone.dst) { c.clone.dst[0] -= dx; c.clone.dst[1] -= dy; }
     }
@@ -2880,6 +2883,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ══ ON-IMAGE TOOLS: move · edit · cover · add ══ */
   let tool = null;
+  // brush diameter per brush tool, page px (the size slider / [ ] keys)
+  const brushSizes = { paint: 12, heal: 40, clone: 68 };
   const HINTS = {
     move: "Drag any translation to move it, then Apply & Re-render.",
     resize: "Drag a box's handles to resize/reshape it (or drag its middle to move it) so the text fits, then Apply & Re-render.",
@@ -2893,7 +2898,9 @@ document.addEventListener("DOMContentLoaded", () => {
     keep: "Draw an outline around the page (like tracing its edge); everything OUTSIDE becomes white — removes carpet/floor/background. Then Apply & Re-render.",
     "pen-add": "CLICK points around the text to outline it (click the first point again or press Enter to close, Esc cancels). Only what's inside is read & translated, and the text stays inside your shape.",
     "tone-poly": "CLICK points around a hole in a toned area (click the first point again or Enter to close) — it's filled with matching screentone.",
-    clone: "Click a CLEAN patch of art to copy from, then click or drag over the damage to paint it in. Bracket keys [ ] change the brush size.",
+    paint: "Paint with the brush. Pick a colour, or 💧 Sample one from the page (Alt-click works too). Size: slider or [ ]. Ctrl+Z undoes a stroke. Then Apply & Re-render.",
+    heal: "Brush over a spot, speck or leftover mark — it's rebuilt from the art around it. Size: slider or [ ]. Ctrl+Z undoes a stroke. Then Apply & Re-render.",
+    clone: "Alt-click (or first click) a CLEAN patch of art to copy FROM, then paint over the damage — you see the copied art as you paint. Size: slider or [ ]. Ctrl+Z undoes a stroke.",
     line: "Click the START then the END of the line — it's redrawn straight. Shift keeps it horizontal/vertical; [ and ] change thickness.",
     "fill-poly": "CLICK points around the damaged area (click the first point again or press Enter to close, Esc cancels) — then pick the colour and it's flooded in.",
     restore: "Draw around a damaged spot — the ORIGINAL art comes back exactly as drawn (undoes content-aware cleaning there; original text returns too). Then Apply & Re-render.",
@@ -3195,6 +3202,56 @@ document.addEventListener("DOMContentLoaded", () => {
         moveLayer.appendChild(d);
         return;
       }
+      if (cb && (cb.paint || cb.heal)) {   // pen / spot-heal stroke
+        const st = cb.paint || cb.heal;
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        // not clickable: painting over an earlier stroke must keep painting;
+        // Ctrl+Z takes a stroke back
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none";
+        const pl = document.createElementNS(NS, "polyline");
+        const pts = st.pts.length === 1 ? [st.pts[0], st.pts[0]] : st.pts;
+        pl.setAttribute("points", pts.map(p => `${p[0]},${p[1]}`).join(" "));
+        pl.setAttribute("fill", "none");
+        pl.setAttribute("stroke", cb.paint ? (st.color || "#000000") : "rgba(236,72,153,.45)");
+        pl.setAttribute("stroke-width", 2 * st.r);
+        pl.setAttribute("stroke-linecap", "round");
+        pl.setAttribute("stroke-linejoin", "round");
+        pl.dataset.stroke = i;
+        svg.appendChild(pl);
+        moveLayer.appendChild(svg);
+        return;
+      }
+      if (cb && cb.clone && cb.clone.pts) {   // clone-brush stroke
+        const c = cb.clone;
+        moveLayer.appendChild(clonePreview(c, i, W, H));
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.classList.add("clone-stroke");
+        svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:4;pointer-events:none";
+        const ol = document.createElementNS(NS, "polyline");
+        const pts = c.pts.length === 1 ? [c.pts[0], c.pts[0]] : c.pts;
+        ol.setAttribute("points", pts.map(p => `${p[0]},${p[1]}`).join(" "));
+        ol.setAttribute("fill", "none");
+        ol.setAttribute("stroke", "transparent");
+        ol.setAttribute("stroke-width", 2 * c.r);
+        ol.setAttribute("stroke-linecap", "round");
+        ol.setAttribute("stroke-linejoin", "round");
+        ol.dataset.stroke = i;
+        // other tools can click a stroke away; the brush itself paints over it
+        if (!["clone", "paint", "heal"].includes(tool)) {
+          ol.style.pointerEvents = "stroke";
+          ol.style.cursor = "pointer";
+          ol.addEventListener("click", () => { removeCover(page, i); });
+        }
+        svg.appendChild(ol);
+        moveLayer.appendChild(svg);
+        return;
+      }
       if (cb && cb.clone) {   // clone-stamp dab
         const c = cb.clone;
         const d = document.createElement("div");
@@ -3302,6 +3359,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (it.bbox && !gone(it)) addResizeBox(it, page, W, H, true);
       }
     }
+    if (window.__cloneShowSource) window.__cloneShowSource();
   }
 
   // Where an item sits in the editor right now: a hand-resized box beats the
@@ -3706,6 +3764,36 @@ document.addEventListener("DOMContentLoaded", () => {
     moveLayer.addEventListener("pointercancel", finish);
   })();
 
+  /* What a clone stroke will paint: the page's art at the stroke's offset,
+     cut to the brush path. Only the stroke's own box is drawn. */
+  function clonePreview(c, i, W, H) {
+    const r = c.r, pts = c.pts;
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const x0 = Math.floor(Math.min(...xs) - r - 1), y0 = Math.floor(Math.min(...ys) - r - 1);
+    const w = Math.ceil(Math.max(...xs) + r + 1) - x0, h = Math.ceil(Math.max(...ys) + r + 1) - y0;
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, w); cv.height = Math.max(1, h);
+    cv.className = "clone-preview";
+    cv.dataset.stroke = i;
+    cv.style.cssText = `position:absolute;z-index:4;pointer-events:none;left:${x0 / W * 100}%;`
+      + `top:${y0 / H * 100}%;width:${w / W * 100}%;height:${h / H * 100}%`;
+    const ctx = cv.getContext("2d");
+    ctx.lineCap = ctx.lineJoin = "round";
+    ctx.lineWidth = 2 * r;
+    ctx.strokeStyle = "#000";
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0] - x0, pts[0][1] - y0);
+    if (pts.length === 1) ctx.lineTo(pts[0][0] - x0 + 0.01, pts[0][1] - y0);
+    pts.slice(1).forEach(p => ctx.lineTo(p[0] - x0, p[1] - y0));
+    ctx.stroke();
+    const pc = pageCanvas();
+    if (pc) {
+      ctx.globalCompositeOperation = "source-in";
+      ctx.drawImage(pc, c.dst[0] - c.src[0] - x0, c.dst[1] - c.src[1] - y0);
+    }
+    return cv;
+  }
+
   /* ══ CLONE STAMP + LINE ══
      Clone: first click sets the SOURCE, then every click/drag paints a patch
      copied from there (the offset is locked on the first paint, so dragging
@@ -3714,9 +3802,9 @@ document.addEventListener("DOMContentLoaded", () => {
   (function initStampLine() {
     let cloneSrc = null;        // [x,y] source point, image coords
     let offset = null;          // [dx,dy] locked on the first paint
-    let painting = false;
+    let stroke = null;          // the clone stroke being painted
     let lineStart = null;
-    let brush = 34;             // radius, image px
+    const radius = () => Math.max(2, Math.round(brushSizes.clone / 2));
 
     function imgPt(e) {
       const dims = curDims(); if (!dims) return null;
@@ -3726,13 +3814,22 @@ document.addEventListener("DOMContentLoaded", () => {
               Math.round((e.clientY - r.top) / r.height * H)];
     }
 
-    function stamp(page, at) {
-      if (!cloneSrc) return;
-      if (!offset) offset = [at[0] - cloneSrc[0], at[1] - cloneSrc[1]];
-      page.covers = page.covers || [];
-      page.covers.push({ clone: { src: [at[0] - offset[0], at[1] - offset[1]],
-                                  dst: at, r: brush } });
+    // The + that shows where the brush is copying FROM.
+    function showSource(at) {
+      let m = moveLayer.querySelector(".clone-src");
+      if (!at) { if (m) m.remove(); return; }
+      const dims = curDims(); if (!dims) return;
+      if (!m) {
+        m = document.createElement("div");
+        m.className = "clone-src";
+        moveLayer.appendChild(m);
+      }
+      m.style.left = (at[0] / dims[0] * 100) + "%";
+      m.style.top = (at[1] / dims[1] * 100) + "%";
     }
+    // the picked source until the first stroke fixes the offset; after that
+    // the + follows the cursor (see pointermove)
+    window.__cloneShowSource = () => showSource(tool === "clone" && !offset ? cloneSrc : null);
 
     moveLayer.addEventListener("pointerdown", e => {
       if (tool !== "clone" && tool !== "line") return;
@@ -3765,34 +3862,49 @@ document.addEventListener("DOMContentLoaded", () => {
       // CLONE
       if (!cloneSrc || e.altKey) {
         cloneSrc = p; offset = null;
-        editHint.textContent = "Source set. Now click/drag over the damage to paint it in.";
-        buildOverlay();
+        editHint.textContent = "Source set. Now paint over the damage — the copied art shows as you go.";
+        showSource(cloneSrc);
         return;
       }
       pushUndo(page);
-      painting = true;
-      stamp(page, p);
+      // Aligned, like a real clone brush: the offset is fixed by the first
+      // stroke after picking a source, and later strokes keep it.
+      if (!offset) offset = [p[0] - cloneSrc[0], p[1] - cloneSrc[1]];
+      stroke = { clone: { src: [p[0] - offset[0], p[1] - offset[1]], dst: p,
+                          r: radius(), pts: [p.slice()] } };   // own copy: a trim shifts each point once
+      page.covers = page.covers || [];
+      page.covers.push(stroke);
       try { moveLayer.setPointerCapture(e.pointerId); } catch (_) {}
       buildOverlay();
+      showSource([p[0] - offset[0], p[1] - offset[1]]);
     });
 
     moveLayer.addEventListener("pointermove", e => {
-      if (!painting || tool !== "clone") return;
+      if (tool !== "clone") return;
+      if (!stroke) {
+        // hovering: show where a stroke started here would copy from
+        if (offset) { const q = imgPt(e); if (q) showSource([q[0] - offset[0], q[1] - offset[1]]); }
+        return;
+      }
       const page = getActive(); const p = imgPt(e);
       if (!page || !p) return;
-      // Space the dabs out so a drag doesn't queue hundreds of covers.
-      const last = (page.covers || []).filter(c => c && c.clone).pop();
-      if (last && Math.hypot(last.clone.dst[0] - p[0],
-                             last.clone.dst[1] - p[1]) < brush * 0.5) return;
-      stamp(page, p);
-      buildOverlay();
+      const c = stroke.clone, last = c.pts[c.pts.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) < Math.max(1.5, c.r * 0.25)) return;
+      c.pts.push(p);
+      const i = (page.covers || []).indexOf(stroke);
+      const dims = curDims();
+      const old = moveLayer.querySelector(`canvas[data-stroke="${i}"]`);
+      if (old && dims) old.replaceWith(clonePreview(c, i, dims[0], dims[1]));
+      const ol = moveLayer.querySelector(`polyline[data-stroke="${i}"]`);
+      if (ol) ol.setAttribute("points", c.pts.map(q => `${q[0]},${q[1]}`).join(" "));
+      showSource([p[0] - offset[0], p[1] - offset[1]]);
     });
 
     const endPaint = e => {
-      if (!painting) return;
-      painting = false;
+      if (!stroke) return;
+      stroke = null;
       try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
-      editHint.textContent = "Painted — hit Apply & Re-render (Alt-click to pick a new source).";
+      editHint.textContent = "Painted — hit Apply & Re-render (Ctrl+Z undoes the stroke, Alt-click picks a new source).";
     };
     moveLayer.addEventListener("pointerup", endPaint);
     moveLayer.addEventListener("pointercancel", endPaint);
@@ -3805,14 +3917,12 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (tool !== "clone") return;
-      if (e.key === "[") { brush = Math.max(6, brush - 6); editHint.textContent = `Brush ${brush}px`; }
-      if (e.key === "]") { brush = Math.min(200, brush + 6); editHint.textContent = `Brush ${brush}px`; }
-      if (e.key === "Escape") { cloneSrc = null; offset = null; buildOverlay(); }
+      if (e.key === "Escape") { cloneSrc = null; offset = null; showSource(null); }
     });
 
     // Reset the tools' state whenever the active tool changes.
     window.addEventListener("mangatranslator:tool", () => {
-      cloneSrc = null; offset = null; painting = false; lineStart = null;
+      cloneSrc = null; offset = null; stroke = null; lineStart = null;
     });
 
     let lastWidth = 5;
@@ -3837,6 +3947,100 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     window.__cloneSrc = () => cloneSrc;
+  })();
+
+  /* ══ PEN + SPOT HEAL ══
+     Each drag is ONE stroke ({paint: {pts, r, color}} or {heal: {pts, r}}),
+     kept with the page's other edits: the server replays it on every
+     Apply & Re-render, and Ctrl+Z takes it back whole. */
+  (function initPaintHeal() {
+    const bar = document.getElementById("brushBar");
+    const sizeIn = document.getElementById("brushSize");
+    const sizeVal = document.getElementById("brushSizeVal");
+    const colorIn = document.getElementById("penColor");
+    const sampleBtn = document.getElementById("penSample");
+    if (!bar || !sizeIn || !colorIn) return;
+    const size = brushSizes;
+    let stroke = null, sampling = false;
+    const brushTool = () => tool === "paint" || tool === "heal";
+    const sizedTool = () => brushTool() || tool === "clone";
+
+    function imgPt(e) {
+      const dims = curDims(); if (!dims) return null;
+      const [W, H] = dims;
+      const r = moveLayer.getBoundingClientRect();
+      return [Math.round((e.clientX - r.left) / r.width * W),
+              Math.round((e.clientY - r.top) / r.height * H)];
+    }
+    function setSize(d) {
+      d = Math.max(2, Math.min(300, Math.round(d)));
+      size[tool] = d; sizeIn.value = d; sizeVal.textContent = d;
+    }
+    function showBar() {
+      bar.hidden = !sizedTool();
+      if (bar.hidden) return;
+      bar.querySelector(".pen-only").hidden = tool !== "paint";
+      setSize(size[tool]);
+    }
+
+    sizeIn.addEventListener("input", () => { if (sizedTool()) setSize(+sizeIn.value); });
+    sampleBtn.addEventListener("click", () => {
+      sampling = true;
+      editHint.textContent = "Click the page to pick up that colour.";
+    });
+    window.addEventListener("mangatranslator:tool", () => {
+      stroke = null; sampling = false; showBar();
+    });
+
+    moveLayer.addEventListener("pointerdown", e => {
+      if (!brushTool() || e.target !== moveLayer) return;
+      const page = getActive(); const p = imgPt(e);
+      if (!page || !p) return;
+      if (tool === "paint" && (sampling || e.altKey)) {
+        const c = pixelAt(p[0], p[1]);
+        if (c) colorIn.value = c;
+        sampling = false;
+        editHint.textContent = c ? `Colour ${c} picked — now paint.` : HINTS.paint;
+        return;
+      }
+      pushUndo(page);
+      const r = Math.max(1, Math.round(size[tool] / 2));
+      stroke = tool === "paint" ? { paint: { pts: [p], r, color: colorIn.value } }
+                                : { heal: { pts: [p], r } };
+      page.covers = page.covers || [];
+      page.covers.push(stroke);
+      try { moveLayer.setPointerCapture(e.pointerId); } catch (_) {}
+      buildOverlay();
+    });
+
+    moveLayer.addEventListener("pointermove", e => {
+      if (!stroke || !brushTool()) return;
+      const p = imgPt(e); if (!p) return;
+      const st = stroke.paint || stroke.heal;
+      const last = st.pts[st.pts.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) < Math.max(1.5, st.r * 0.3)) return;
+      st.pts.push(p);
+      const page = getActive();
+      const i = page ? (page.covers || []).indexOf(stroke) : -1;
+      const pl = moveLayer.querySelector(`polyline[data-stroke="${i}"]`);
+      if (pl) pl.setAttribute("points", st.pts.map(q => `${q[0]},${q[1]}`).join(" "));
+    });
+
+    const endStroke = e => {
+      if (!stroke) return;
+      stroke = null;
+      try { moveLayer.releasePointerCapture(e.pointerId); } catch (_) {}
+      editHint.textContent = (tool === "heal" ? "Healed" : "Painted")
+        + " — hit Apply & Re-render (Ctrl+Z undoes the stroke).";
+    };
+    moveLayer.addEventListener("pointerup", endStroke);
+    moveLayer.addEventListener("pointercancel", endStroke);
+
+    document.addEventListener("keydown", e => {
+      if (!sizedTool() || e.target.closest?.("input, textarea, [contenteditable]")) return;
+      if (e.key === "[") setSize(size[tool] - Math.max(2, size[tool] * 0.15));
+      if (e.key === "]") setSize(size[tool] + Math.max(2, size[tool] * 0.15));
+    });
   })();
 
   /* free-form lasso erase surface */

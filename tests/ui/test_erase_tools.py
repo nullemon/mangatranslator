@@ -384,9 +384,11 @@ def run(ui, rep):
     DST = (680, 1160)
     ui.click_at(*SRC)
     rep.check("clone: first click sets the source", "Source set" in ui.hint(), ui.hint())
+    rep.check("clone: the source is marked", ui.overlay_counts()["source"] == 1, str(ui.overlay_counts()))
     ui.click_at(*DST)
     oc = ui.overlay_counts()
-    rep.check("clone: dab drawn on the overlay", oc["dab"] == 1, str(oc))
+    rep.check("clone: stroke drawn on the overlay, with a preview of the copied art",
+              oc["dab"] == 1 and oc["preview"] == 1, str(oc))
     body = ui.apply()
     cv = body.get("covers")
     cl = cv[0].get("clone") if cv and isinstance(cv[0], dict) else None
@@ -405,8 +407,36 @@ def run(ui, rep):
         n, bb = changed_outside(base1, cs, [drect], margin=6)
         rep.check("clone: nothing outside the dab changed", n == 0, f"{n} px differ at {bb}")
     no_js_errors(rep, ui, "clone")
-    ui.page.locator("#moveLayer .clone-dab").first.click(force=True)
-    rep.check("clone: clicking the dab removes it", ui.overlay_counts()["dab"] == 0)
+    ui.page.keyboard.press("Control+z")
+    rep.check("clone: Ctrl+Z takes the stroke back", ui.overlay_counts()["dab"] == 0,
+              str(ui.overlay_counts()))
+
+    # ── Pen and spot heal: one stroke per drag, undone whole ─────────
+    ui.set_tool("paint")
+    ui.drag(640, 1150, 760, 1150)
+    oc = ui.overlay_counts()
+    ui.set_tool("heal")
+    ui.drag(SFX[0] + 10, SFX[1] + 20, SFX[0] + 10, SFX[1] + SFX[3] - 20)
+    body = ui.apply()
+    cv = body.get("covers") or []
+    pen = next((c["paint"] for c in cv if isinstance(c, dict) and c.get("paint")), None)
+    heal = next((c["heal"] for c in cv if isinstance(c, dict) and c.get("heal")), None)
+    rep.check("pen: one stroke with its points, size and colour",
+              pen and len(pen["pts"]) >= 2 and pen["r"] > 0 and pen["color"].startswith("#"), str(pen))
+    rep.check("heal: one stroke with its points and size",
+              heal and len(heal["pts"]) >= 2 and heal["r"] > 0, str(heal))
+    ph = ui.result_image()
+    save("p1_pen_heal.png", ph)
+    if pen:
+        ys, x0, x1 = pen["pts"][0][1], pen["pts"][0][0] + 10, pen["pts"][-1][0] - 10
+        rep.check("pen: the stroke is painted", float(ph[ys - 2:ys + 3, x0:x1].mean()) < 60,
+                  f"mean {float(ph[ys - 2:ys + 3, x0:x1].mean()):.0f}")
+    no_js_errors(rep, ui, "pen/heal")
+    ui.page.keyboard.press("Control+z")
+    ui.page.keyboard.press("Control+z")
+    rep.check("pen/heal: Ctrl+Z twice takes both strokes back",
+              ui.overlay_counts()["svg"] == 0, str(ui.overlay_counts()))
+    ui.set_tool("cover")
 
     # ── Chains: earlier covers must survive later tools ──────────────
     chains(ui, rep, base1, SFX, BALLOON, FP, frect)
@@ -430,7 +460,7 @@ def trim_follow(ui, rep, SFX):
     W0, H0 = ui.dims()
     # clear leftovers from earlier tests
     for _ in range(12):
-        els = ui.page.locator("#moveLayer > .cover-box, #moveLayer > .clone-dab, #moveLayer > .restore-click, #moveLayer svg polygon, #moveLayer svg line")
+        els = ui.page.locator("#moveLayer > .cover-box, #moveLayer > .clone-dab, #moveLayer > .restore-click, #moveLayer svg polygon, #moveLayer svg line, #moveLayer svg.clone-stroke polyline")
         if els.count() == 0:
             break
         ui.set_tool("cover")
@@ -511,9 +541,11 @@ def trim_follow(ui, rep, SFX):
 
 def chains(ui, rep, base1, SFX, BALLOON, FP, frect):
     def clear_all():
-        # click every cover marker away
+        # click every cover marker away (brush strokes are clickable from
+        # the other tools, not from the brush itself)
+        ui.set_tool("cover")
         for _ in range(12):
-            els = ui.page.locator("#moveLayer > .cover-box, #moveLayer > .clone-dab, #moveLayer svg polygon, #moveLayer svg line")
+            els = ui.page.locator("#moveLayer > .cover-box, #moveLayer > .clone-dab, #moveLayer svg polygon, #moveLayer svg line, #moveLayer svg.clone-stroke polyline")
             if els.count() == 0:
                 break
             els.last.click(force=True)

@@ -303,7 +303,7 @@ class Compositor:
     _SIZE_CEIL_DEFAULT = 0.85
     _SIZE_CEIL_ON_ART = 0.68
 
-    def _phantom_read(self, it):
+    def _phantom_read(self, it, bm=None):
         """True for a balloon-finder line whose reading has no lettering under
         it: the page's text strokes hold no character-sized piece in its box,
         so its glyph size could not be measured. manga-ocr, handed a white
@@ -318,7 +318,29 @@ class Compositor:
             return False                 # nothing was measured at all
         if not (it.get("original") or "").strip():
             return False
-        return not float(it.get("_glyph_px") or 0.0)
+        if float(it.get("_glyph_px") or 0.0):
+            return False
+        # An unmeasured size alone is not proof: sound lettering in a balloon
+        # (ガチ…, ばっ!) is left out of the dialogue strokes the size is read
+        # from, and bold katakana can defeat the measurement, yet the page's
+        # full stroke mask has it plainly (29-60% of the box). A phantom box
+        # holds next to no lettering strokes at all — counted inside its
+        # balloon when it has one: a white gap enclosed by a huge sound
+        # effect has the effect's strokes all round it in its box, none in it.
+        b = it.get("bbox")
+        if b and len(b) == 4:
+            x, y, w, h = (int(v) for v in b)
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = max(x0, x + w), max(y0, y + h)
+            win = self._seg_mask[y0:y1, x0:x1] > 0
+            if bm is not None and bm.shape[:2] == self._seg_mask.shape[:2]:
+                inside = cv2.erode((bm > 0).astype(np.uint8),
+                                   np.ones((5, 5), np.uint8))[y0:y1, x0:x1] > 0
+                if inside.any():
+                    win = win[inside]
+            if win.size and float(win.mean()) >= 0.02:
+                return False
+        return True
 
     def _sfx_sized(self, it):
         """True for an automatic line whose measured lettering is sound-effect
@@ -1141,6 +1163,21 @@ class Compositor:
                 if touched:
                     edited_rects.append(touched)
                 continue
+            # Pen: {"paint": {"pts": [[x,y],...], "r": 8, "color": "#rrggbb"}}
+            # — a round brush stroke in a chosen (or sampled) colour.
+            if isinstance(cb, dict) and cb.get("paint"):
+                touched = self._paint_stroke(result, cb["paint"])
+                if touched:
+                    edited_rects.append(touched)
+                continue
+            # Spot heal: {"heal": {"pts": [[x,y],...], "r": 20}} — what the
+            # brush went over is rebuilt from the art around it, like a spot
+            # healing brush.
+            if isinstance(cb, dict) and cb.get("heal"):
+                touched = self._heal_stroke(result, cb["heal"])
+                if touched:
+                    edited_rects.append(touched)
+                continue
             # Straight line: {"line": [[x1,y1],[x2,y2]], "width": 6,
             # "color": "#000000"} — redraw a panel border the cleaner ate.
             if isinstance(cb, dict) and cb.get("line"):
@@ -1316,18 +1353,22 @@ class Compositor:
             # "そういえば、"). The house rule leaves those untouched; erasing
             # "its text" (outlined-letter erase included, just below) smeared
             # the effect. Judged before anything is erased.
-            if self._phantom_read(it):
+            bm = masks.get(it.get("id"))
+            if bm is None:
+                bm = masks.get(str(it.get("id")))
+            if self._phantom_read(it, bm):
                 print(f"[compositor] line {it.get('id')} at {it.get('bbox')}: "
                       f"no lettering under the reading "
                       f"{(it.get('original') or '')[:12]!r} — left alone", flush=True)
                 continue
             if self._sfx_sized(it):
-                bm = masks.get(it.get("id"))
-                if bm is None:
-                    bm = masks.get(str(it.get("id")))
-                if not (it.get("in_bubble") and bm is not None
-                        and bm.shape[:2] == gray.shape[:2]
-                        and self._is_real_balloon(gray, bm, True)):
+                # A line the detector put in a balloon stays a balloon line
+                # when there is no shape to check it against (a sound in a
+                # balloon — FWOOSH!!, BITE... — is lettered big on purpose);
+                # a shape that fails the balloon check is the effect itself.
+                has_shape = bm is not None and bm.shape[:2] == gray.shape[:2]
+                if not (it.get("in_bubble")
+                        and (not has_shape or self._is_real_balloon(gray, bm, True))):
                     print(f"[compositor] line {it.get('id')} at {it.get('bbox')}: "
                           f"lettering {float(it.get('_glyph_px') or 0):.0f}px vs the "
                           f"page's {self._glyph_med:.0f}px, not in a balloon — a "
@@ -2566,6 +2607,8 @@ class Compositor:
         `dst`. Feathered at the rim so the graft blends instead of showing a
         hard disc, which is what makes it usable on screentone and hatching
         where a flat fill would read as a patch."""
+        if spec.get("pts"):
+            return self._clone_stroke(result, spec)
         try:
             sx, sy = (int(v) for v in spec.get("src", (0, 0)))
             dx, dy = (int(v) for v in spec.get("dst", (0, 0)))
@@ -2596,6 +2639,46 @@ class Compositor:
         a = np.clip((rad - d) / feather, 0.0, 1.0)[..., None]
         dst[:] = (dst * (1 - a) + src * a).astype(np.uint8)
         return (x0d + ox0, y0d + oy0, ox1 - ox0, oy1 - oy0)
+
+    def _clone_stroke(self, result, spec):
+        """A whole clone-brush drag: {"src": [x,y], "dst": [x,y], "r": 30,
+        "pts": [[x,y], ...]} — everything the brush went over gets the art at
+        the same offset (dst - src), as ONE soft-edged stroke.
+
+        The source is read in full before anything is written, so a drag
+        whose source runs into its own fresh paint copies the art, not the
+        paint (dab after dab used to smear), and there is one soft rim round
+        the stroke, not a scalloped chain of feathered discs."""
+        try:
+            sx, sy = (int(v) for v in spec.get("src", (0, 0)))
+            dx, dy = (int(v) for v in spec.get("dst", (0, 0)))
+        except (TypeError, ValueError):
+            return None
+        mask, box = self._stroke_mask(result.shape, spec)
+        if box is None:
+            return None
+        ox, oy = dx - sx, dy - sy
+        H, W = result.shape[:2]
+        x, y, w, h = box
+        # source window = the stroke's box shifted back by the offset,
+        # clipped to the page (the part off the page is simply not painted)
+        src = np.zeros((h, w, 3), np.uint8)
+        valid = np.zeros((h, w), np.float32)
+        ax0, ay0 = max(0, x - ox), max(0, y - oy)
+        ax1, ay1 = min(W, x - ox + w), min(H, y - oy + h)
+        if ax1 - ax0 < 1 or ay1 - ay0 < 1:
+            return None
+        bx0, by0 = ax0 - (x - ox), ay0 - (y - oy)
+        src[by0:by0 + ay1 - ay0, bx0:bx0 + ax1 - ax0] = result[ay0:ay1, ax0:ax1]
+        valid[by0:by0 + ay1 - ay0, bx0:bx0 + ax1 - ax0] = 1.0
+        r = float(np.clip(float(spec.get("r") or 30), 1, 300))
+        dist = cv2.distanceTransform((mask[y:y + h, x:x + w] > 0).astype(np.uint8),
+                                     cv2.DIST_L2, 3)
+        a = (np.clip(dist / max(1.5, 0.25 * r), 0.0, 1.0) * valid)[..., None]
+        dst = result[y:y + h, x:x + w]
+        dst[:] = np.clip(dst.astype(np.float32) * (1.0 - a)
+                         + src.astype(np.float32) * a + 0.5, 0, 255).astype(np.uint8)
+        return box
 
     def _draw_line(self, result, pts, width=None, color=None):
         """Redraw a straight line — panel borders and rules that cleaning ate.
@@ -2705,7 +2788,64 @@ class Compositor:
         x1c, y1c = min(W, x + w), min(H, y + h)
         if x1c - x0c < 3 or y1c - y0c < 3:
             return None
-        x, y, w, h = x0c, y0c, x1c - x0c, y1c - y0c
+        return self._inpaint_region(result, mask, (x0c, y0c, x1c - x0c, y1c - y0c))
+
+    @staticmethod
+    def _stroke_mask(shape, spec, aa=False):
+        """Mask of a round brush stroke {"pts": [[x,y],...], "r": radius} and
+        its bounding box (x, y, w, h) on the page; (None, None) when the
+        stroke is malformed or off the page."""
+        H, W = shape[:2]
+        try:
+            pts = [(int(round(float(p[0]))), int(round(float(p[1]))))
+                   for p in (spec.get("pts") or [])]
+            r = int(np.clip(int(float(spec.get("r") or 10)), 1, 300))
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return None, None
+        if not pts:
+            return None, None
+        mask = np.zeros((H, W), np.uint8)
+        lt = cv2.LINE_AA if aa else cv2.LINE_8
+        for p in pts:
+            cv2.circle(mask, p, r, 255, -1, lineType=lt)
+        for a, b in zip(pts, pts[1:]):
+            cv2.line(mask, a, b, 255, 2 * r, lineType=lt)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        x0, y0 = max(0, min(xs) - r - 2), max(0, min(ys) - r - 2)
+        x1, y1 = min(W, max(xs) + r + 3), min(H, max(ys) + r + 3)
+        if x1 - x0 < 1 or y1 - y0 < 1 or not mask[y0:y1, x0:x1].any():
+            return None, None
+        return mask, (x0, y0, x1 - x0, y1 - y0)
+
+    def _paint_stroke(self, result, spec):
+        """Pen tool: paint a round, anti-aliased brush stroke in one colour."""
+        mask, box = self._stroke_mask(result.shape, spec, aa=True)
+        if box is None:
+            return None
+        x, y, w, h = box
+        a = (mask[y:y + h, x:x + w].astype(np.float32) / 255.0)[..., None]
+        bgr = np.array(self._parse_color(spec.get("color"), (0, 0, 0)), np.float32)
+        sub = result[y:y + h, x:x + w]
+        sub[:] = np.clip(sub.astype(np.float32) * (1.0 - a) + bgr * a + 0.5,
+                         0, 255).astype(np.uint8)
+        return box
+
+    def _heal_stroke(self, result, spec):
+        """Spot healing brush: rebuild what the brush went over from the art
+        around it."""
+        mask, box = self._stroke_mask(result.shape, spec)
+        if box is None:
+            return None
+        # a hair past the brush edge, so no ring of the old mark is left
+        mask = cv2.dilate(mask, np.ones((3, 3), np.uint8))
+        return self._inpaint_region(result, mask, box)
+
+    def _inpaint_region(self, result, mask, box):
+        """Rebuild the masked pixels inside `box` (x, y, w, h) from their
+        surroundings (LaMa, or cv2 fallback). Returns `box`."""
+        H, W = result.shape[:2]
+        x, y, w, h = box
         # Fill from a LOCAL padded window and write back ONLY the masked
         # pixels — the rest of the page is never resampled or repainted.
         pad = int(np.clip(0.5 * max(w, h), 24, 200))

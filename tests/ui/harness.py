@@ -290,7 +290,9 @@ class UI:
             "  svg: L.querySelectorAll('svg').length,"
             "  polygon: L.querySelectorAll('svg polygon').length,"
             "  line: L.querySelectorAll('svg line').length,"
-            "  dab: L.querySelectorAll('.clone-dab').length,"
+            "  dab: L.querySelectorAll('.clone-dab, svg.clone-stroke').length,"
+            "  preview: L.querySelectorAll('canvas.clone-preview').length,"
+            "  source: L.querySelectorAll('.clone-src').length,"
             "  restoreClick: L.querySelectorAll('.restore-click').length,"
             "  children: L.children.length }; }")
 

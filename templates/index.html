@@ -670,6 +670,8 @@
                   <button class="btn btn-ghost btn-sm tool-btn" data-tool="fill-poly" title="REDRAW: click points around a damaged/leftover area to outline it, sample a colour from the surrounding art (or pick your own), and flood-fill the shape — rebuilds flat backgrounds, black panels and tone gaps">🪣 Redraw fill</button>
                   <button class="btn btn-ghost btn-sm tool-btn" data-tool="tone-poly" title="TONE FILL: click points around a hole in a screentone area — it's filled with a dot pattern matched to the tone around it, instead of a flat colour that would look like a patch">▦ Tone fill</button>
                   <button class="btn btn-ghost btn-sm tool-btn" data-tool="clone" title="CLONE STAMP: click a clean patch of art to copy FROM, then click (or drag) over the damage to paint it in. Best for textured art — hatching, screentone, gradients — where a flat fill shows.">⎘ Clone stamp</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="paint" title="PEN: paint with a round brush. Pick a colour, or Sample it from the page (Alt-click works too). Size slider or [ ] keys. Ctrl+Z undoes a stroke.">🖌 Pen</button>
+                  <button class="btn btn-ghost btn-sm tool-btn" data-tool="heal" title="SPOT HEAL: brush over a spot, a speck or a leftover mark and it is rebuilt from the art around it. Size slider or [ ] keys. Ctrl+Z undoes a stroke.">🩹 Spot heal</button>
                   <button class="btn btn-ghost btn-sm tool-btn" data-tool="line" title="LINE: click two points to redraw a straight line — panel borders and rules that cleaning ate. Thickness and colour are adjustable.">╱ Line</button>
                   <button class="btn btn-ghost btn-sm tool-btn" data-tool="keep" title="Draw around the page — everything OUTSIDE the outline becomes white (removes carpet/floor/background)">⬚ Remove BG</button>
                 </div>
@@ -694,6 +696,15 @@
               </div>
             </div>
             <div class="edit-hint-row">
+              <span class="brush-bar" id="brushBar" hidden>
+                <label title="Brush size in page pixels ([ and ] change it too)">Size
+                  <input type="range" id="brushSize" min="2" max="300" value="12">
+                  <b id="brushSizeVal">12</b>px</label>
+                <span class="pen-only">
+                  <input type="color" id="penColor" value="#000000" title="Pen colour">
+                  <button type="button" class="btn btn-ghost btn-sm" id="penSample" title="Pick up a colour from the page (or Alt-click the page)">💧 Sample</button>
+                </span>
+              </span>
               <span class="edit-hint" id="editHint">Pick a tool to fix anything by hand.</span>
               <button class="btn btn-primary btn-sm" id="editApply" style="display:none">Apply &amp; Re-render</button>
             </div>

@@ -3478,6 +3478,10 @@ async def trim_page(task_id: str, request: Request):
             shift_pts([c.get("restore_click")] if c.get("restore_click") else [])
             cl = c.get("clone") or {}
             shift_pts([cl.get("src"), cl.get("dst")] if isinstance(cl, dict) else [])
+            shift_pts(cl.get("pts") if isinstance(cl, dict) else [])
+            for key in ("paint", "heal"):
+                if isinstance(c.get(key), dict):
+                    shift_pts(c[key].get("pts"))
     cut = int(round(frac * (probe.shape[1] if side in ("left", "right")
                             else probe.shape[0])))
     print(f"[trim] {task_id[:8]} cut {cut}px off the {side} "
