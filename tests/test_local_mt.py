@@ -32,10 +32,9 @@ class FakeModel(local_mt.LocalMT):
     def _load(self):
         self.ok = True
 
-    def translate_many(self, texts, max_batch=16):
-        self.asked += list(texts)
-        return [local_mt._trim_runaway(self.table.get(t, "Hello."), t)
-                for t in texts]
+    def _generate(self, batch, cap):
+        self.asked += list(batch)
+        return [self.table.get(t, "Hello.") for t in batch]
 
 
 def main():
@@ -57,14 +56,14 @@ def main():
     try:
         made = []
 
-        def fake(mid, sanity=None):
-            m = FakeModel(mid, {"猫はかわいいです。": "Cats are cute.",
-                                "私は学生です。": "I'm a student."}
-                          if "opus" in mid else {}, sanity)
-            made.append(mid)
-            return m
+        class ByName(FakeModel):
+            def __init__(self, mid, sanity=None):
+                made.append(mid)
+                super().__init__(mid, {"猫はかわいいです。": "Cats are cute.",
+                                       "私は学生です。": "I'm a student."}
+                                 if "opus" in mid else {}, sanity)
         local_mt._CACHE.clear()
-        local_mt.LocalMT = fake
+        local_mt.LocalMT = ByName
         got = local_mt.get("Japanese")
         assert got is not None and "opus" in got.model_id, (made, got)
     finally:
@@ -117,6 +116,19 @@ def main():
     assert [out[i]["translation"] for i in (1, 2, 3, 4)] == [
         "UWAH!!", "...", "This pain is proof that I'm alive!", "..."], out
     print("offline translator: sounds and dots kept from the model OK")
+
+    # 6. a subtitle stage direction is not a line: the colon manga-ocr writes
+    #    for a vertical … is turned back, and a "(Laughter)" answer is
+    #    translated again in pieces
+    fake2 = FakeModel("good", {
+        "いいかロロノア…万物は変わりゆく": "(Laughter)",
+        "いいかロロノア…": "Listen, Roronoa...",
+        "万物は変わりゆく": "All things change.",
+        "それでも、": "(Laughter) (Applause)"})
+    out2 = fake2.translate_many(["いいかロロノア：万物は変わりゆく", "それでも、"])
+    assert "いいかロロノア…万物は変わりゆく" in fake2.asked, fake2.asked
+    assert out2 == ["Listen, Roronoa... All things change.", ""], out2
+    print("stage directions re-translated in pieces or dropped OK")
     print("ALL CHECKS PASSED")
 
 

@@ -218,6 +218,10 @@ def fixed_rendering(text: str, pairs) -> str:
     return hit
 
 
+# "(Laughter)", "[Applause] (Music)" — a subtitle stage direction, not speech
+_STAGE = re.compile(r"\s*(?:[(\[（【][^)\]）】]*[)\]）】][\s.!]*)+")
+
+
 class LocalMT:
     """A loaded offline translation model. Process-wide cached per model id."""
 
@@ -331,6 +335,10 @@ class LocalMT:
         what stops two separate lines being fused into nonsense."""
         t = (text or "").replace("\r", "")
         t = re.sub(r"[ \t]+", " ", t)
+        # manga-ocr writes a vertical "…" as a full-width colon or as dots;
+        # to a subtitle-trained model a colon reads as a speaker cue, and
+        # いいかロロノア：万物は変わりゆく came back "(Laughter)"
+        t = re.sub(r"[：:]|[．.]{2,}|・{2,}", "…", t)
         # Japanese/Chinese have no spaces: joining rows with a space would
         # insert one mid-word. Join with nothing, and only keep newlines that
         # follow sentence-ending punctuation.
@@ -386,12 +394,28 @@ class LocalMT:
         return t
 
     # ── translation ─────────────────────────────────────────────────────
-    def translate_many(self, texts: List[str], max_batch: int = 16) -> List[str]:
+    def _generate(self, batch: List[str], cap: int) -> List[str]:
+        """The model itself: prepared source lines in, raw English out."""
+        import torch
+        enc = self._tok(batch, return_tensors="pt", padding=True,
+                        truncation=True, max_length=512)
+        enc = {k: v.to(self._device) for k, v in enc.items()}
+        with torch.inference_mode():
+            gen = self._model.generate(
+                **enc,
+                max_new_tokens=cap,
+                num_beams=4,          # markedly better than greedy
+                no_repeat_ngram_size=4,
+                length_penalty=1.0,
+            )
+        return self._tok.batch_decode(gen, skip_special_tokens=True)
+
+    def translate_many(self, texts: List[str], max_batch: int = 16,
+                       _retry: bool = True) -> List[str]:
         """Translate a list of lines. Batched, so a whole page is one or two
         forward passes rather than a call per bubble."""
         if not self.ok or not texts:
             return ["" for _ in texts]
-        import torch
 
         prepared = [self._clean_source(t) for t in texts]
         results: List[str] = []
@@ -407,18 +431,7 @@ class LocalMT:
             # for 256 tokens.
             cap = min(256, 16 + max(_budget(b) for b in batch) // 3)
             try:
-                enc = self._tok(batch, return_tensors="pt", padding=True,
-                                truncation=True, max_length=512)
-                enc = {k: v.to(self._device) for k, v in enc.items()}
-                with torch.inference_mode():
-                    gen = self._model.generate(
-                        **enc,
-                        max_new_tokens=cap,
-                        num_beams=4,          # markedly better than greedy
-                        no_repeat_ngram_size=4,
-                        length_penalty=1.0,
-                    )
-                dec = self._tok.batch_decode(gen, skip_special_tokens=True)
+                dec = self._generate(batch, cap)
             except Exception as e:
                 print(f"[local-mt] batch failed: {e}")
                 dec = ["" for _ in batch]
@@ -426,6 +439,19 @@ class LocalMT:
             for n, d in zip(keep, dec):
                 out[n] = _trim_runaway(self._polish(d), chunk[n])
             results.extend(out)
+        if _retry:
+            # A stage direction instead of a line — OPUS-MT is trained on
+            # talk subtitles, and それでも、 or a colon-joined line comes back
+            # "(Laughter)" / "(Applause)". Translate the line again in pieces,
+            # split at its punctuation; a piece that is still a stage
+            # direction is dropped.
+            for n, (src, got) in enumerate(zip(prepared, results)):
+                if not _STAGE.fullmatch(got or ""):
+                    continue
+                pieces = [p for p in re.split(r"(?<=[、。！？!?…])", src) if _core(p)]
+                redo = self.translate_many(pieces, _retry=False) if len(pieces) > 1 else []
+                keep = [r for r in redo if r and not _STAGE.fullmatch(r)]
+                results[n] = " ".join(keep)
         return results
 
     def translate_one(self, text: str) -> str:
