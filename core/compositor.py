@@ -1923,7 +1923,11 @@ class Compositor:
                 # interiors still get a clean caption fill; text over art has
                 # only its strokes healed, sized to the source, with a halo.
                 cap, pb = self._plan_free_region(gray, bx, by, bw, bh, refine=True)
-                if any(self._overlaps(pb, ub) for ub in used_boxes):
+                hit = next((ub for ub in used_boxes if self._overlaps(pb, ub)), None)
+                if hit is not None:
+                    print(f"[compositor] line {it.get('id')} at {bbox}: its text area "
+                          f"{tuple(int(v) for v in pb)} overlaps a spot already lettered "
+                          f"{tuple(int(v) for v in hit)} — skipped", flush=True)
                     continue
                 used_boxes.append(pb)
                 rect, dark, touched = self._apply_free_region(result, gray, cap, pb)
