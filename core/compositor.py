@@ -669,6 +669,237 @@ class Compositor:
         out[big[lab]] = 0
         return out
 
+    def _outlined_glyphs(self, image, gray, bbox, on_art=True):
+        """Letters drawn OUTLINED: white (or screentone) bodies inside a black
+        outline — how sounds in balloons and an editor's teaser on the art
+        are often lettered (☆至る!!!, ぱっ!, パキパキ). The text model sees
+        little of them (the letter body is lighter than its surroundings), so
+        they were left half-erased, and the English went on in plain black
+        where the release letters it outlined too.
+
+        Found as light shapes wholly enclosed by dark ink, glyph-sized, with
+        no text inside them (a balloon's interior has its letters as holes),
+        covering a real share of the line's box — the white holes inside
+        black kanji (口, 日) cover far less. Returns None, or a dict: the
+        erase mask (window at x0, y0), the letter body tone, a texture patch
+        when the body is screentone, the glyph size and outline width."""
+        H, W = gray.shape[:2]
+        x, y, w, h = [int(v) for v in bbox]
+        if w < 12 or h < 12:
+            return None
+        px, py = max(6, w // 8), max(6, h // 8)
+        x0, y0 = max(0, x - px), max(0, y - py)
+        x1, y1 = min(W, x + w + px), min(H, y + h + py)
+        roi = gray[y0:y1, x0:x1]
+        rh, rw = roi.shape[:2]
+        # Two passes: crisp white bodies on the raw pixels, then (lightly
+        # blurred, so screentone dots read as the flat grey they are) grey
+        # bodies. The blur alone melts a thin outline like the ☆'s away.
+        soft = cv2.GaussianBlur(roi, (5, 5), 0)
+        k7 = np.ones((7, 7), np.uint8)
+        found = []                   # (filled mask, body tone, size)
+        taken = np.zeros(roi.shape, np.uint8)
+        for src, light_at in ((roi, 200), (soft, 130)):
+            dark = src < 90
+            n, lab, st, cen = cv2.connectedComponentsWithStats(
+                (src >= light_at).astype(np.uint8), 4)
+            for k in range(1, n):
+                bx, by, bw, bh, a = [int(v) for v in st[k]]
+                if a < 30 or bx == 0 or by == 0 or bx + bw >= rw or by + bh >= rh:
+                    continue
+                if max(bw, bh) < 12 or bw * bh > 0.5 * w * h:
+                    continue
+                cx, cy = cen[k][0] + x0, cen[k][1] + y0
+                if not (x <= cx < x + w and y <= cy < y + h):
+                    continue
+                comp = (lab[by:by + bh, bx:bx + bw] == k).astype(np.uint8)
+                if taken[by:by + bh, bx:bx + bw][comp > 0].mean() > 0.5:
+                    continue                # the first pass has it already
+                cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                (_c, (ra, rb), _a) = cv2.minAreaRect(max(cnts, key=cv2.contourArea))
+                if max(ra, rb) > 6 * max(min(ra, rb), 1):
+                    continue                # a sliver between speed lines
+                filled = np.zeros_like(comp)
+                cv2.drawContours(filled, cnts, -1, 1, -1)
+                holes = (filled > 0) & (comp == 0)
+                if holes.any():
+                    # letters inside it (a balloon, a glow) — not the odd
+                    # inner stroke of an outlined kanji (至 drawn hollow)
+                    hn, _hl, hst, _ = cv2.connectedComponentsWithStats(
+                        holes.astype(np.uint8), 8)
+                    real = hst[1:, 4][hst[1:, 4] >= 12] if hn > 1 else []
+                    if len(real) >= 5 or sum(real) > 0.10 * filled.sum():
+                        continue
+                big = np.zeros(roi.shape, np.uint8)
+                big[by:by + bh, bx:bx + bw] = filled
+                ring = (cv2.dilate(big, k7) > 0) & (big == 0)
+                if not ring.any() or float(dark[ring].mean()) < 0.4:
+                    continue
+                taken |= big
+                found.append((big, float(np.median(roi[big > 0])), max(bw, bh)))
+        if len(found) < 2:
+            return None
+        # One line is lettered in one fill: keep the bodies of its main tone.
+        # A big grey sound effect beside a white teaser has enclosed grey
+        # pieces inside the teaser's box too.
+        areas = np.array([float(b.sum()) for b, _t, _d in found])
+        tones = np.array([tn for _b, tn, _d in found])
+        order = np.argsort(tones)
+        main = tones[order][np.searchsorted(np.cumsum(areas[order]), areas.sum() / 2.0)]
+        body = np.zeros(roi.shape, np.uint8)
+        dims = []
+        for (b, tn, d) in found:
+            if abs(tn - main) <= 45:
+                body |= b
+                dims.append(d)
+        dark = roi < 90
+        # The bodies must be a real share of the box AND outweigh the dark
+        # ink around them: outlined letters are mostly body with a thin
+        # outline, while black lettering (whose counters are enclosed light
+        # shapes too) and line art are mostly ink.
+        area = float(body.sum())
+        ink = float(dark[y - y0:y - y0 + h, x - x0:x - x0 + w].sum())
+        if len(dims) < 2 or area < 0.045 * w * h or area < 0.12 * max(ink, 1.0):
+            return None
+        # (judged blurred, near-black only: a screentone balloon around the
+        # letters is not their outline)
+        dark = (soft < 110) & (roi < 110)
+        # outline width: how far the dark ring around the bodies reaches —
+        # followed out until it has really faded (a remnant of the outer
+        # edge left behind is what the inpainter grows into grey ghosts);
+        # the first ring is the letter's own soft edge, never a stop
+        t, prev = 2, body
+        for r in range(1, 15):
+            grown = cv2.dilate(body, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+            band = (grown > 0) & (prev == 0)
+            prev = grown
+            if r >= 2 and band.any() and float(dark[band].mean()) < 0.2:
+                break
+            t = r
+        t = int(np.clip(t, 2, 14))
+        g85 = float(np.percentile(dims, 85))
+        if t > 0.3 * g85:
+            return None     # thick ink round small holes: black letters' counters
+        # The small pieces beside the letters — furigana, dakuten, ° marks,
+        # small kana (いた, ゅっ) — are outlined too but under the size floor:
+        # take any enclosed light piece of the same fill near the letters.
+        zone = cv2.dilate(body, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (int(g85) | 1, int(g85) | 1))) > 0
+        k5 = np.ones((5, 5), np.uint8)
+        for src, light_at in ((roi, 200), (soft, 130)):
+            n, lab, st, _cen = cv2.connectedComponentsWithStats(
+                (src >= light_at).astype(np.uint8), 4)
+            for k in range(1, n):
+                bx, by, bw, bh, a = [int(v) for v in st[k]]
+                if a < 6:
+                    continue
+                piece = lab[by:by + bh, bx:bx + bw] == k
+                if body[by:by + bh, bx:bx + bw][piece].any():
+                    continue            # already one of the letters
+                if not zone[by:by + bh, bx:bx + bw][piece].all():
+                    continue
+                if abs(float(np.median(roi[by:by + bh, bx:bx + bw][piece])) - main) > 45:
+                    continue
+                big = np.zeros(roi.shape, np.uint8)
+                big[by:by + bh, bx:bx + bw][piece] = 1
+                ring = (cv2.dilate(big, k5) > 0) & (big == 0)
+                if ring.any() and float(dark[ring].mean()) >= 0.5:
+                    body |= big
+        mask = cv2.dilate(body, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * t + 7, 2 * t + 7)))
+        # Furigana beside outlined letters is often plain black kana (至 with
+        # いた): small dark marks wholly inside the letters' zone go as well.
+        wide = cv2.dilate(body, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * int(g85) + 1, 2 * int(g85) + 1))) > 0
+        nd, dl, dst, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), 8)
+        for k in range(1, nd):
+            bx, by, bw, bh, a = [int(v) for v in dst[k]]
+            if a < 6 or max(bw, bh) > 0.8 * g85:
+                continue
+            piece = dl[by:by + bh, bx:bx + bw] == k
+            if wide[by:by + bh, bx:bx + bw][piece].mean() >= 0.6:
+                mask[by:by + bh, bx:bx + bw][cv2.dilate(piece.astype(np.uint8), k5) > 0] = 1
+        # The white glow a letterer paints around outlined letters on busy
+        # art: left behind, it is a white patch over a dark shirt where the
+        # letters were. Its light pixels just past the outline go too (on
+        # plain paper the fill gives the same white back).
+        if on_art:
+            # (inside a balloon the paper round the letters is the balloon's,
+            # and past its border it is the page's: never a glow)
+            glow = cv2.dilate(mask, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * t + 5, 2 * t + 5)))
+            mask |= glow & (roi >= 180).astype(np.uint8)
+        # ...but a balloon border or panel line the letters touch is not
+        # theirs past the outline's own width: dark ink running off to the
+        # window's edge, farther than t from the letters, stays.
+        nd, dl, dst, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), 8)
+        edge = np.zeros(nd, bool)
+        edge[np.unique(np.concatenate([dl[0], dl[-1], dl[:, 0], dl[:, -1]]))] = True
+        edge[0] = False
+        own = cv2.dilate(body, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * t + 1, 2 * t + 1))) > 0
+        mask[edge[dl] & ~own] = 0
+        mask = mask * 255
+        inner = cv2.erode(body, np.ones((3, 3), np.uint8)) > 0
+        sel = inner & (roi >= 90)           # not a hollow kanji's inner strokes
+        vals = roi[sel] if sel.any() else roi[body > 0]
+        tone = int(np.clip(np.median(vals), 0, 255))
+        texture = None
+        if tone < 215:
+            # a grey body is screentone: keep a patch of it for the English
+            dist = cv2.distanceTransform(body, cv2.DIST_L2, 3)
+            cy_, cx_ = np.unravel_index(int(np.argmax(dist)), dist.shape)
+            half = int(dist[cy_, cx_] * 0.7)
+            if half >= 4:
+                texture = image[y0 + cy_ - half:y0 + cy_ + half,
+                                x0 + cx_ - half:x0 + cx_ + half].copy()
+        return {"x0": x0, "y0": y0, "mask": mask, "tone": tone, "texture": texture,
+                "glyph": float(np.percentile(dims, 85)) + 2 * t, "outline": t}
+
+    def _erase_outlined(self, result, o, on_art=True):
+        """Erase outlined letters (see _outlined_glyphs). On two-tone line
+        art — black ink, white paper, few greys, as around a teaser on a
+        chapter's last page — each hole pixel becomes black or paper,
+        spread in from its edge: the inpainter, handed a strip that crosses
+        a black shirt, copied the grey strokes of the sound effect beside it
+        into the hole. On tone or screentone the content-aware fill is used."""
+        m = o["mask"]
+        mh, mw = m.shape[:2]
+        x0, y0 = o["x0"], o["y0"]
+        H, W = result.shape[:2]
+        p = 16
+        X0, Y0, X1, Y1 = max(0, x0 - p), max(0, y0 - p), min(W, x0 + mw + p), min(H, y0 + mh + p)
+        sel = np.zeros((Y1 - Y0, X1 - X0), np.uint8)
+        sel[y0 - Y0:y0 - Y0 + mh, x0 - X0:x0 - X0 + mw] = (m > 0) * 255
+        region = result[Y0:Y1, X0:X1]
+        g = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        ring = (cv2.dilate(sel, np.ones((25, 25), np.uint8)) > 0) & (sel == 0)
+        rv = g[ring]
+        # (never inside a balloon: its interior is paper, and black from the
+        # panel beside it must not be pulled in)
+        two_tone = (on_art and rv.size >= 50
+                    and float(np.mean((rv > 80) & (rv < 180))) <= 0.15
+                    and float(np.mean(rv >= 180)) >= 0.3)
+        if not two_tone:
+            self._fill_mask(result, x0, y0, x0 + mw, y0 + mh, m)
+            return
+        hole = sel > 0
+        # solid black spread in from the edge (thin ink — speed lines on the
+        # paper — is not a region and must not pull the black out over it)
+        solid = cv2.erode(((g < 80) & ~hole).astype(np.uint8), np.ones((7, 7), np.uint8))
+        solid = (cv2.dilate(solid, np.ones((7, 7), np.uint8)) > 0) & ~hole
+        known = (~hole).astype(np.float32)
+        share = (cv2.GaussianBlur(solid.astype(np.float32), (0, 0), 12)
+                 / np.maximum(cv2.GaussianBlur(known, (0, 0), 12), 1e-4))
+        ink = hole & (share >= 0.35)
+        paper = (g >= 200) & ~hole
+        dark = (g < 80) & ~hole
+        if paper.any():
+            region[hole & ~ink] = np.median(region[paper].reshape(-1, 3), axis=0).astype(np.uint8)
+        if dark.any():
+            region[ink] = np.median(region[dark].reshape(-1, 3), axis=0).astype(np.uint8)
+
     @staticmethod
     def _snap_lineart(out, crop, mask):
         """Inpainting over black-and-white line art invents soft grey shading
@@ -959,7 +1190,27 @@ class Compositor:
                     if id(it) in sizes and med > 0:
                         it["orig_rel"] = sizes[id(it)] / med
 
+        # Lines lettered OUTLINED (white or screentone letters in a black
+        # outline): found on the untouched page, erased up front (the text
+        # model sees little of them), and lettered the same way below, as a
+        # release does. Their letters are measured directly, too.
+        outlined = {}
+        for it in items:
+            b = it.get("bbox")
+            if (not b or len(b) != 4 or it.get("manual") or it.get("manual_box")
+                    or it.get("erase") or not (it.get("translation") or "").strip()):
+                continue
+            try:
+                o = self._outlined_glyphs(image, gray, b, on_art=not it.get("in_bubble"))
+            except Exception as e:
+                print(f"[compositor] outlined-letter check failed: {e}")
+                o = None
+            if o:
+                outlined[id(it)] = o
+                it["_glyph_px"] = o["glyph"]
+
         placements = []     # (rect, text, color)
+        placed_by = []      # (first placement index, item) per line
         # Balloons already lettered this page: (bbox, placement index, x of
         # the text block that claimed it). A second block of text in the SAME
         # balloon (two columns — "ブハァ!!" beside "ゲホ!!") joins that
@@ -1002,6 +1253,12 @@ class Compositor:
                 it["placed"] = True        # lettered as part of another line
                 continue
             it["placed"] = False
+            placed_by.append((len(placements), it))
+            o = outlined.get(id(it))
+            if o is not None:
+                self._erase_outlined(result, o, on_art=not it.get("in_bubble"))
+                mh, mw = o["mask"].shape[:2]
+                edited_rects.append((o["x0"], o["y0"], mw, mh))
             # a line measured beside a big sound effect: its glyph size, for
             # telling its letters from the effect's strokes inside its box
             self._line_glyph = float(it.get("_glyph_px") or 0.0) if it.get("_beside_sfx") else 0.0
@@ -1567,6 +1824,21 @@ class Compositor:
         # kind of placement (a box the user drew or resized, titles, credits,
         # watermarks) has none.
         placements = [p if len(p) == 11 else tuple(p) + (0,) for p in placements]
+        # An outlined source line is lettered outlined: its body tone (and
+        # screentone) inside a black outline — unless the user picked a colour.
+        for k, (start, it) in enumerate(placed_by):
+            o = outlined.get(id(it))
+            if o is None or (it.get("color") or "auto").lower() != "auto":
+                continue
+            stop = placed_by[k + 1][0] if k + 1 < len(placed_by) else len(placements)
+            for j in range(start, stop):
+                p = list(placements[j])
+                opts = dict(p[10]) if isinstance(p[10], dict) else {"max": p[10]}
+                opts["outline"] = {"texture": o["texture"]}
+                p[2] = (o["tone"],) * 3
+                p[6] = True
+                p[10] = opts
+                placements[j] = tuple(p)
         placements = [
             (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft, mx)
             for r, t, c, i, ro, fs, gl, fb, sh, ft, mx in placements
@@ -1581,6 +1853,7 @@ class Compositor:
                 self.renderer._max_font = int(opts.get("max") or 0)
                 self.renderer._keep_case = bool(opts.get("keep_case"))
                 self.renderer._single_line = bool(opts.get("single_line"))
+                self.renderer._outline = opts.get("outline")
                 # Swap the face for this line only, then put it back — the
                 # renderer caches by path, so switching costs nothing.
                 was = self.renderer.font_path
@@ -1595,6 +1868,7 @@ class Compositor:
                     self.renderer._max_font = 0
                     self.renderer._keep_case = False
                     self.renderer._single_line = False
+                    self.renderer._outline = None
                     self.renderer.font_path = was
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
@@ -2404,7 +2678,13 @@ class Compositor:
                 tight = big[y0 - cy0:y1 - cy0, x0 - cx0:x1 - cx0].copy()
         if cv2.countNonZero(tight) == 0:
             return touched
+        self._fill_mask(result, x0, y0, x1, y1, tight, contain)
+        return touched
 
+    def _fill_mask(self, result, x0, y0, x1, y1, tight, contain=False):
+        """Content-aware fill the pixels of `tight` (a mask of the window
+        x0..x1, y0..y1), written back only where the mask is set."""
+        H, W = result.shape[:2]
         # Letter groups: close small gaps so a column/line of glyphs shares one
         # LOCAL window (the closing shapes the windows, never the fill mask).
         # Each group is content-aware filled from its own padded surroundings:
@@ -2465,7 +2745,6 @@ class Compositor:
             m = mwin > 0
             sub[m] = out[m]
             dsub |= tsub
-        return touched
 
     def _refine_free_bbox(self, gray, x, y, w, h):
         """Lock an AI-estimated free-text box onto the ACTUAL ink. The model box

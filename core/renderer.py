@@ -51,6 +51,11 @@ class TextRenderer:
         # Per-line size ceiling (px, 0 = none), set by the compositor from the
         # measured size of the Japanese lettering this line replaces.
         self._max_font = 0
+        # outlined lettering for this line: {"texture": BGR patch or None}
+        self._outline = None
+        # extra space between letters, as a fraction of the font size (only
+        # outlined lettering sets it: its outline needs a gap to sit in)
+        self._tracking = 0.0
         self._cap_ratios = {}
         # "Fit box": allow splitting a word that is too long for the column, so
         # one unbreakable token stops capping the whole block's size.
@@ -181,8 +186,33 @@ class TextRenderer:
             return line
 
     def _bbox(self, draw, s, font, stroke_width=0):
-        return draw.textbbox((0, 0), self._shape(s), font=font,
-                             stroke_width=stroke_width, **self._dir_kw())
+        bb = draw.textbbox((0, 0), self._shape(s), font=font,
+                           stroke_width=stroke_width, **self._dir_kw())
+        tr = self._track_px(font)
+        if tr and len(s) > 1:
+            bb = (bb[0], bb[1], bb[2] + tr * (len(s) - 1), bb[3])
+        return bb
+
+    def _track_px(self, font) -> int:
+        t = float(getattr(self, "_tracking", 0.0) or 0.0)
+        if t <= 0 or self._draw_dir or self._reshape_text:
+            return 0
+        return int(round(t * getattr(font, "size", 0)))
+
+    def _text(self, draw, xy, s, font, fill, stroke_width=0, stroke_fill=None):
+        """draw.text, with the letter spacing applied when it is set."""
+        if getattr(self, "_outline", None):
+            stroke_width = 0        # the outline pass draws the outline
+        tr = self._track_px(font)
+        if not tr or len(s) < 2:
+            draw.text(xy, self._shape(s), fill=fill, font=font, stroke_width=stroke_width,
+                      stroke_fill=stroke_fill, **self._dir_kw())
+            return
+        x, y = xy
+        for ch in s:
+            draw.text((x, y), ch, fill=fill, font=font, stroke_width=stroke_width,
+                      stroke_fill=stroke_fill)
+            x += font.getlength(ch) + tr
 
     # ── Per-glyph font fallback (LTR): keep the comic font, borrow only the
     #    missing glyphs (♪ ♫ …) from a fallback so lettering stays in style ──
@@ -274,8 +304,15 @@ class TextRenderer:
         if color is not None and sum(color[:3]) >= 384:
             glow_color = (18, 18, 18)
         layer = Image.new("RGBA", (image.width, image.height), (0, 0, 0, 0))
-        self.draw_in_rect(layer, rect, text, color, italic, rotation, scale,
-                          glow=False, fit_box=fit_box)
+        ol = getattr(self, "_outline", None)
+        was_tr = self._tracking
+        if ol:
+            self._tracking = 0.07
+        try:
+            self.draw_in_rect(layer, rect, text, color, italic, rotation, scale,
+                              glow=False, fit_box=fit_box)
+        finally:
+            self._tracking = was_tr
         alpha = layer.split()[3]
         if not alpha.getbbox():          # nothing drawn
             return image
@@ -284,13 +321,43 @@ class TextRenderer:
         f = float(getattr(self, "_last_font_size", 0) or 0)
         if f <= 0:
             f = max(12.0, rect[3] * 0.5)
-        stroke = int(max(2, min(10, round(f * 0.11))))
-        halo = alpha.filter(ImageFilter.MaxFilter(2 * stroke + 1)).filter(
-            ImageFilter.GaussianBlur(1.0))
+        # Outlined lettering (copying an outlined source line) wears a
+        # heavier, crisper outline, the way a letterer inks it.
+        ol = getattr(self, "_outline", None)
+        body_alpha = alpha
+        if ol:
+            # A solid round pen line around every letter. The letters were
+            # set with a little extra spacing, so their bodies stay apart even
+            # where the outlines of neighbours run together — the look of a
+            # release's outlined sound (a square blurred halo on tightly set
+            # letters merged a word into one block).
+            stroke = int(max(2, min(8, round(f * 0.09))))
+            a = cv2.dilate(np.array(alpha), cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * stroke + 1, 2 * stroke + 1)))
+            halo = Image.fromarray(a).filter(ImageFilter.GaussianBlur(0.5))
+        else:
+            stroke = int(max(2, min(10, round(f * 0.11))))
+            halo = alpha.filter(ImageFilter.MaxFilter(2 * stroke + 1)).filter(
+                ImageFilter.GaussianBlur(1.0))
         solid = Image.new("RGB", image.size, glow_color)
         image.paste(solid, (0, 0), halo)   # paint the halo
         image.paste(solid, (0, 0), halo)   # twice → a bit more intensity
-        image.paste(layer, (0, 0), layer)  # crisp text on top
+        tex = ol.get("texture") if ol else None
+        bb = body_alpha.getbbox()
+        if tex is not None and getattr(tex, "size", 0) and bb:
+            # the source letters' screentone, tiled through the English —
+            # kept as light as a release prints it, so the word still reads
+            rgb = cv2.cvtColor(tex, cv2.COLOR_BGR2RGB).astype(np.float32)
+            m = float(rgb.mean())
+            if m < 205:
+                rgb = 255.0 - (255.0 - rgb) * (50.0 / max(255.0 - m, 1.0))
+            rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+            tiled = np.tile(rgb, (th // rgb.shape[0] + 1, tw // rgb.shape[1] + 1, 1))[:th, :tw]
+            image.paste(Image.fromarray(np.ascontiguousarray(tiled)), (bb[0], bb[1]),
+                        body_alpha.crop(bb))
+        else:
+            image.paste(layer, (0, 0), layer)  # crisp text on top
         return image
 
     def draw_in_rect(
@@ -607,9 +674,8 @@ class TextRenderer:
                 self._draw_italic_line(image, lx - bb[0], ty - bb[1], line,
                                        font, color, stroke_w, stroke_c)
             else:
-                draw.text((lx - bb[0], ty - bb[1]), self._shape(line), fill=color,
-                          font=font, stroke_width=stroke_w, stroke_fill=stroke_c,
-                          **self._dir_kw())
+                self._text(draw, (lx - bb[0], ty - bb[1]), line, font, color,
+                           stroke_w, stroke_c)
         return True
 
     def _draw_in_rect_inner(self, image, rect, text, color, italic, rotation):
@@ -682,9 +748,8 @@ class TextRenderer:
                 self._draw_italic_line(image, lx - bb[0], cur_y - bb[1], line,
                                        font, color, stroke_w, stroke_c)
             else:
-                draw.text((lx - bb[0], cur_y - bb[1]), self._shape(line), fill=color,
-                          font=font, stroke_width=stroke_w, stroke_fill=stroke_c,
-                          **self._dir_kw())
+                self._text(draw, (lx - bb[0], cur_y - bb[1]), line, font, color,
+                           stroke_w, stroke_c)
             cur_y += heights[i] + spacing
 
         return image
@@ -766,10 +831,8 @@ class TextRenderer:
         lw = max(bb[2] + stroke_w + 2, 1)
         lh = max(bb[3] + stroke_w + 2, 1)
         layer = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
-        ImageDraw.Draw(layer).text(
-            (0, 0), self._shape(line), font=font, fill=color + (255,),
-            stroke_width=stroke_w, stroke_fill=stroke_c + (255,), **self._dir_kw(),
-        )
+        self._text(ImageDraw.Draw(layer), (0, 0), line, font, color + (255,),
+                   stroke_w, stroke_c + (255,))
         shear = 0.24
         ext = int(np.ceil(shear * lh))
         # AFFINE maps output->input: top rows sample further right, so the glyph
