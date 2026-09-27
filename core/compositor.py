@@ -1218,6 +1218,7 @@ class Compositor:
         # balloon's lettering instead of being dropped as a collision.
         balloon_owner = []
         used_boxes = []
+        credits = []        # (item, wanted rect, text) — placed after the rest
 
         def item_offset(item):
             off = offsets.get(item["id"])
@@ -1283,20 +1284,20 @@ class Compositor:
             kind = (it.get("type") or "").lower().replace(" ", "_")
 
             # Credit / TL name: small clean text in the margin/gutter — NO erase
-            # (it sits in white space or over art), just an outlined overlay you
-            # can drag per page. Drawn before everything so it's the base layer.
+            # (it sits in white space or over art), just an overlay you can
+            # drag per page. Placed LAST, once every line on the page has been
+            # drawn: its box is a random spot along an edge (or wherever it
+            # was dragged), and drawn first it went down wherever that was —
+            # right under a translation, which was then lettered on top of
+            # it. See _place_credits().
             if it.get("credit") or kind == "credit":
                 ctext = (it.get("translation") or "").strip()
                 cbox = it.get("bbox")
-                if ctext and cbox:
-                    cx, cy, cw, ch = self._clamp_rect([int(v) for v in cbox], w, h)
-                    if cw >= 8 and ch >= 8:
-                        dark = self._is_dark_region(gray, cx, cy, cw, ch)
-                        color = (255, 255, 255) if dark else (0, 0, 0)
-                        placements.append((offset_rect(it, (cx, cy, cw, ch)), ctext,
-                                           color, False, 0, self._item_scale(it),
-                                           False, False, None, "", {"keep_case": True}))
-                        it["placed"] = True
+                if ctext and cbox and len(cbox) == 4:
+                    r0 = self._clamp_rect([int(v) for v in cbox], w, h)
+                    if r0 is not None and r0[2] >= 8 and r0[3] >= 8:
+                        credits.append((it, offset_rect(it, r0), ctext,
+                                        item_offset(it) != (0, 0)))
                 continue
 
             # Site watermark / URL: erase it from the art (no translation). If the
@@ -1857,38 +1858,42 @@ class Compositor:
                 p[6] = True
                 p[10] = opts
                 placements[j] = tuple(p)
-        placements = [
-            (self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft, mx)
-            for r, t, c, i, ro, fs, gl, fb, sh, ft, mx in placements
+        # Which item each placement letters (a line can be split over several).
+        owners = [None] * len(placements)
+        for k, (start, it) in enumerate(placed_by):
+            stop = placed_by[k + 1][0] if k + 1 < len(placed_by) else len(placements)
+            for j in range(start, stop):
+                owners[j] = it
+        clamped = [
+            ((self._clamp_rect(r, w, h), t, c, i, ro, fs, gl, fb, sh, ft, mx), who)
+            for (r, t, c, i, ro, fs, gl, fb, sh, ft, mx), who in zip(placements, owners)
         ]
-        placements = [p for p in placements if p[0] is not None]
+        placements = [p for p, _who in clamped if p[0] is not None]
+        owners = [who for p, who in clamped if p[0] is not None]
 
-        if placements:
+        # Every pixel the lettering actually changed, and per placement the
+        # box around them. That is where the text IS — after balloon-shaped
+        # layout, growing, A+ scaling, rotation and the odd overflow at the
+        # minimum size — which the item's stored box is not. The credit here
+        # and the watermark stamped on the finished page (app.py) keep clear
+        # of it.
+        drawn_px = np.zeros((h, w), np.uint8)
+        footprints = []
+        if placements or credits:
             pil = Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
-            for rect, text, color, ital, rot, fscale, glow, fit, shp, ft, mx in placements:
-                self.renderer._shape_mask = shp
-                opts = mx if isinstance(mx, dict) else {"max": mx}
-                self.renderer._max_font = int(opts.get("max") or 0)
-                self.renderer._keep_case = bool(opts.get("keep_case"))
-                self.renderer._single_line = bool(opts.get("single_line"))
-                self.renderer._outline = opts.get("outline")
-                # Swap the face for this line only, then put it back — the
-                # renderer caches by path, so switching costs nothing.
-                was = self.renderer.font_path
-                if ft:
-                    self.renderer.font_path = ft
-                try:
-                    self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
-                                               rotation=rot, scale=fscale,
-                                               glow=glow, fit_box=fit)
-                finally:
-                    self.renderer._shape_mask = None
-                    self.renderer._max_font = 0
-                    self.renderer._keep_case = False
-                    self.renderer._single_line = False
-                    self.renderer._outline = None
-                    self.renderer.font_path = was
+            for p in placements:
+                footprints.append(self._draw_placement(pil, p, drawn_px))
+            if credits:
+                for it, p, fp in self._place_credits(pil, gray, credits, items,
+                                                     drawn_px, edited_rects):
+                    placements.append(p)
+                    owners.append(it)
+                    footprints.append(fp)
             result = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        for it in items:
+            it["drawn"] = [list(fp) for fp, who in zip(footprints, owners)
+                           if who is it and fp is not None]
+        self.last_drawn = drawn_px
 
         # Hard guarantee: only the exact regions we edited may differ from the
         # original. Restore every other pixel byte-for-byte — no global cleanup,
@@ -1908,7 +1913,219 @@ class Compositor:
         edited = cv2.dilate(edited, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7)))
         keep = edited == 0
         result[keep] = image[keep]
+        drawn_px[keep] = 0
         return result
+
+    def _render_placement(self, pil, p):
+        """Letter one placement onto `pil` (in place)."""
+        rect, text, color, ital, rot, fscale, glow, fit, shp, ft, mx = p
+        self.renderer._shape_mask = shp
+        opts = mx if isinstance(mx, dict) else {"max": mx}
+        self.renderer._max_font = int(opts.get("max") or 0)
+        self.renderer._keep_case = bool(opts.get("keep_case"))
+        self.renderer._single_line = bool(opts.get("single_line"))
+        self.renderer._outline = opts.get("outline")
+        # Swap the face for this line only, then put it back — the
+        # renderer caches by path, so switching costs nothing.
+        was = self.renderer.font_path
+        if ft:
+            self.renderer.font_path = ft
+        try:
+            self.renderer.draw_in_rect(pil, rect, text, color, italic=ital,
+                                       rotation=rot, scale=fscale,
+                                       glow=glow, fit_box=fit)
+        finally:
+            self.renderer._shape_mask = None
+            self.renderer._max_font = 0
+            self.renderer._keep_case = False
+            self.renderer._single_line = False
+            self.renderer._outline = None
+            self.renderer.font_path = was
+
+    def _draw_window(self, p, w, h):
+        """The part of the page a placement can change: its rect (turned, if
+        it is tilted) with room for glow, A+ scaling and text that overflows
+        its box at the minimum size."""
+        rect, rot, fscale = p[0], p[4], p[5]
+        x, y, rw, rh = self._rotated_aabb(rect, rot)
+        try:
+            grow = max(1.0, float(fscale or 1.0))
+        except (TypeError, ValueError):
+            grow = 1.0
+        mx = int(0.5 * rw * grow) + 16
+        my = int(0.5 * rh * grow) + 16
+        x0, y0 = max(0, int(x) - mx), max(0, int(y) - my)
+        x1, y1 = min(w, int(x + rw) + mx), min(h, int(y + rh) + my)
+        return x0, y0, max(x0 + 1, x1), max(y0 + 1, y1)
+
+    @staticmethod
+    def _changed(before, after):
+        return (np.abs(after.astype(np.int16) - before.astype(np.int16))
+                .max(axis=2) > 6)
+
+    def _draw_placement(self, pil, p, drawn_px):
+        """Letter a placement and record the pixels it changed in `drawn_px`.
+        Returns the (x, y, w, h) box around them, or None if it drew nothing."""
+        w, h = pil.size
+        x0, y0, x1, y1 = self._draw_window(p, w, h)
+        before = np.asarray(pil.crop((x0, y0, x1, y1)))
+        self._render_placement(pil, p)
+        ch = self._changed(before, np.asarray(pil.crop((x0, y0, x1, y1))))
+        if not ch.any():
+            return None
+        drawn_px[y0:y1, x0:x1][ch] = 255
+        ys, xs = np.nonzero(ch)
+        return (int(x0 + xs.min()), int(y0 + ys.min()),
+                int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+
+    def _credit_keepout(self, gray, items, drawn_px, edited_rects):
+        """Where a credit may not go: every line lettered on the page (the
+        pixels actually drawn), every text box (a line left in the art — an
+        untranslated sound effect, a skipped bubble — is still lettering),
+        every region that was erased, and whatever lettering the text model
+        still sees on the page."""
+        h, w = gray.shape[:2]
+        keep = drawn_px.copy()
+        for rx, ry, rw, rh in edited_rects:
+            x0, y0 = max(0, int(rx)), max(0, int(ry))
+            x1, y1 = min(w, int(rx) + int(rw)), min(h, int(ry) + int(rh))
+            if x1 > x0 and y1 > y0:
+                keep[y0:y1, x0:x1] = 255
+        for it in items:
+            kind = (it.get("type") or "").lower()
+            if (it.get("credit") or kind in ("credit", "watermark")
+                    or it.get("erase")):
+                continue
+            b = it.get("bbox")
+            if not b or len(b) != 4:
+                continue
+            try:
+                r = self._clamp_rect([int(v) for v in b], w, h)
+            except (TypeError, ValueError):
+                continue
+            if r is not None:
+                keep[r[1]:r[1] + r[3], r[0]:r[0] + r[2]] = 255
+        seg = self._seg_mask
+        if seg is not None and seg.shape[:2] == (h, w):
+            keep[seg > 0] = 255
+        return keep
+
+    def _place_credits(self, pil, gray, credits, items, drawn_px, edited_rects):
+        """Letter each credit where it was put — or, when that spot is on text,
+        at the nearest spot that is not (shrinking it if it has to).
+
+        The credit used to be drawn at its box whatever was there: a random
+        spot along a page edge, picked before anything was lettered, so on a
+        page with a line in the bottom-right corner it could land squarely on
+        the English. It now goes down after every line, against where those
+        lines were actually drawn. With no clear spot anywhere on the page it
+        is left off (and reported unplaced) rather than drawn over a line.
+
+        Yields (item, placement, footprint) for each credit drawn."""
+        h, w = gray.shape[:2]
+        keep = self._credit_keepout(gray, items, drawn_px, edited_rects)
+        for it, (cx, cy, cw, ch), ctext, dragged in credits:
+            it["placed"] = False
+            pad = max(4, int(ch * 0.3))
+            barred = cv2.dilate(keep, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * pad + 1, 2 * pad + 1)))
+            tight = cv2.dilate(keep, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (5, 5))) > 0
+            integral = cv2.integral((barred > 0).astype(np.uint8),
+                                    sdepth=cv2.CV_32S)
+            done = None
+            for x, y, tw, th in self._free_spots(integral, (cx, cy, cw, ch), w, h):
+                dark = self._is_dark_region(gray, x, y, tw, th)
+                color = (255, 255, 255) if dark else (0, 0, 0)
+                p = ((x, y, tw, th), ctext, color, False, 0, self._item_scale(it),
+                     False, False, None, "", {"keep_case": True})
+                # Letter it on a copy of its patch first: text can run past
+                # its box at the minimum size, and only the drawn pixels say
+                # for sure that it is clear.
+                x0, y0, x1, y1 = self._draw_window(p, w, h)
+                patch = pil.crop((x0, y0, x1, y1))
+                before = np.asarray(patch).copy()
+                q = ((x - x0, y - y0, tw, th),) + p[1:]
+                self._render_placement(patch, q)
+                chg = self._changed(before, np.asarray(patch))
+                if not chg.any() or (chg & tight[y0:y1, x0:x1]).any():
+                    continue
+                pil.paste(patch, (x0, y0))
+                drawn_px[y0:y1, x0:x1][chg] = 255
+                keep[y0:y1, x0:x1][chg] = 255
+                ys, xs = np.nonzero(chg)
+                done = (p, (int(x0 + xs.min()), int(y0 + ys.min()),
+                            int(xs.max() - xs.min() + 1),
+                            int(ys.max() - ys.min() + 1)))
+                break
+            if done is None:
+                print(f"[compositor] credit {ctext!r}: no spot clear of the "
+                      "page's lettering — left off this page")
+                continue
+            p, fp = done
+            it["placed"] = True
+            nx, ny, nw, nh = p[0]
+            if (nx, ny, nw, nh) != (cx, cy, cw, ch):
+                print(f"[compositor] credit moved off the lettering: "
+                      f"{(cx, cy, cw, ch)} -> {(nx, ny, nw, nh)}")
+            # The stored box follows it, so the editor shows the credit where
+            # it is. (A re-render rebuilds from the stored box plus the drag
+            # offset; the offset is already in this rect, so it is only
+            # written back when there is none.)
+            if not dragged:
+                it["bbox"] = [nx, ny, nw, nh]
+            yield it, p, fp
+
+    @staticmethod
+    def _free_spots(integral, rect, w, h):
+        """Candidate boxes for a credit wanted at `rect`, best first: the spot
+        itself, then the nearest clear spot at full size, then smaller.
+
+        A clear spot close by is taken at full size; when the nearest one at
+        full size is far off (over a fifth of the page), a slightly smaller
+        credit nearer the chosen spot is tried first. Every size's nearest
+        few clear spots follow, so a spot that fails the drawn-pixel check
+        still has somewhere to go."""
+        cx, cy, cw, ch = rect
+        wx, wy = cx + cw / 2.0, cy + ch / 2.0
+        far = 0.2 * math.hypot(w, h)
+        near, rest = [], []
+        for si, s in enumerate((1.0, 0.85, 0.7, 0.55)):
+            tw, th = max(8, int(round(cw * s))), max(8, int(round(ch * s)))
+            if tw >= w or th >= h:
+                continue
+            m = min(max(4, int(0.012 * min(w, h))), (w - tw) // 2, (h - th) // 2)
+            sx, sy = max(2, tw // 12), max(2, th // 3)
+            xs = np.unique(np.clip(np.append(np.arange(m, w - tw - m + 1, sx),
+                                             int(round(wx - tw / 2.0))), 0, w - tw))
+            ys = np.unique(np.clip(np.append(np.arange(m, h - th - m + 1, sy),
+                                             int(round(wy - th / 2.0))), 0, h - th))
+            gx, gy = np.meshgrid(xs, ys)
+            gx, gy = gx.ravel(), gy.ravel()
+            hits = (integral[gy + th, gx + tw] - integral[gy, gx + tw]
+                    - integral[gy + th, gx] + integral[gy, gx])
+            free = np.flatnonzero(hits == 0)
+            if not free.size:
+                continue
+            d = np.hypot(gx[free] + tw / 2.0 - wx, gy[free] + th / 2.0 - wy)
+            order = free[np.argsort(d, kind="stable")]
+            dist = np.sort(d, kind="stable")
+            picks, seen = [], []
+            for j, dd in zip(order, dist):
+                x, y = int(gx[j]), int(gy[j])
+                # a few DIFFERENT spots, not the same one a pixel apart
+                if any(abs(x - a) < tw // 2 and abs(y - b) < th for a, b in seen):
+                    continue
+                seen.append((x, y))
+                picks.append((float(dd), (x, y, tw, th)))
+                if len(picks) >= 4:
+                    break
+            for k, (dd, box) in enumerate(picks):
+                (near if dd <= far else rest).append((si, k, dd, box))
+        near.sort(key=lambda c: (c[1] > 0, c[0], c[2]))
+        rest.sort(key=lambda c: (c[2], c[0]))
+        for c in near + rest:
+            yield c[3]
 
     def _final_cleanup(self, image):
         """Light cleanup: melt scanner grain and tidy the very brightest / darkest

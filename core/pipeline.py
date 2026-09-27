@@ -3040,6 +3040,10 @@ class TranslationPipeline:
                     # size of the artwork lettering, and every line lost the
                     # voice its mood font was picked from.
                     **{k: it[k] for k in _KEEP_ON_ITEM if it.get(k)},
+                    # Where the line was actually lettered (the compositor's
+                    # drawn-pixel boxes): the finished page's watermark keeps
+                    # clear of these.
+                    **({"drawn": it["drawn"]} if it.get("drawn") else {}),
                 }
                 for it in items
             ],

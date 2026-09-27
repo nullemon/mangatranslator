@@ -112,7 +112,7 @@ def deliverable(path: str, with_watermark: bool = True) -> str:
 
 
 def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
-                  wm_size="m", credit="", wm_style="clean"):
+                  wm_size="m", credit="", wm_style="clean", items=None):
     """Stamp a finished page, keeping the unmarked version alongside it.
 
     Watermarking used to be one-way: the mark went into the file and the clean
@@ -126,6 +126,10 @@ def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
     the watermark switched off would leave the previous run's twin sitting
     there, and "download without watermark" would quietly hand back a stale
     page.
+
+    `items` are the page's translated lines (the pipeline's / re-render's
+    items, with the boxes the compositor actually lettered them in), so
+    the marks keep clear of every line on the page — see _text_rects().
     """
     twin = clean_master(output_path)
     if not (watermark or credit):
@@ -143,7 +147,60 @@ def _stamp_output(output_path, watermark, wm_place="br", wm_opacity=50,
         print(f"[watermark] couldn't keep a clean copy of "
               f"{os.path.basename(output_path)}: {e}")
     _stamp_all(output_path, watermark, wm_place, wm_opacity, wm_size, credit,
-               wm_style)
+               wm_style, text_rects=_text_rects(items))
+
+
+def _text_rects(items):
+    """Every box on the page that holds lettering, as (x, y, w, h).
+
+    The watermark used to keep clear only of the lettering it could find
+    again on the finished page — the text model, or failing that the shape
+    of the ink. English it did not recognise (a line lettered over art, light
+    lettering on a dark slab, a big display line, the credit overlay) was
+    not in its keep-out, and the mark went down on top of it: a credit
+    stamped across "HE WAS DEFINITELY USING IT EARLIER...!!".
+
+    The page's own items say where its lettering is, so they are used
+    directly: the boxes the compositor actually DREW each line in (`drawn` —
+    after balloon-shaped layout, growing, A+ scaling, tilt), plus each text
+    box, since a line left in the art (an untranslated sound effect, a
+    skipped bubble) is lettering too. Erased site watermarks are not: that
+    art is clear now."""
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        for r in it.get("drawn") or []:
+            try:
+                x, y, w, h = (int(v) for v in r)
+            except (TypeError, ValueError):
+                continue
+            if w > 0 and h > 0:
+                out.append((x, y, w, h))
+        kind = str(it.get("type") or "").lower()
+        if (it.get("erase") or kind == "watermark" or it.get("credit")
+                or kind == "credit"):
+            continue            # a credit's own box is only where it was DRAWN
+        b = it.get("bbox")
+        try:
+            x, y, w, h = (int(v) for v in b)
+        except (TypeError, ValueError):
+            continue
+        if w > 0 and h > 0:
+            out.append((x, y, w, h))
+    return out
+
+
+def _rects_mask(shape, rects, pad=0):
+    """`rects` filled into a page-sized mask, each grown by `pad`."""
+    h, w = shape[:2]
+    m = np.zeros((h, w), np.uint8)
+    for x, y, rw, rh in rects or []:
+        x0, y0 = max(0, int(x) - pad), max(0, int(y) - pad)
+        x1, y1 = min(w, int(x + rw) + pad), min(h, int(y + rh) + pad)
+        if x1 > x0 and y1 > y0:
+            m[y0:y1, x0:x1] = 255
+    return m
 
 
 def _mark_to_stamp(watermark, replace_watermark, items) -> str:
@@ -165,7 +222,8 @@ def _mark_to_stamp(watermark, replace_watermark, items) -> str:
 
 
 def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
-               wm_size="m", credit="", wm_style="clean", use_model=True):
+               wm_size="m", credit="", wm_style="clean", use_model=True,
+               text_rects=None):
     """Stamp the user's watermark and/or credit line on ANY finished output
     (translate, upscale, raw, enhance — same look everywhere). The credit
     goes small in the opposite corner so the two never collide.
@@ -180,7 +238,10 @@ def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
     The credit is placed against the page as it was BEFORE the watermark went
     on, too. Read off the stamped page, the heuristics took the watermark's
     own letters — every instance of a tiled one — for lettering to avoid, and
-    the credit was pushed wherever the tile had left a gap."""
+    the credit was pushed wherever the tile had left a gap.
+
+    `text_rects` are the boxes the page's lines were lettered in
+    (_text_rects()); neither mark goes on one."""
     if not (watermark or credit):
         return
     page = cv2.imread(output_path)
@@ -191,11 +252,13 @@ def _stamp_all(output_path, watermark, wm_place="br", wm_opacity=50,
     if watermark:
         placed = _stamp_watermark(output_path, watermark, wm_place,
                                   wm_opacity, wm_size, wm_style,
-                                  lettering=lettering, page=page)
+                                  lettering=lettering, page=page,
+                                  text_rects=text_rects)
     if credit:
         cplace = "bl" if wm_place != "bl" else "br"
         _stamp_watermark(output_path, credit, cplace, 85, "s", "clean",
-                         lettering=lettering, avoid=placed, page=page)
+                         lettering=lettering, avoid=placed, page=page,
+                         text_rects=text_rects)
 
 
 def _page_lettering(img):
@@ -715,7 +778,8 @@ def _clear_spot(img, tw, th, place, keepout):
 
 def _stamp_watermark(image_path: str, text: str, place: str = "br",
                      opacity: int = 50, size: str = "m", style: str = "clean",
-                     lettering="auto", avoid=None, page=None):
+                     lettering="auto", avoid=None, page=None,
+                     text_rects=None):
     """Watermark the finished page. Six styles, all sized off the PAGE WIDTH
     so they stay readable at any resolution (the old min-side divisors made
     marks near-invisible on tall scans):
@@ -734,8 +798,15 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
     to place by the shape heuristics, "auto" to read it here. `avoid` is an
     (x, y, w, h) box the mark must also keep clear of (the watermark, when
     this is the credit line). `page` is the page before any mark went on, to
-    judge the lettering from (defaults to the file as it is now). Returns the
-    box the mark was drawn in, or None for the full-page styles."""
+    judge the lettering from (defaults to the file as it is now).
+    `text_rects` are the boxes the page's lines were lettered in
+    (_text_rects()): kept clear of whatever the text model makes of them.
+
+    A placed mark (clean, bold, pill, credit) goes in the chosen corner when
+    that is clear, else at the nearest clear spot, else smaller; with no clear
+    spot anywhere on the page it is left off rather than drawn over a line.
+    Returns the box the mark was drawn in, or None for the full-page styles
+    and a mark that was left off."""
     style = (style or "clean").lower()
     # "clean+tile" (or any style "+tile"): the chosen mark AND a faint tile
     # pass over the whole page, in one go — the corner stamp signs the page,
@@ -748,10 +819,11 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
             lettering = _page_lettering(page) if page is not None else None
         placed = _stamp_watermark(image_path, text, place, opacity, size,
                                   style[:-5], lettering=lettering, avoid=avoid,
-                                  page=page)
+                                  page=page, text_rects=text_rects)
         _stamp_watermark(image_path, text, place,
                          max(12, int(int(opacity or 50) * 0.55)), size, "tile",
-                         lettering=lettering, page=page)
+                         lettering=lettering, page=page,
+                         text_rects=text_rects)
         return placed
     img = cv2.imread(image_path)
     if img is None:
@@ -796,6 +868,8 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         if "m" not in _ko:
             pad = max(4, int(fs * 0.35))
             _ko["m"] = _text_keepout(page, pad, lettering=lettering)
+            if text_rects:
+                _ko["m"] |= _rects_mask(page.shape, text_rects, pad)
             if avoid:
                 ax, ay, aw, ah = (int(v) for v in avoid)
                 cv2.rectangle(_ko["m"], (ax - pad, ay - pad),
@@ -827,6 +901,28 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
             return best if best else _clear_spot(img, tw, th, "br", keep)
         # Keep the chosen corner when it is free; step aside when it is not.
         return _clear_spot(img, tw, th, place, _keepout())
+
+    def _fit(base_px, box):
+        """Font, text box and top-left for a placed mark: the chosen spot or
+        the nearest clear one, at `base_px`, then smaller. None when there is
+        no clear spot on the page at any size — the mark is left off rather
+        than put on a line. `box(font_px, tw, th)` is the mark's full size."""
+        keep = _keepout()
+        for s in (1.0, 0.85, 0.7, 0.55):
+            px = max(10, int(base_px * s))
+            font = _font(px)
+            px = int(getattr(font, "size", px) or px)
+            bb, tw, th = _measure(font)
+            bw, bh = box(px, tw, th)
+            if bw >= w or bh >= h:
+                continue
+            x, y = _corner_xy(bw, bh, 0)
+            x, y = int(x), int(y)
+            if not keep[max(0, y):y + bh, max(0, x):x + bw].any():
+                return font, px, bb, tw, th, x, y
+        print(f"[watermark] no spot clear of the page's lettering for "
+              f"{text!r} — left off this page")
+        return None
 
     def _auto_colors(x, y, tw, th):
         region = img[max(0, y - 4):min(h, y + th + 4),
@@ -880,7 +976,7 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         overlay.alpha_composite(gl, (max(0, (w - gl.width) // 2),
                                      max(0, (h - gl.height) // 2)))
 
-    elif style == "ribbon":
+    if style == "ribbon":
         font = _font(fs)
         bb, tw, th = _measure(font)
         band_h = int(th * 1.9)
@@ -895,42 +991,57 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
             y0 = h - band_h
         elif y0 != 0 and bot_hit > top_hit:
             y0 = 0
-        draw.rectangle([0, y0, w, y0 + band_h],
-                       fill=(12, 12, 12, min(235, int(alpha * 1.1))))
-        draw.text(((w - tw) // 2 - bb[0],
-                   y0 + (band_h - th) // 2 - bb[1]), text,
-                  fill=(255, 255, 255, 255), font=font)
-        placed = (0, y0, w, band_h)
+        # A band laid across a line the page lettered would black it out.
+        # Neither edge free of them: sign the page with a badge instead,
+        # which can be moved clear.
+        lines = _rects_mask(page.shape, text_rects, max(2, int(fs * 0.15)))
+        if lines[y0:y0 + band_h, :].any():
+            other = h - band_h if y0 == 0 else 0
+            if not lines[other:other + band_h, :].any():
+                y0 = other
+            else:
+                style = "pill"
+        if style == "ribbon":
+            draw.rectangle([0, y0, w, y0 + band_h],
+                           fill=(12, 12, 12, min(235, int(alpha * 1.1))))
+            draw.text(((w - tw) // 2 - bb[0],
+                       y0 + (band_h - th) // 2 - bb[1]), text,
+                      fill=(255, 255, 255, 255), font=font)
+            placed = (0, y0, w, band_h)
 
-    elif style == "pill":
-        font = _font(fs)
-        bb, tw, th = _measure(font)
-        px_, py_ = int(fs * 0.75), int(fs * 0.42)
-        pw, ph = tw + 2 * px_, th + 2 * py_
-        x, y = _corner_xy(pw, ph, 0)
-        draw.rounded_rectangle([x, y, x + pw, y + ph], radius=ph // 2,
-                               fill=(14, 14, 14, min(235, int(alpha * 1.15))))
-        draw.text((x + px_ - bb[0], y + py_ - bb[1]), text,
-                  fill=(255, 255, 255, 255), font=font)
-        placed = (x, y, pw, ph)
+    if style == "pill":
+        got = _fit(fs, lambda f, tw, th: (tw + 2 * int(f * 0.75),
+                                          th + 2 * int(f * 0.42)))
+        if got is not None:
+            font, fpx, bb, tw, th, x, y = got
+            px_, py_ = int(fpx * 0.75), int(fpx * 0.42)
+            pw, ph = tw + 2 * px_, th + 2 * py_
+            # Radius under half the height: Pillow 9.x rejects a fully
+            # rounded end ("y1 must be greater than or equal to y0").
+            draw.rounded_rectangle([x, y, x + pw, y + ph],
+                                   radius=max(1, (ph - 1) // 2 - 1),
+                                   fill=(14, 14, 14, min(235, int(alpha * 1.15))))
+            draw.text((x + px_ - bb[0], y + py_ - bb[1]), text,
+                      fill=(255, 255, 255, 255), font=font)
+            placed = (x, y, pw, ph)
 
     elif style == "bold":
-        font = _font(int(fs * 1.25))
-        bb, tw, th = _measure(font)
-        x, y = _corner_xy(tw, th, 0)
-        fill, stroke = _auto_colors(x, y, tw, th)
-        draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
-                  stroke_width=max(2, font.size // 9), stroke_fill=stroke)
-        placed = (x, y, tw, th)
+        got = _fit(int(fs * 1.25), lambda f, tw, th: (tw, th))
+        if got is not None:
+            font, fpx, bb, tw, th, x, y = got
+            fill, stroke = _auto_colors(x, y, tw, th)
+            draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
+                      stroke_width=max(2, fpx // 9), stroke_fill=stroke)
+            placed = (x, y, tw, th)
 
-    else:  # clean
-        font = _font(fs)
-        bb, tw, th = _measure(font)
-        x, y = _corner_xy(tw, th, 0)
-        fill, stroke = _auto_colors(x, y, tw, th)
-        draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
-                  stroke_width=max(1, font.size // 16), stroke_fill=stroke)
-        placed = (x, y, tw, th)
+    elif style not in ("tile", "ghost", "ribbon"):  # clean
+        got = _fit(fs, lambda f, tw, th: (tw, th))
+        if got is not None:
+            font, fpx, bb, tw, th, x, y = got
+            fill, stroke = _auto_colors(x, y, tw, th)
+            draw.text((x - bb[0], y - bb[1]), text, font=font, fill=fill,
+                      stroke_width=max(1, fpx // 16), stroke_fill=stroke)
+            placed = (x, y, tw, th)
 
     if style in ("tile", "ghost"):
         # Colour the mark against whatever it is lying on. Both of these used
@@ -954,7 +1065,11 @@ def _stamp_watermark(image_path: str, text: str, place: str = "br",
         # DIALOGUE is protected: lettering inside a detected speech balloon,
         # which needs a bright compact shape around it and so cannot be
         # triggered by shading.
-        keep = _dialogue_keepout(page, max(6, int(w * 0.018)), lettering)
+        pad = max(6, int(w * 0.018))
+        keep = _dialogue_keepout(page, pad, lettering)
+        if text_rects:
+            # The lines the page lettered, whatever the detector made of them.
+            keep = keep | _rects_mask(page.shape, text_rects, pad)
         if cv2.countNonZero(keep):
             a = np.array(overlay.split()[-1])
             if style == "tile":
@@ -1675,7 +1790,8 @@ async def _run(
         _stamp_output(output_path,
                       _mark_to_stamp(watermark, replace_watermark,
                                      (result or {}).get("items")),
-                      wm_place, wm_opacity, wm_size, "", wm_style)
+                      wm_place, wm_opacity, wm_size, "", wm_style,
+                      items=(result or {}).get("items"))
 
         # Optional: shrink a heavy output (e.g. a 20MB PNG) to a ~3MB JPEG.
         if compress:
@@ -3188,7 +3304,7 @@ async def rerender(task_id: str, request: Request):
                                      t.get("replace_watermark", False), all_items),
                       t.get("wm_place", "br"), t.get("wm_opacity", 50),
                       t.get("wm_size", "m"), "",
-                      t.get("wm_style", "clean"))
+                      t.get("wm_style", "clean"), items=all_items)
 
     # Serialise per page: two Applies landing together used to write the same
     # file at once and corrupt each other's output.
@@ -3208,6 +3324,8 @@ async def rerender(task_id: str, request: Request):
             "title_caption": it.get("title_caption", False),
             **kept.get(str(it["id"]), {"translation": it["translation"],
                                        "type": it["type"]}),
+            # where this render lettered it (the watermark keeps off it)
+            **({"drawn": it["drawn"]} if it.get("drawn") else {}),
         }
         for it in items
     ]
@@ -3215,6 +3333,7 @@ async def rerender(task_id: str, request: Request):
         {
             "id": it["id"], "bbox": it["bbox"], "translation": it["translation"],
             "original": it.get("original", ""), "placed": it.get("placed", False),
+            **({"drawn": it["drawn"]} if it.get("drawn") else {}),
         }
         for it in added
     ]
@@ -3865,8 +3984,10 @@ async def stamp_page(task_id: str, request: Request):
         op = int(payload.get("wm_opacity") or 50)
     except (TypeError, ValueError):
         op = 50
+    r = t.get("result") or {}
     _stamp_output(p, wmk, place, op, size, cr,
-                  str(payload.get("wm_style") or "clean").strip() or "clean")
+                  str(payload.get("wm_style") or "clean").strip() or "clean",
+                  items=list(r.get("items") or []) + list(r.get("added") or []))
     return {"ok": True}
 
 
