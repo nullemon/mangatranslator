@@ -136,6 +136,10 @@ def main():
     todo = pages(a.pages)
     if not todo:
         sys.exit("no page images given")
+    missing = [p for p in todo if not os.path.isfile(p)]
+    if missing:
+        sys.exit("No such file: " + ", ".join(missing) + "\n(Windows files are under "
+                 "/mnt/c/Users/<name>/..., e.g. /mnt/c/Users/<name>/Downloads/page.jpg)")
     summary = []
     spent, dearest = 0.0, 0.0
     try:
