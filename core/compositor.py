@@ -2159,18 +2159,22 @@ class Compositor:
         outer = (cv2.dilate(m, k) > 0) & (m == 0)
         inner = (m > 0) & (cv2.erode(m, k) == 0)
         dark = gray < 110
+        # lettering is only discounted INSIDE the shape: letters set tight
+        # against a balloon's outline took the outline next to them with them
+        # (a ダン!! balloon read as 44% outlined and was refused)
+        inner_dark = dark
         if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
-            dark &= ~(cv2.dilate(self._seg_mask, np.ones((5, 5), np.uint8)) > 0)
+            inner_dark = dark & ~(cv2.dilate(self._seg_mask, np.ones((5, 5), np.uint8)) > 0)
         ys, xs = np.nonzero(m)
         if ys.size == 0:
             return 0.0
         cy, cx = float(ys.mean()), float(xs.mean())
         hits, tot = np.zeros(36), np.zeros(36)
-        for band in (inner, outer):
+        for band, ink in ((inner, inner_dark), (outer, dark)):
             by, bx = np.nonzero(band)
             ang = ((np.degrees(np.arctan2(by - cy, bx - cx)) + 360.0) % 360.0 / 10.0).astype(int) % 36
             np.add.at(tot, ang, 1)
-            np.add.at(hits, ang, dark[by, bx])
+            np.add.at(hits, ang, ink[by, bx])
         frac = np.where(tot > 0, hits / np.maximum(tot, 1), 0.0)
         return float((frac > 0.25).mean())
 
