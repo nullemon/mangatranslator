@@ -168,11 +168,31 @@ def _read_supports_claim(claimed: str, seen: str, dense: bool = False) -> bool:
     return False
 
 
-def _merge_column_boxes(boxes):
+def _merge_column_boxes(boxes, strokes=None):
     """The block detector splits giant vertical lettering (one huge glyph per
     box) — merge boxes that line up into a single column/run so OCR reads the
-    whole phrase instead of one syllable at a time."""
+    whole phrase instead of one syllable at a time.
+
+    With the page's text-stroke mask, two boxes only merge when the gap
+    between them is under a glyph of their lettering: glyph boxes of one
+    word, or the columns of one paragraph, sit that close; two separate
+    paragraphs a few glyphs apart (chapter 1194 p73's two monologues, 122 px
+    apart in 45 px lettering) stay two lines."""
     boxes = [list(map(int, b)) for b in boxes]
+
+    def glyph(b):
+        # the largest stroke piece in the box, capped at the box's width:
+        # one glyph of its lettering (the box itself when there is no mask)
+        x, y, w, h = b
+        cap = min(w, h)
+        if strokes is None:
+            return cap
+        roi = strokes[max(0, y):max(0, y + h), max(0, x):max(0, x + w)] > 0
+        if not roi.any():
+            return cap
+        n, _lab, st, _ = cv2.connectedComponentsWithStats(roi.astype(np.uint8), 8)
+        big = max((max(st[i, 2], st[i, 3]) for i in range(1, n)), default=cap)
+        return min(cap, big)
     changed = True
     while changed:
         changed = False
@@ -185,10 +205,13 @@ def _merge_column_boxes(boxes):
                 a, b = boxes[i], boxes[j]
                 ox = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
                 oy = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+                g = min(glyph(a), glyph(b))
                 # vertical column: strong horizontal overlap, small v-gap
-                col = ox > 0.5 * min(a[2], b[2]) and -oy < 0.8 * min(a[2], b[2])
+                col = (ox > 0.5 * min(a[2], b[2]) and -oy < 0.8 * min(a[2], b[2])
+                       and -oy < 0.8 * g)
                 # horizontal run: strong vertical overlap, small h-gap
-                run = oy > 0.5 * min(a[3], b[3]) and -ox < 0.8 * min(a[3], b[3])
+                run = (oy > 0.5 * min(a[3], b[3]) and -ox < 0.8 * min(a[3], b[3])
+                       and -ox < 0.8 * g)
                 if not (col or run):
                     continue
                 x0, y0 = min(a[0], b[0]), min(a[1], b[1])
@@ -2714,9 +2737,26 @@ class TranslationPipeline:
         from .ocr import _has_source_text
         # Giant display lettering arrives as one box per glyph — merge the
         # aligned boxes into whole columns/runs so OCR reads full phrases.
-        boxes = _merge_column_boxes(boxes)
-        taken = [list(r.bbox) for r in bubble_regions]
-        taken += [list(it["bbox"]) for it in existing_items]
+        try:
+            strokes = self.text_seg.mask(image)
+        except Exception:
+            strokes = None
+        boxes = _merge_column_boxes(boxes, strokes)
+        # A block is a balloon's own text when it lies mostly INSIDE the
+        # balloon's box. "Any overlap" also swallowed lettering beside a big
+        # balloon (a spiky burst's box reaches well past its spikes) and
+        # everything under another pass's loose box: both inner-monologue
+        # blocks of chapter 1194 p73 were dropped that way, silently. Lines
+        # the other passes found are matched by text and place below instead.
+        balloon_boxes = [list(r.bbox) for r in bubble_regions]
+
+        def inside_share(a, b):
+            ax, ay, aw, ah = a
+            bx, by, bw, bh = b
+            iw = min(ax + aw, bx + bw) - max(ax, bx)
+            ih = min(ay + ah, by + bh) - max(ay, by)
+            return (iw * ih) / max(aw * ah, 1) if iw > 0 and ih > 0 else 0.0
+        taken = []
         known_texts = [(it.get("original", ""), it.get("bbox")) for it in existing_items]
 
         def near(a, b):
@@ -2728,14 +2768,31 @@ class TranslationPipeline:
             px, py = max(aw, bw), max(ah, bh)
             return not (ax > bx + bw + px or bx > ax + aw + px
                         or ay > by + bh + py or by > ay + ah + py)
+        def pairs(t):
+            t = "".join(c for c in str(t or "")
+                        if "ぁ" <= c <= "ヶ" or "一" <= c <= "鿿" or c == "ー")
+            return {t[i:i + 2] for i in range(len(t) - 1)}
+
+        def same_line(a, b):
+            # Shared characters alone call two different sentences of kana
+            # (な か っ た は て い…) the same line; two readings of ONE line
+            # also share most of their character pairs.
+            if not _texts_match(a, b):
+                return False
+            pa, pb = pairs(a), pairs(b)
+            if not pa or not pb:
+                return True
+            return len(pa & pb) / min(len(pa), len(pb)) >= 0.4
         all_ids = [r.id for r in bubble_regions] + [it["id"] for it in existing_items]
         next_id = max(all_ids, default=0) + 1
 
         id_to_text: Dict[int, str] = {}
         box_map: Dict[int, tuple] = {}
         for box in boxes:
+            if any(inside_share(list(box), bb) >= 0.5 for bb in balloon_boxes):
+                continue                         # a balloon's own lettering
             if any(_boxes_overlap(list(box), tb) for tb in taken):
-                continue
+                continue                         # a block this pass already took
             jp = self.ocr.read_region(image, box, None)
             if not jp or not _has_source_text(jp, self.source_lang):
                 continue
@@ -2748,10 +2805,11 @@ class TranslationPipeline:
             # close enough that both versions would be placed = doubled text).
             # (the same words far away are another line — and a misfiled
             # batched reply once made the page's narration look "found")
-            if any(_texts_match(jp, t) and near(list(box), tb) for t, tb in known_texts):
+            if any(same_line(jp, t) and near(list(box), tb) for t, tb in known_texts):
+                print(f"[pipeline] text block at {list(box)} ({jp[:12]!r}) already "
+                      f"found by another pass — skipped", flush=True)
                 continue
             taken.append(list(box))
-            known_texts.append((jp, list(box)))
             id_to_text[next_id] = jp
             box_map[next_id] = box
             next_id += 1
