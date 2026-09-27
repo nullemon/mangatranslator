@@ -1377,6 +1377,16 @@ async def get_strip(strip_id: str):
     return FileResponse(p, media_type="image/png")
 
 
+def _series_key(style_prompt: str) -> str:
+    from core import series
+    return series.detect(style_prompt) or ""
+
+
+def _series_lettering(key: str) -> dict:
+    from core import series
+    return series.lettering(key=key) if key else {}
+
+
 def _with_profile(style_prompt, profile) -> str:
     """The style instructions with the trained series profile folded in.
 
@@ -1494,6 +1504,8 @@ async def translate(
         "wm_opacity": int(wm_opacity) if str(wm_opacity).strip().isdigit() else 50,
         "wm_size": wm_size.strip() or "m",
         "text_case": text_case,
+        # the Manga title's series preset, for re-renders to letter the same way
+        "series": _series_key(style_prompt),
         # "false" | "pro" | "expressive" (legacy "true" = pro)
         "style_fonts": _font_mode(style_fonts),
         "finish": finish,
@@ -3229,7 +3241,8 @@ async def rerender(task_id: str, request: Request):
                           translate_sfx=bool(t.get("translate_sfx", False)),
                           replace_watermark=bool(t.get("replace_watermark", False)),
                           watermark_text=t.get("watermark", ""),
-                          style_fonts=t.get("style_fonts", False))
+                          style_fonts=t.get("style_fonts", False),
+                          **_series_lettering(t.get("series", "")))
         out = comp.compose(base_img, all_items, MASKS.get(task_id), offsets, erase_covers)
         # Re-renders always keep the art surgical — same rule as the first
         # pass. "clean"/"api" get the local clean-scan finish; "off" keeps the

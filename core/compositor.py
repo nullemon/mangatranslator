@@ -34,9 +34,12 @@ class Compositor:
                  use_lama: bool = True, uppercase: bool = True,
                  translate_sfx: bool = False, replace_watermark: bool = False,
                  watermark_text: str = "", style_fonts: bool = False,
-                 font_roles: Optional[dict] = None):
+                 font_roles: Optional[dict] = None, sideways_columns: bool = True):
         self.renderer = TextRenderer(font_path, font_scale=font_scale,
                                      uppercase=uppercase)
+        # Letter a big vertical source column sideways (-90°). A series
+        # preset can turn it off (One Piece: TCB keeps all dialogue level).
+        self.sideways_columns = bool(sideways_columns)
         # A letterer does not set a whole page in one typeface: a scream is
         # heavy, a thought is soft, a narration box is a different voice again.
         # Setting everything in the dialogue font is the clearest giveaway of a
@@ -1632,7 +1635,8 @@ class Compositor:
                     # translate tool (-90°), rather than crushing it into a
                     # small horizontal caption. Small vertical DIALOGUE columns
                     # stay horizontal below, where that reads better.
-                    big_vertical = (sh4 >= 2.0 * max(sw4, 1)
+                    big_vertical = (self.sideways_columns
+                                    and sh4 >= 2.0 * max(sw4, 1)
                                     and sw4 >= 0.055 * result.shape[1])
                     if big_vertical:
                         rotation = -90.0

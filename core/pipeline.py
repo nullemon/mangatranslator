@@ -1005,11 +1005,13 @@ class TranslationPipeline:
         # run to thousands of names; each page is sent only the ones it needs
         # (see _focus_glossary), always cut down from this original.
         self._full_style = getattr(self.translator, "style", None)
+        from . import series as _series
         self.compositor = Compositor(font_path, uppercase=(text_case != "keep"),
                                      translate_sfx=self.translate_sfx,
                                      replace_watermark=self.replace_watermark,
                                      watermark_text=self.watermark_text,
-                                     style_fonts=self.style_fonts)
+                                     style_fonts=self.style_fonts,
+                                     **_series.lettering(style_prompt))
         self.target_lang = target_lang
         self.use_smart_detection = use_smart_detection
         self.last_masks: Dict[int, np.ndarray] = {}

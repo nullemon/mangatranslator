@@ -147,3 +147,20 @@ def phrasebook(style_prompt: str):
         if jp.strip() and en.strip():
             pairs.append((jp.strip(), en.strip()))
     return pairs
+
+
+# How a series' release team letters, beyond the words. TCB never turns
+# dialogue sideways: a vertical Japanese column (だが待て!!) is lettered as
+# horizontal English, however big the column.
+LETTERING = {"one piece": {"sideways_columns": False}}
+
+
+def lettering(style_prompt: str = "", key: str = "") -> dict:
+    """The lettering settings of the series named in `style_prompt` (or by
+    `key`), {} for none."""
+    key = key or detect(style_prompt) or ""
+    if not key:
+        for k in PRESETS:
+            if PRESETS[k] in (style_prompt or ""):
+                key = k
+    return dict(LETTERING.get(key, {}))
