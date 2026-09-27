@@ -91,6 +91,83 @@ def _text_sim(a: str, b: str) -> float:
 # a balloon holding only dots: ……, ．．．, ・・・
 _DOTS_ONLY = __import__("re").compile(r"[…‥・.．。･\s]+")
 
+_SMALL_KANA = str.maketrans("ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ",
+                            "あいうえおつやゆよわかけアイウエオツヤユヨワカケ")
+
+
+def _fold_reading(s: str) -> str:
+    """Reduce a Japanese reading to the characters two readers of the SAME
+    lettering reliably agree on: kana and kanji only (punctuation, ☆, !?,
+    Latin, digits dropped), small kana folded to full size, dakuten and
+    handakuten dropped (ズ/ス, パ/ハ — the marks are what OCR loses first on
+    small or outlined lettering) and katakana folded to hiragana. The long
+    vowel mark ー is kept for sequence matching."""
+    import unicodedata
+    out = []
+    for c in unicodedata.normalize("NFKC", s or "").translate(_SMALL_KANA):
+        if "ぁ" <= c <= "ゖ" or "ァ" <= c <= "ヺ":
+            c = unicodedata.normalize("NFD", c)[0]      # strip (han)dakuten
+            if "ァ" <= c <= "ヶ":
+                c = chr(ord(c) - 0x60)                  # katakana -> hiragana
+            out.append(c)
+        elif c == "ー" or "一" <= c <= "鿿" or "가" <= c <= "힣":
+            out.append(c)
+    return "".join(out)
+
+
+def _longest_common_run(a: str, b: str) -> str:
+    """Longest contiguous substring shared by a and b (small inputs)."""
+    best, best_end = 0, 0
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best, best_end = cur[j], i
+        prev = cur
+    return a[best_end - best:best_end]
+
+
+def _read_supports_claim(claimed: str, seen: str, dense: bool = False) -> bool:
+    """Does a local-OCR read of a box support the text the vision model
+    claims is there? Tolerant of what OCR does to vertical, furigana-topped
+    and outlined display lettering — lost dakuten, small-kana noise, ruby
+    characters and neighbouring SFX mixed in, punctuation read as symbols —
+    so a genuine line is not thrown away ('ソマーズ' read as 'オンマース'),
+    while a box holding clearly OTHER text still fails.
+
+    Accepted when, after _fold_reading, the readings share
+      - >= 30% of the smaller one's distinct characters (ー ignored), or
+      - a run of 3+ characters (2+ of them not ー), or a 2-kanji run;
+    with `dense` (the stroke model already sees solid lettering in the box)
+    a smaller share (>= 20%, at least 2 characters) or any 2-character
+    kana/kanji run is enough.
+    Either side with no kana/kanji left (a claim of '!!', a read of 'ーー')
+    shares nothing, so it does not support the claim."""
+    a, b = _fold_reading(claimed), _fold_reading(seen)
+    sa, sb = set(a) - {"ー"}, set(b) - {"ー"}
+    if not sa or not sb:
+        return False
+    share = len(sa & sb) / min(len(sa), len(sb))
+    if share >= 0.3:
+        return True
+    run = _longest_common_run(a, b)
+    if len(run) >= 3 and len(run.replace("ー", "")) >= 2:
+        return True
+    # different fillers so a run can only ever consist of shared kanji
+    if len(_longest_common_run(re.sub(r"[^一-鿿]", "|", a),
+                               re.sub(r"[^一-鿿]", "#", b))) >= 2:
+        return True
+    if dense:
+        if share >= 0.2 and len(sa & sb) >= 2:
+            return True
+        if len(_longest_common_run(a.replace("ー", ""), b.replace("ー", ""))) >= 2:
+            return True
+    return False
+
+
 def _merge_column_boxes(boxes):
     """The block detector splits giant vertical lettering (one huge glyph per
     box) — merge boxes that line up into a single column/run so OCR reads the
@@ -2249,14 +2326,17 @@ class TranslationPipeline:
                     if self.ocr is not None and self.ocr.ok and claimed:
                         seen = (self.ocr.read_region(image, box, None) or "").strip()
                         if (seen and _has_source_text(seen, self.source_lang)
-                                and _text_sim(seen, claimed) < 0.3):
+                                and not self._box_supports_claim(
+                                    image, box, claimed, seen, m, dense=True)):
                             return False, f"box reads different text ({seen[:14]!r})"
                     return True, "strong text pixels"
 
         if self.ocr is not None and self.ocr.ok:
             seen = (self.ocr.read_region(image, box, None) or "").strip()
             if seen and _has_source_text(seen, self.source_lang):
-                if claimed and _text_sim(seen, claimed) < 0.3:
+                if claimed and not self._box_supports_claim(
+                        image, box, claimed, seen,
+                        m if px is not None else None):
                     return False, f"box reads different text ({seen[:14]!r})"
                 # Correlated-hallucination guard: Gemini's det and manga-ocr
                 # can both "read" the same short word into hair highlights.
@@ -2272,6 +2352,78 @@ class TranslationPipeline:
         # accepted; with neither model we stay permissive (bare installs).
         return True, ("medium text pixels" if px is not None
                       else "unverified (no local models)")
+
+    def _box_supports_claim(self, image, box, claimed, seen, seg_mask=None,
+                            dense=False) -> bool:
+        """Content check behind "box reads different text". One whole-box OCR
+        read of vertical display lettering is often noisy — furigana columns,
+        outlined letters and a neighbouring SFX get mixed into it — so before
+        declaring a mismatch the box is re-read the ways that lettering is
+        actually laid out: column by column (furigana columns dropped), and
+        slightly shrunk / expanded. Only when NO read shares meaningful text
+        with the claim is the box judged to hold somebody else's text."""
+        if _read_supports_claim(claimed, seen, dense):
+            return True
+        try:
+            for alt in self._alternate_reads(image, box, seg_mask):
+                if alt and _read_supports_claim(claimed, alt, dense):
+                    print(f"[pipeline] claim {claimed[:12]!r} confirmed by "
+                          f"re-read {alt[:14]!r} (box read {seen[:14]!r})")
+                    return True
+        except Exception as e:
+            print(f"[pipeline] alternate OCR reads failed: {e}")
+        return False
+
+    def _alternate_reads(self, image, box, seg_mask=None, max_cols=5):
+        """Extra OCR reads of a box, yielded lazily (cheapest evidence
+        first): each main vertical column found in the stroke mask, right to
+        left, then all of them joined in reading order; then the box shrunk
+        and expanded by 8%. Thin columns next to a main column (furigana)
+        are skipped — they are what garbles a whole-box read."""
+        H, W = image.shape[:2]
+        x, y, bw, bh = [int(v) for v in box]
+        if seg_mask is not None and bh >= 0.8 * bw and bw >= 12:
+            mh, mw = seg_mask.shape[:2]
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(mw, x + bw), min(mh, y + bh)
+            if x1 > x0 and y1 > y0:
+                prof = (seg_mask[y0:y1, x0:x1] > 0).sum(axis=0)
+                ink = prof >= max(2, int(0.02 * (y1 - y0)))
+                runs, start, gap = [], None, 0
+                for i, v in enumerate(list(ink) + [False] * 3):
+                    if v:
+                        if start is None:
+                            start = i
+                        gap, end = 0, i
+                    elif start is not None:
+                        gap += 1
+                        if gap >= 3:              # a real inter-column gap
+                            runs.append((start, end + 1))
+                            start, gap = None, 0
+                if runs:
+                    widest = max(e - s for s, e in runs)
+                    cols = [(s, e) for s, e in runs
+                            if e - s >= max(4, 0.45 * widest)]
+                    if len(cols) >= 2:
+                        cols = sorted(cols, reverse=True)[:max_cols]  # R->L
+                        reads = []
+                        for s, e in cols:
+                            cx0 = max(0, x0 + s - 2)
+                            cx1 = min(W, x0 + e + 2)
+                            r = (self.ocr.read_region(
+                                image, (cx0, y0, cx1 - cx0, y1 - y0), None)
+                                or "").strip()
+                            reads.append(r)
+                            yield r
+                        yield "".join(reads)
+        for f in (-0.08, 0.08):
+            dx, dy = int(round(f * bw)), int(round(f * bh))
+            nx, ny = max(0, x - dx), max(0, y - dy)
+            nw = min(W - nx, bw + 2 * dx)
+            nh = min(H - ny, bh + 2 * dy)
+            if nw > 8 and nh > 8:
+                yield (self.ocr.read_region(image, (nx, ny, nw, nh), None)
+                       or "").strip()
 
     def _snap_to_text_pixels(self, image, box, pad_frac=0.14):
         """Tighten a claimed text box to the lettering the stroke model
