@@ -12,14 +12,26 @@ from typing import Optional
 def _has_japanese(text: str) -> bool:
     """True if the string contains at least one hiragana, katakana, or kanji.
     Filters OCR hallucinations on non-text regions (eyes, mouths, art), which
-    come back as latin garbage or bare punctuation rather than real Japanese."""
+    come back as latin garbage or bare punctuation rather than real Japanese.
+
+    A read that is mostly LATIN letters is not a Japanese line either: it is
+    lettering already in the target script — a series logo (the ONE PIECE
+    logo read as 今ＷＥＰＩＣは, then blacked out and lettered over), an English
+    sign in the art — with at most a stray kana or kanji misread beside it.
+    A Japanese line quoting a word (Netflixで配信開始) is still Japanese."""
+    jp = latin = 0
     for ch in text:
         o = ord(ch)
         if (0x3040 <= o <= 0x30FF      # hiragana + katakana
                 or 0x4E00 <= o <= 0x9FFF  # CJK unified ideographs (kanji)
                 or 0xFF66 <= o <= 0xFF9D):  # half-width katakana
-            return True
-    return False
+            jp += 1
+        elif ("A" <= ch <= "Z" or "a" <= ch <= "z"
+              or "Ａ" <= ch <= "Ｚ" or "ａ" <= ch <= "ｚ"):
+            latin += 1
+    if latin >= 3 and latin > jp and jp <= 2:
+        return False
+    return jp > 0
 
 
 def _has_arabic(text: str) -> bool:

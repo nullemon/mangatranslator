@@ -300,6 +300,19 @@ class Compositor:
     _SIZE_CEIL_DEFAULT = 0.85
     _SIZE_CEIL_ON_ART = 0.68
 
+    def _sfx_sized(self, it):
+        """True for an automatic line whose measured lettering is sound-effect
+        scale: over 2.2x the page's median glyph and at least 60 px. Lines
+        the user placed, titles and credits are never judged by size."""
+        if it.get("manual") or it.get("manual_box"):
+            return False
+        kind = (it.get("type") or "").lower()
+        if kind in ("title", "credit", "caption", "promo"):
+            return False
+        gp = float(it.get("_glyph_px") or 0.0)
+        med = float(getattr(self, "_glyph_med", 0.0) or 0.0)
+        return med > 0 and gp >= 60.0 and gp > 2.2 * med
+
     def _size_cap(self, it, text, font_path=""):
         """Largest font size (px) for this line, from the measured size of the
         Japanese lettering it replaces; 0 when that wasn't measurable."""
@@ -1080,6 +1093,7 @@ class Compositor:
         self._dialog_mask = None
         self._raw_mask = None
         self._line_glyph = 0.0
+        self._glyph_med = 0.0          # the page's ordinary lettering size
         if self.text_seg is not None and self.text_seg.ok:
             try:
                 self._seg_mask = self.text_seg.mask(image)
@@ -1186,6 +1200,7 @@ class Compositor:
                         it["_beside_sfx"] = True
             if len(sizes) >= 3:
                 med = float(np.median(list(sizes.values())))
+                self._glyph_med = med
                 for it in items:
                     if id(it) in sizes and med > 0:
                         it["orig_rel"] = sizes[id(it)] / med
@@ -1255,6 +1270,25 @@ class Compositor:
                 it["placed"] = True        # lettered as part of another line
                 continue
             it["placed"] = False
+            # Lettering over twice the page's ordinary size, NOT in a real
+            # balloon, is a sound effect drawn on the art, whatever the OCR
+            # made of it (chapter 1194: dialogue 27-47 px; readings off the
+            # huge あああ / ギキキ effects 68-159 px — "いやいや…わかったんだけど",
+            # "そういえば、"). The house rule leaves those untouched; erasing
+            # "its text" (outlined-letter erase included, just below) smeared
+            # the effect. Judged before anything is erased.
+            if self._sfx_sized(it):
+                bm = masks.get(it.get("id"))
+                if bm is None:
+                    bm = masks.get(str(it.get("id")))
+                if not (it.get("in_bubble") and bm is not None
+                        and bm.shape[:2] == gray.shape[:2]
+                        and self._is_real_balloon(gray, bm, True)):
+                    print(f"[compositor] line {it.get('id')} at {it.get('bbox')}: "
+                          f"lettering {float(it.get('_glyph_px') or 0):.0f}px vs the "
+                          f"page's {self._glyph_med:.0f}px, not in a balloon — a "
+                          f"sound effect on the art, left as drawn", flush=True)
+                    continue
             placed_by.append((len(placements), it))
             o = outlined.get(id(it))
             if o is not None:
@@ -1691,6 +1725,20 @@ class Compositor:
                 # the item and leave the art alone.
                 if not has_src:
                     continue
+                # The same when the shape holds no lettering to speak of: the
+                # reading is the OCR imagining words in the art (a calligraphy
+                # stroke on chapter 1194's cover read as そして、 at 0.4% text
+                # strokes; real lines fill 10-40% of their shape). Erasing
+                # "its text" would scrub the art.
+                if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
+                    full = mask > 0
+                    share = (float(((self._seg_mask > 0) & full).sum())
+                             / max(float(full.sum()), 1.0))
+                    if share < 0.02:
+                        print(f"[compositor] bubble {it.get('id')}: no lettering "
+                              f"in it ({share:.1%} text strokes) — left alone",
+                              flush=True)
+                        continue
                 mask = None
 
             # JOINED balloons: two speech balloons drawn touching (two circles
@@ -2149,34 +2197,60 @@ class Compositor:
             return (0, 0, 0)
         return (255, 255, 255) if dark else (0, 0, 0)
 
-    def _outline_coverage(self, gray, mask):
+    def _outline_coverage(self, gray, mask, reach=4):
         """Share of directions round a shape's centre in which its edge is
-        inked: dark non-text pixels in a thin band just inside or just
-        outside the edge (a detector mask may stop at the outline or take it
-        in). 1.0 for a closed balloon; low for a blob round floating text."""
+        inked: most edge points have a dark non-text pixel within `reach` px
+        (a detector mask may stop at the outline, take it in, or run a pixel
+        or two past it). 1.0 for a closed balloon; low for a blob round
+        floating text.
+
+        Asked per EDGE POINT, not as a share of a band's pixels: a thin 1-2 px
+        outline fills well under a quarter of an 8 px band however complete it
+        is, and on chapter 1194 most balloons — thin or wobbly outlines —
+        measured 0.0-0.47 that way and were refused."""
         m = (mask > 0).astype(np.uint8)
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        outer = (cv2.dilate(m, k) > 0) & (m == 0)
-        inner = (m > 0) & (cv2.erode(m, k) == 0)
-        dark = gray < 110
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not cnts:
+            return 0.0
+        pts = max(cnts, key=cv2.contourArea).reshape(-1, 2)
+        ink = gray < 110
         # lettering is only discounted INSIDE the shape: letters set tight
         # against a balloon's outline took the outline next to them with them
         # (a ダン!! balloon read as 44% outlined and was refused)
-        inner_dark = dark
         if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
-            inner_dark = dark & ~(cv2.dilate(self._seg_mask, np.ones((5, 5), np.uint8)) > 0)
+            txt = cv2.dilate(self._seg_mask, np.ones((5, 5), np.uint8)) > 0
+            ink = ink & ~(txt & (m > 0))
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1, 2 * reach + 1))
+        near = cv2.dilate(ink.astype(np.uint8), k) > 0
+        hit = near[pts[:, 1], pts[:, 0]]
         ys, xs = np.nonzero(m)
-        if ys.size == 0:
-            return 0.0
         cy, cx = float(ys.mean()), float(xs.mean())
-        hits, tot = np.zeros(36), np.zeros(36)
-        for band, ink in ((inner, inner_dark), (outer, dark)):
-            by, bx = np.nonzero(band)
-            ang = ((np.degrees(np.arctan2(by - cy, bx - cx)) + 360.0) % 360.0 / 10.0).astype(int) % 36
-            np.add.at(tot, ang, 1)
-            np.add.at(hits, ang, ink[by, bx])
+        ang = ((np.degrees(np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)) + 360.0)
+               % 360.0 / 10.0).astype(int) % 36
+        tot = np.bincount(ang, minlength=36)
+        hits = np.bincount(ang, weights=hit.astype(float), minlength=36)
         frac = np.where(tot > 0, hits / np.maximum(tot, 1), 0.0)
-        return float((frac > 0.25).mean())
+        return float((frac > 0.5).mean())
+
+    def _inner_art(self, gray, mask):
+        """Share of a shape's inside (its edge band left out) that is dark ink
+        other than lettering. A balloon holds nothing but its lettering —
+        0.00-0.02% over chapter 1194's balloons; a face the detector took for
+        one measured 37%, text on hatched art 0.6-1.7%. 0 when there is no
+        text-stroke mask: then lettering and art can't be told apart."""
+        if self._seg_mask is None or self._seg_mask.shape != gray.shape:
+            return 0.0
+        m = (mask > 0).astype(np.uint8)
+        _, _, w, h = cv2.boundingRect(m)
+        d = max(6, int(0.08 * min(w, h)))
+        core = cv2.erode(m, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))) > 0
+        n = int(core.sum())
+        if n == 0:
+            return 0.0
+        art = (gray < 110) & core
+        art &= ~(cv2.dilate(self._seg_mask, np.ones((7, 7), np.uint8)) > 0)
+        return float(art.sum()) / n
 
     def _is_real_balloon(self, gray, mask, has_text=False):
         """A real balloon's interior (minus the text strokes) is near-uniform
@@ -2220,9 +2294,32 @@ class Compositor:
             # A black BALLOON carries light lettering; a solid black prop
             # (headset mic, silhouette) doesn't. No light strokes = not a
             # bubble.
-            if float((vals > 180).mean()) < 0.02:
+            # (over the WHOLE inside: `vals` leaves the lettering out, so with
+            # a stroke mask a real black balloon's white letters were never
+            # seen and every one was refused)
+            if float((gray[inner > 0] > 180).mean()) < 0.02:
                 self._balloon_why = "dark shape with no light lettering"
                 return False
+            # ...and its light pixels ARE that lettering. On the cover of
+            # chapter 1194 a calligraphy brush stroke (light paper showing
+            # through it, 0% of that light on text strokes) and the ONE PIECE
+            # logo (52%) passed as black balloons and were flat-filled black
+            # and lettered over; a bold black kanji of the author's name (99%
+            # of the shape itself a text stroke) got a furigana label stamped
+            # on it.
+            if self._seg_mask is not None and self._seg_mask.shape == gray.shape:
+                full = mask > 0
+                strokes = (self._seg_mask > 0) & full
+                if float(strokes.sum()) > 0.8 * float(full.sum()):
+                    self._balloon_why = "dark shape is itself lettering"
+                    return False
+                light = (gray > 180) & full
+                txt = cv2.dilate(self._seg_mask, np.ones((7, 7), np.uint8)) > 0
+                on_text = float((light & txt).sum()) / max(float(light.sum()), 1.0)
+                if on_text < 0.7:
+                    self._balloon_why = (f"dark shape whose light areas are art, "
+                                         f"not lettering ({on_text:.0%} on text)")
+                    return False
         else:
             # A TONED balloon (flat grey fill — a common way to letter a sound
             # or an aside) is one flat tone around its lettering; screentone
@@ -2258,16 +2355,27 @@ class Compositor:
                     f"interior not uniform (std {std:.1f} > 22, "
                     f"only {flat:.0%} of it one tone)")
                 return False
-        # A balloon is drawn: an inked outline runs round (almost) all of it.
-        # Lettering floating on the art — a monologue over a white face —
-        # read as "paper plus text" and, with text inside, skipped the ring
-        # test below; the detector's blob round it was then flat-filled white
-        # over the art. Measured on chapter 1194: balloons 0.69-1.0 of their
-        # edge inked, text on art 0.0-0.42.
+        # A balloon is drawn: an inked outline runs round most of it, and
+        # nothing but its lettering is inside. Lettering floating on the art
+        # — a monologue over a white face — read as "paper plus text" and,
+        # with text inside, skipped the ring test below; the detector's blob
+        # round it was then flat-filled white over the art. Measured on
+        # chapter 1194 (pages 73-75, 82): balloons 0.31-1.0 of their edge
+        # inked with 0.00-0.02% art inside; text on art 0.36-0.39 with
+        # 0.6-1.7% art inside; a face 1.0 outlined, 37% art inside. Speed-line
+        # bursts (0.14-0.19) stay on the text-on-art path, which erases them
+        # cleanly. A partial outline needs a clean inside to count; a full
+        # one is only overruled by plain artwork (a face), since glyphs the
+        # stroke mask half-misses leave a little "art" in real balloons too.
         if med >= 165 and has_text:
             cov = self._outline_coverage(gray, mask)
-            if cov < 0.55:
+            if cov < 0.30:
                 self._balloon_why = f"no drawn outline round it ({cov:.0%} of its edge)"
+                return False
+            art = self._inner_art(gray, mask)
+            if art > (0.05 if cov >= 0.55 else 0.005):
+                self._balloon_why = (f"artwork inside it ({art:.1%} non-text ink, "
+                                     f"{cov:.0%} of its edge outlined)")
                 return False
         # Decisive signature: a balloon keeps a clean paper MARGIN between
         # its lettering and the outline; artwork's lines run right across
