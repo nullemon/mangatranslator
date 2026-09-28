@@ -3074,6 +3074,7 @@ async def rerender(task_id: str, request: Request):
                 and os.path.exists(os.path.join("fonts", v))):
             return v
         return ""
+    tilt_boxes = {str(v) for v in (payload.get("tilt_boxes") or [])}
     rotations = {}
     for k, v in (payload.get("rotations") or {}).items():
         try:
@@ -3165,6 +3166,7 @@ async def rerender(task_id: str, request: Request):
             "color": colors.get(nid, "auto"),
             "rotation": rotations.get(nid, it.get("rotation", 0)),
             "manual_rot": nid in rotations,
+            "tilt_box": nid in tilt_boxes,     # the whole box turned, not just its text
             "font_scale": _scale(nid),
             "glow": nid in glows,
             "fit_box": nid in fits,
@@ -3209,6 +3211,7 @@ async def rerender(task_id: str, request: Request):
             "poly": poly,      # point-selected outline: text stays inside it
             "rotation": rotations.get(aid, 0),
             "manual_rot": aid in rotations,
+            "tilt_box": aid in tilt_boxes,
             "color": colors.get(aid, "auto"),
             "font_scale": _scale(aid),
             "font": _font(aid),

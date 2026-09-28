@@ -53,6 +53,7 @@ class TextRenderer:
         self._max_font = 0
         # outlined lettering for this line: {"texture": BGR patch or None}
         self._outline = None
+        self._tilt_box = False         # rotate the box itself (see _draw_turned_box)
         # extra space between letters, as a fraction of the font size (only
         # outlined lettering sets it: its outline needs a gap to sit in)
         self._tracking = 0.0
@@ -754,11 +755,30 @@ class TextRenderer:
 
         return image
 
+    def _draw_turned_box(self, image, x, y, w, h, text, color, italic, angle_deg):
+        """A TILTED BOX: the (x, y, w, h) box itself is turned by *angle_deg*
+        clockwise about its centre. The text is fitted to the box's own width
+        and height, upright, and the whole layer turned with it — so a wide
+        slanted banner gets a full-size line along it, not text shrunk to fit
+        the level box."""
+        rw, rh = max(16, int(w)), max(12, int(h))
+        tmp = Image.new("RGBA", (rw, rh), (0, 0, 0, 0))
+        self.draw_in_rect(tmp, (0, 0, rw, rh), text, color, italic=italic,
+                          rotation=0, scale=self._size_scale,
+                          fit_box=self._break_words)
+        turned = tmp.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
+        px = int(round(x + w / 2.0 - turned.width / 2.0))
+        py = int(round(y + h / 2.0 - turned.height / 2.0))
+        image.paste(turned, (px, py), turned)
+        return image
+
     def _draw_rotated(self, image, x, y, w, h, text, color, italic, angle_deg):
         """Render *text* at *angle_deg* clockwise, composited onto *image*
         centered on the (x, y, w, h) rect.  The text is first drawn upright
         into an RGBA layer whose dimensions are chosen so that, after rotation,
         the result fits within the target rect."""
+        if getattr(self, "_tilt_box", False):
+            return self._draw_turned_box(image, x, y, w, h, text, color, italic, angle_deg)
         rad = math.radians(abs(angle_deg))
         c, s = abs(math.cos(rad)), abs(math.sin(rad))
 

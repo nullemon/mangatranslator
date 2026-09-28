@@ -2135,6 +2135,7 @@ document.addEventListener("DOMContentLoaded", () => {
             page.fontScales = {};
             page.glows = new Set();
             page.fits = new Set();
+            page.tiltBoxes = new Set();
             page.boxes = {};
             page.covers = []; page.added = []; page.rotations = {}; page.fonts = {};
             page.rev++;
@@ -2622,6 +2623,7 @@ document.addEventListener("DOMContentLoaded", () => {
           glow: !!(page.glows && page.glows.has(id)),
           fit: !!(page.fits && page.fits.has(id)),
           rot: (page.rotations || {})[id],
+          tiltBox: !!(page.tiltBoxes && page.tiltBoxes.has(id)),
         };
         showStyleBar(page);
       });
@@ -2830,6 +2832,7 @@ document.addEventListener("DOMContentLoaded", () => {
           raw_strength: rawStrength ? parseFloat(rawStrength.value) : 1.0,
           raw_style: rawStyle ? rawStyle.value : "photo",
           glows: [...(page.glows || [])], fits: [...(page.fits || [])], edits,
+          tilt_boxes: [...(page.tiltBoxes || [])],
           font_scale: parseFloat(fontScale.value),
           font_scales: page.fontScales || {},
           fonts: page.fonts || {},
@@ -2985,7 +2988,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function _snapshot(page) {
     return JSON.stringify({
       excluded: [...(page.excluded || [])], erased: [...(page.erased || [])],
-      fits: [...(page.fits || [])],
+      fits: [...(page.fits || [])], tiltBoxes: [...(page.tiltBoxes || [])],
       glows: [...(page.glows || [])], offsets: page.offsets || {},
       colors: page.colors || {}, fontScales: page.fontScales || {},
       fonts: page.fonts || {},
@@ -2999,6 +3002,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const s = JSON.parse(str);
     page.excluded = new Set(s.excluded); page.erased = new Set(s.erased);
     page.fits = new Set(s.fits || []);
+    page.tiltBoxes = new Set(s.tiltBoxes || []);
     page.glows = new Set(s.glows); page.offsets = s.offsets; page.colors = s.colors;
     page.fontScales = s.fontScales; page.boxes = s.boxes; page.covers = s.covers;
     page.fonts = s.fonts || {};
@@ -3369,6 +3373,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // showed the box back where it started and a resize-drag stored that old
   // spot as the new box — which the server then shifted by the offset again,
   // so the text landed twice as far as it was dragged.
+  // The angle a TILTED BOX is turned by, or 0 when the item's box is level.
+  function boxTilt(page, it) {
+    if (!(page.tiltBoxes && page.tiltBoxes.has(it.id))) return 0;
+    const r = (page.rotations || {})[it.id];
+    const a = r != null ? r : (it.rotation || 0);
+    return Math.abs(a) >= 1 ? a : 0;
+  }
+
   function itemRect(page, it) {
     const b = ((page.boxes || {})[it.id] || it.bbox).slice();
     const off = (page.offsets || {})[it.id] || [0, 0];
@@ -3385,12 +3397,11 @@ document.addEventListener("DOMContentLoaded", () => {
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>` +
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
         .map(d => `<span class="rsz-h rsz-${d}" data-d="${d}"></span>`).join("");
-    // The resize/move box is ALWAYS axis-aligned — never CSS-rotated. A
-    // rotated handle box fought the drag math (pointer deltas are measured in
-    // screen space) and made moving/resizing feel broken. Tilt is a separate
-    // property, set in the Edit popover's Tilt slider or by drawing a slanted
-    // Point-translate selection; it shows on the rendered text, not on this
-    // editing handle.
+    // Level unless the item is a TILTED BOX: then the handle box is drawn
+    // turned with it, and bindResize measures drags in the box's own
+    // directions (a level box measured in screen space fought a turned one).
+    const tilt = boxTilt(page, it);
+    if (tilt) box.style.transform = `rotate(${tilt}deg)`;
     bindResize(box, it, page, W, H);
     moveLayer.appendChild(box);
   }
@@ -3426,6 +3437,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const dx = (e.clientX - sx) * (W / rect.width);
       const dy = (e.clientY - sy) * (H / rect.height);
       let [x, y, w, h] = base;
+      const tilt = boxTilt(page, it);
+      if (tilt && mode !== "move") {
+        // Turned box: the drag, measured along the box's own sides, grows or
+        // shrinks it with the opposite side held where it is.
+        const t = tilt * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+        const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+        let cx = x + w / 2, cy = y + h / 2, nw = w, nh = h, sx2 = 0, sy2 = 0;
+        if (mode.includes("e")) { nw = Math.max(MIN, w + lx); sx2 = (nw - w) / 2; }
+        if (mode.includes("w")) { nw = Math.max(MIN, w - lx); sx2 = -(nw - w) / 2; }
+        if (mode.includes("s")) { nh = Math.max(MIN, h + ly); sy2 = (nh - h) / 2; }
+        if (mode.includes("n")) { nh = Math.max(MIN, h - ly); sy2 = -(nh - h) / 2; }
+        cx += sx2 * c - sy2 * s; cy += sx2 * s + sy2 * c;
+        apply([Math.round(cx - nw / 2), Math.round(cy - nh / 2), Math.round(nw), Math.round(nh)]);
+        return;
+      }
       if (mode === "move") { x += dx; y += dy; }
       else {
         // A west/north handle pushed past the minimum used to keep sliding
@@ -3452,8 +3478,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const box = makeBox(bx, by, bw, bh, W, H,
                         "move-box" + (isAdded ? " added-box" : ""));
     box.innerHTML = `<span class="move-tag">${isAdded ? "✎" : "#" + it.id}</span>`;
-    // Axis-aligned like the resize box — tilt is set in the Edit popover,
-    // not by rotating this handle.
+    // Level like the resize box, unless the item is a tilted box.
+    const tilt = boxTilt(page, it);
+    if (tilt) box.style.transform = `rotate(${tilt}deg)`;
     if (tool === "move") {
       box.classList.add("draggable");
       bindDrag(box, it, page, W, H);
@@ -3550,6 +3577,12 @@ document.addEventListener("DOMContentLoaded", () => {
         <button class="epop-ra" data-a="45" title="Diagonal">45&deg;</button>
       </div>
       <div class="edit-pop-color">
+        <span class="epop-clabel"></span>
+        <label class="epop-tiltbox" title="Turn the whole box with the text: the English is fitted along the tilted box instead of squeezed into a level one, and the erase follows the tilted box. For slanted banners and titles; works for horizontal or vertical text.">
+          <input type="checkbox" class="epop-tb"${(page.tiltBoxes && page.tiltBoxes.has(it.id)) ? " checked" : ""}>
+          Tilt the whole box</label>
+      </div>
+      <div class="edit-pop-color">
         <span class="epop-clabel">Size</span>
         <input type="range" class="epop-fs" min="40" max="300" step="5"
                value="${Math.round(((page.fontScales || {})[it.id] || 1) * 100)}"
@@ -3628,6 +3661,11 @@ document.addEventListener("DOMContentLoaded", () => {
       it.translation = ta.value;
       page.colors = page.colors || {};
       page.colors[it.id] = pickedClr;
+      const tbSave = pop.querySelector(".epop-tb");
+      page.tiltBoxes = page.tiltBoxes || new Set();
+      if (tbSave) {
+        if (tbSave.checked) page.tiltBoxes.add(it.id); else page.tiltBoxes.delete(it.id);
+      }
       const rotSave = pop.querySelector(".epop-rot");
       page.rotations = page.rotations || {};
       if (rotSave && (rotTouched || page.rotations[it.id] != null)) {
@@ -4520,6 +4558,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (st.fit) page.fits.add(id); else page.fits.delete(id);
     if (st.rot !== undefined && st.rot !== null) page.rotations[id] = st.rot;
     else delete page.rotations[id];
+    page.tiltBoxes = page.tiltBoxes || new Set();
+    if (st.tiltBox) page.tiltBoxes.add(id); else page.tiltBoxes.delete(id);
   }
 
   function showStyleBar(page) {

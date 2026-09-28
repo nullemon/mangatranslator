@@ -1515,6 +1515,37 @@ class Compositor:
                 # render it horizontally in the (tall-narrow) rect instead.
                 rotation = 0
 
+            # TILTED BOX: the user turned the whole box, not only its text. The
+            # box keeps its own width and height at that angle: the text is
+            # fitted in it upright and turned with it, and only what lies
+            # inside the turned box is erased. Turning just the text fitted it
+            # inside the LEVEL box — a wide banner line at -14° came out tiny
+            # and broken over lines, with the banner's ends left in Japanese.
+            if it.get("tilt_box") and abs(rotation) >= 1.0 and bw >= 6 and bh >= 6:
+                corners = self._turned_corners((bx, by, bw, bh), rotation)
+                ax, ay, aw, ah = cv2.boundingRect(corners)
+                ax, ay = max(0, ax), max(0, ay)
+                aw, ah = min(aw, w - ax), min(ah, h - ay)
+                if aw >= 6 and ah >= 6:
+                    # the original lettering's strokes, erased on a copy and
+                    # kept only inside the turned box
+                    scratch = result.copy()
+                    self._inpaint_text(scratch, ax, ay, aw, ah, contain=True)
+                    inside = np.zeros((h, w), np.uint8)
+                    cv2.fillPoly(inside, [corners], 255)
+                    sel = inside > 0
+                    result[sel] = scratch[sel]
+                    edited_rects.append((ax, ay, aw, ah))
+                    after = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)[sel]
+                    dark = bool(after.size and float(np.median(after)) < 110)
+                    placements.append((offset_rect(it, (bx, by, bw, bh)), text,
+                                       self._pick_color(dark, it), ital, rotation,
+                                       self._item_scale(it) * role_scale, True,
+                                       bool(it.get("fit_box")), None, role_font,
+                                       {"tilt_box": True}))
+                    it["placed"] = True
+                    continue
+
             # Manually added text, OR any box the user resized by hand: erase
             # whatever's inside and fit the translation to EXACTLY that box, with
             # no auto-refine and no bubble-mask. This covers giant title text the
@@ -1574,9 +1605,13 @@ class Compositor:
                 # contrasting stroke; only a light caption fill stays plain.
                 mglow = (self._item_glow(it) or cap is None
                          or (cap is not None and cap[4]))
+                # a tilted strip's rect is the strip's OWN box: fit the text in
+                # it and turn it, rather than squeeze it into a level box
+                strip = bool(it.get("poly")) and abs(rotation) >= 1.0 and not it.get("manual_rot")
                 placements.append((offset_rect(it, rect), text, color, ital, rotation,
                                self._item_scale(it) * role_scale, mglow,
-                               bool(it.get("fit_box")), None, role_font))
+                               bool(it.get("fit_box")), None, role_font,
+                               {"tilt_box": True} if strip else 0))
                 it["placed"] = True
                 continue
 
@@ -2063,6 +2098,7 @@ class Compositor:
         self.renderer._keep_case = bool(opts.get("keep_case"))
         self.renderer._single_line = bool(opts.get("single_line"))
         self.renderer._outline = opts.get("outline")
+        self.renderer._tilt_box = bool(opts.get("tilt_box"))
         # Swap the face for this line only, then put it back — the
         # renderer caches by path, so switching costs nothing.
         was = self.renderer.font_path
@@ -2078,6 +2114,7 @@ class Compositor:
             self.renderer._keep_case = False
             self.renderer._single_line = False
             self.renderer._outline = None
+            self.renderer._tilt_box = False
             self.renderer.font_path = was
 
     def _draw_window(self, p, w, h):
@@ -3860,6 +3897,19 @@ class Compositor:
         if not (3.0 <= abs(ang) <= 40.0):
             return None      # horizontal enough, or too steep for English
         return float(ang)
+
+    @staticmethod
+    def _turned_corners(rect, rotation):
+        """The four corners of *rect* turned clockwise by *rotation* degrees
+        about its centre (image coordinates, y down), as an int32 array."""
+        x, y, w, h = rect
+        cx, cy = x + w / 2.0, y + h / 2.0
+        t = math.radians(rotation)
+        c, s = math.cos(t), math.sin(t)
+        pts = []
+        for dx, dy in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)):
+            pts.append([cx + dx * c - dy * s, cy + dx * s + dy * c])
+        return np.round(np.array(pts)).astype(np.int32)
 
     @staticmethod
     def _rotated_aabb(rect, rotation):

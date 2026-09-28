@@ -796,3 +796,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:1rem;ma
 .epop-ra:hover{border-color:var(--accent);color:var(--accent);background:var(--ring)}
 .epop-rot-num{background:var(--input-bg,rgba(0,0,0,.18));border:1px solid var(--border);
   color:var(--text);border-radius:6px;padding:.2rem .3rem;font-size:.75rem}
+
+/* Edit popover: "Tilt the whole box" */
+.epop-tiltbox{display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer}
+.epop-tiltbox input{accent-color:var(--accent);width:15px;height:15px}
